@@ -27,11 +27,13 @@ const FORECASTERS = [
 // HOUR_RANGE_KEY, SELECTED_FORECASTERS_KEY, CONDITION_UNIT_TOGGLES,
 // CONDITION_UNIT_LABELS, DEFAULT_CONDITION_UNITS, loadConditionUnits(),
 // saveConditionUnit(), loadHourRange(), THEMES, loadTheme(), saveTheme(),
-// and applyTheme() all now come from app.js, which this page loads first
-// — settings.html includes both scripts in the same global scope, so
-// redeclaring the same names here would be a duplicate-const syntax
-// error that silently breaks this entire file (which is exactly what was
-// happening: nothing on this page was saving because the file never ran).
+// applyTheme(), exportAppData(), importAppData(), exportFFVShare(),
+// importBackupText(), and FFV_SHARE_TYPE all now come from app.js, which
+// this page loads first — settings.html includes both scripts in the
+// same global scope, so redeclaring the same names here would be a
+// duplicate-const syntax error that silently breaks this entire file
+// (which is exactly what was happening: nothing on this page was saving
+// because the file never ran).
 
 const hourRange48 = document.getElementById("hourRange48");
 const hourRange24 = document.getElementById("hourRange24");
@@ -85,7 +87,7 @@ if (themeSwatchesEl) {
   });
 }
 
-// ---- Backup & restore ----
+// ---- Backup & restore: whole device ----
 const exportButton = document.getElementById("exportButton");
 const exportStatus = document.getElementById("exportStatus");
 const exportOutput = document.getElementById("exportOutput");
@@ -118,6 +120,54 @@ if (exportButton) {
   });
 }
 
+// ---- Backup & restore: shared accuracy data for one place ----
+// Same copy-with-textarea-fallback pattern as the whole-device export
+// just above, scoped to exportFFVShare(state.areaCode) instead — see
+// that function (app.js) for why this is a separate, smaller export
+// rather than reusing the whole-device one. Exports whatever place is
+// CURRENTLY showing on the app, matching how "Switch" above already
+// lets someone jump to a different saved place first if that's the one
+// they actually meant to share.
+const exportFFVButton = document.getElementById("exportFFVButton");
+const exportFFVStatus = document.getElementById("exportFFVStatus");
+const exportFFVOutput = document.getElementById("exportFFVOutput");
+
+function renderExportFFVStatus(message, isError) {
+  if (!exportFFVStatus) return;
+  exportFFVStatus.textContent = message || "";
+  exportFFVStatus.classList.toggle("is-error", !!isError);
+}
+
+if (exportFFVButton) {
+  exportFFVButton.addEventListener("click", async () => {
+    if (!state.areaCode) {
+      renderExportFFVStatus("Load a place on the main page first.", true);
+      return;
+    }
+    const share = exportFFVShare(state.areaCode);
+    try {
+      await navigator.clipboard.writeText(share);
+      renderExportFFVStatus(`Copied ${state.areaCode}'s accuracy data to clipboard.`, false);
+      if (exportFFVOutput) exportFFVOutput.hidden = true;
+    } catch {
+      if (exportFFVOutput) {
+        exportFFVOutput.hidden = false;
+        exportFFVOutput.value = share;
+        exportFFVOutput.focus();
+        exportFFVOutput.select();
+      }
+      renderExportFFVStatus("Couldn't copy automatically — select the text below and copy it manually.", true);
+    }
+  });
+}
+
+// ---- Restore / merge (shared paste box for both kinds of backup) ----
+// importBackupText (app.js) reads whichever kind of text was pasted and
+// routes to the right importer — this handler only needs to pick the
+// right CONFIRM wording and success message for whichever kind that
+// turned out to be, which means peeking at the pasted JSON's own "type"
+// before calling it, rather than importBackupText needing to somehow
+// report that back through its ok/error shape.
 const importInput = document.getElementById("importInput");
 const importButton = document.getElementById("importButton");
 const importStatus = document.getElementById("importStatus");
@@ -135,16 +185,35 @@ if (importButton) {
       renderImportStatus("Paste a backup first.", true);
       return;
     }
-    // Genuinely destructive if the pasted backup is stale or from
-    // somewhere else — a plain confirm is enough friction for a
-    // one-off, user-initiated action like this.
-    if (!confirm("This replaces this device's Cloude data (FFV history, places, settings) with the pasted backup. Continue?")) {
+
+    let preview;
+    try {
+      preview = JSON.parse(text);
+    } catch {
+      renderImportStatus("That doesn't look like valid backup text — check it was copied in full.", true);
       return;
     }
-    const result = importAppData(text);
+
+    const isFFVShare = preview?.type === FFV_SHARE_TYPE;
+    // Genuinely destructive if the pasted backup is stale or from
+    // somewhere else — a plain confirm is enough friction for a
+    // one-off, user-initiated action like this. The FFV-share case is
+    // a merge, not a replace, so it gets its own, less alarming wording
+    // rather than reusing the whole-device warning verbatim.
+    const confirmMessage = isFFVShare
+      ? `This merges accuracy data for ${preview.areaCode || "an area"} into this device's own learned history — the more accurate side wins per forecaster/condition, nothing else on this phone changes. Continue?`
+      : "This replaces this device's Cloude data (FFV history, places, settings) with the pasted backup. Continue?";
+    if (!confirm(confirmMessage)) return;
+
+    const result = importBackupText(text);
     if (!result.ok) {
       renderImportStatus(result.error, true);
       return;
+    }
+
+    if (result.kind === "ffv-share") {
+      renderImportStatus(`Merged ${result.entriesMerged} accuracy entr${result.entriesMerged === 1 ? "y" : "ies"} for ${result.areaCode}.`, false);
+      return; // scoped merge — nothing currently on screen needs a reload for it to take effect next time that area's Compare/headline is computed
     }
     renderImportStatus(`Restored ${result.keyCount} item${result.keyCount === 1 ? "" : "s"} — reloading…`, false);
     setTimeout(() => location.reload(), 600);

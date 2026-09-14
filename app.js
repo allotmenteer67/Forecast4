@@ -158,6 +158,131 @@ function importAppData(jsonText) {
   return { ok: true, keyCount: entries.length };
 }
 
+// ---- Backup: share learned accuracy for one area ----
+// exportAppData/importAppData above are whole-device: importing one
+// overwrites THIS phone's own settings, saved places, and theme too,
+// which is wrong for "hand my wife what I've learned about TA6" — her
+// own saved places and theme shouldn't get overwritten by a file that's
+// really only about forecaster accuracy. Same idea as above, scoped to
+// just the FFV + eligibility store for one area, and MERGED on import
+// rather than replaced — see importFFVShare.
+const FFV_SHARE_TYPE = "cloude-ffv-share";
+
+function exportFFVShare(areaCode) {
+  return JSON.stringify({
+    app: "Cloude",
+    type: FFV_SHARE_TYPE,
+    exportedAt: new Date().toISOString(),
+    areaCode,
+    ffv: loadFFVStore(areaCode),
+    eligibility: loadEligibilityStore(areaCode)
+  }, null, 2);
+}
+
+// Picks the more informative of two FFV entries for the same
+// condition/source/day. "More informative" means "has the lower
+// emaErrorCorrected" — this app's own existing measure of how well a
+// source's correction has actually been doing, the same figure the
+// Accuracy table and the underperformance check both already use, not
+// a new metric invented for this. An entry that hasn't been scored yet
+// (fewer than FFV_MIN_SAMPLES) has no emaErrorCorrected at all — that
+// always loses to one that does, since there's nothing there to
+// meaningfully compare; between two unscored entries, whichever has
+// seen more samples is simply the closer of the two to being scored.
+function pickBetterFFVEntry(local, imported) {
+  if (!local) return imported;
+  if (!imported) return local;
+  const localScored = local.emaErrorCorrected !== undefined;
+  const importedScored = imported.emaErrorCorrected !== undefined;
+  if (localScored && importedScored) {
+    return imported.emaErrorCorrected < local.emaErrorCorrected ? imported : local;
+  }
+  if (localScored !== importedScored) return localScored ? local : imported;
+  return (imported.count || 0) > (local.count || 0) ? imported : local;
+}
+
+// Merges a shared FFV export into this device's own store for that same
+// area — never a blind overwrite. Per entry, the more accurate side
+// wins outright (see pickBetterFFVEntry) rather than averaging the two:
+// an EMA built from two only-partially-overlapping day sequences has no
+// honest way to combine into a genuine third number. Eligibility (which
+// dates a source/condition has actually been watched on) is a plain
+// UNION of both sides instead — there's no "better" side there, only a
+// fuller or thinner picture, so combining the two date sets loses
+// nothing either way.
+//
+// Deliberately NOT filtered by this device's own current forecaster
+// selection (state.selected) — a source someone has unticked in
+// Settings keeps its learned history regardless, in case the untick
+// was only ever meant to be temporary. Selection only ever affects
+// what's currently shown, never what's remembered.
+function importFFVShare(parsed) {
+  if (!parsed.areaCode || typeof parsed.areaCode !== "string") {
+    return { ok: false, error: "That doesn't look like a Cloude accuracy share (missing area)." };
+  }
+  if (!parsed.ffv || typeof parsed.ffv !== "object") {
+    return { ok: false, error: "That doesn't look like a Cloude accuracy share (missing data)." };
+  }
+
+  const areaCode = parsed.areaCode;
+  const store = loadFFVStore(areaCode);
+  const eligStore = loadEligibilityStore(areaCode);
+  let entriesMerged = 0;
+
+  Object.keys(parsed.ffv).forEach(conditionName => {
+    store[conditionName] ??= {};
+    Object.keys(parsed.ffv[conditionName]).forEach(sourceId => {
+      store[conditionName][sourceId] ??= {};
+      Object.keys(parsed.ffv[conditionName][sourceId]).forEach(day => {
+        const imported = parsed.ffv[conditionName][sourceId][day];
+        const local = store[conditionName][sourceId][day];
+        store[conditionName][sourceId][day] = pickBetterFFVEntry(local, imported);
+        entriesMerged += 1;
+      });
+    });
+  });
+
+  if (parsed.eligibility && typeof parsed.eligibility === "object") {
+    Object.keys(parsed.eligibility).forEach(conditionName => {
+      eligStore[conditionName] ??= {};
+      Object.keys(parsed.eligibility[conditionName]).forEach(sourceId => {
+        eligStore[conditionName][sourceId] = {
+          ...(eligStore[conditionName][sourceId] ?? {}),
+          ...parsed.eligibility[conditionName][sourceId]
+        };
+        // Same 400-date cap markDateSeen already enforces elsewhere — a
+        // merge is exactly the kind of moment that could push an entry
+        // past it.
+        const keys = Object.keys(eligStore[conditionName][sourceId]);
+        if (keys.length > 400) {
+          keys.sort().slice(0, keys.length - 400).forEach(k => delete eligStore[conditionName][sourceId][k]);
+        }
+      });
+    });
+  }
+
+  saveFFVStore(areaCode, store);
+  saveEligibilityStore(areaCode, eligStore);
+  return { ok: true, areaCode, entriesMerged };
+}
+
+// Settings has one paste box for both kinds of backup text — this reads
+// whichever was pasted and routes to the right importer, so the person
+// pasting never has to know or choose which kind it is themselves; the
+// file's own content already says.
+function importBackupText(jsonText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return { ok: false, error: "That doesn't look like valid backup text — check it was copied in full." };
+  }
+  if (parsed?.type === FFV_SHARE_TYPE) {
+    return { ...importFFVShare(parsed), kind: "ffv-share" };
+  }
+  return { ...importAppData(jsonText), kind: "full-backup" };
+}
+
 // Everything is stored and computed internally in these native units —
 // rain in mm, wind in mph, temperature in °C, pressure in hPa — regardless
 // of the display choice below. Only formatValue() and unit labels convert

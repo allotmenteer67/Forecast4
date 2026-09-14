@@ -104,16 +104,20 @@
     <section class="controls">
       <fieldset>
         <legend>Backup &amp; restore</legend>
-        <p class="note">Everything Cloude knows — FFV history, saved places, settings, and tide data (locations, TFV, your Admiralty key and proxy URL, learned corrections) — lives only on this device. Copy a backup here before switching phones or clearing site data, or to hand your learned history to someone else in the same postcode area.</p>
+        <p class="note">Everything Cloude knows — FFV history, saved places, settings, and tide data (locations, TFV, your Admiralty key and proxy URL, learned corrections) — lives only on this device. Copy a backup here before switching phones or clearing site data. To hand your learned forecaster accuracy for one place to someone else (rather than your whole device), use "Share accuracy data" below instead — it merges in without touching their own places or settings.</p>
         <button id="exportButton" type="button">Copy backup to clipboard</button>
         <p id="exportStatus" class="actual-status status-error-only"></p>
         <textarea id="exportOutput" class="backup-textarea" readonly hidden></textarea>
 
+        <button id="exportFFVButton" type="button">Share accuracy data for this place</button>
+        <p id="exportFFVStatus" class="actual-status status-error-only"></p>
+        <textarea id="exportFFVOutput" class="backup-textarea" readonly hidden></textarea>
+
         <label class="backup-import-label">
-          Restore from a backup
-          <textarea id="importInput" class="backup-textarea" placeholder="Paste backup text here"></textarea>
+          Restore from a backup, or paste shared accuracy data
+          <textarea id="importInput" class="backup-textarea" placeholder="Paste backup or shared accuracy text here"></textarea>
         </label>
-        <button id="importButton" type="button" class="backup-import-button">Restore this backup</button>
+        <button id="importButton" type="button" class="backup-import-button">Restore / merge this</button>
         <p id="importStatus" class="actual-status status-error-only"></p>
       </fieldset>
     </section>
