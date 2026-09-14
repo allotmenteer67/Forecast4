@@ -229,12 +229,28 @@ const MAP_TEMP_COLOR_STOPS = [
 
 // The layer itself paints each cell at less than full opacity (see its
 // draw() below) so terrain/land still shows through underneath —
-// named here, once, rather than left as a literal 0.55 inside draw(),
-// because the legend gradient needs the EXACT same number to preview
-// honestly (see renderMapLegends' own temperature block: a mismatch
-// here is exactly what produced the reported "17°C on the map looks
-// like the legend's swatch for 21-22°C" bug below).
-const TEMP_LAYER_ALPHA = 0.55;
+// named here, once, rather than left as a literal number inside
+// draw(), because the legend gradient needs the EXACT same number to
+// preview honestly (see renderMapLegends' own temperature block).
+//
+// Was 0.55, raised to 0.8. The legend blend (blendOverBg, below) only
+// ever assumed one fixed backdrop — this palette's flat land colour —
+// but the layer itself paints over sea (no land/sea split at all) and
+// over terrain's hillshade (drawn just before this layer, so it's
+// already lightening/darkening the land underneath by the time
+// temperature paints over it). At 0.55 either of those real backdrops
+// pulls the blended colour far enough from the legend's flat-land
+// preview to read as visibly the wrong swatch — confirmed as a
+// reported 12°C looking like it belonged to a noticeably different
+// temperature's colour. Raising toward full opacity shrinks how much
+// any backdrop can pull the final colour away from tempColor()'s own
+// stop — at 0.8 a backdrop can only ever move the result a fifth of
+// the way off, not nearly half. Not a complete fix (only alpha 1.0
+// removes backdrop-dependence entirely, at the cost of the see-through
+// look this layer is deliberately going for) — a deliberate middle
+// ground instead, to try before giving up the see-through effect
+// altogether.
+const TEMP_LAYER_ALPHA = 0.8;
 
 function tempColor(value) {
   const v = Math.max(MAP_TEMP_MIN_C, Math.min(MAP_TEMP_MAX_C, value));
@@ -1537,15 +1553,20 @@ registerMapLayer({
 });
 
 // ---------------------------------------------------------------------
-// Isobars — marching squares over the pressure grid, at the standard
-// synoptic-chart spacing of 4 hPa. Chosen over a colour wash (the
-// original approach) for two reasons at once: it's the familiar
-// convention from every other pressure chart, and it stacks cleanly
-// with rain/temperature underneath rather than adding a third
-// competing colour field to a display that was already getting muddy
-// with two.
+// Isobars — marching squares over the pressure grid. Chosen over a
+// colour wash (the original approach) for two reasons at once: it's
+// the familiar convention from every other pressure chart, and it
+// stacks cleanly with rain/temperature underneath rather than adding
+// a third competing colour field to a display that was already
+// getting muddy with two.
+//
+// Spacing was originally the standard synoptic-chart 4 hPa; changed
+// to 2 hPa on request — tighter spacing over the UK's usually modest
+// day-to-day pressure range means more lines actually appear at once
+// (worth it on a country-scale map, where a full 4 hPa step can go
+// most of a session without a second contour ever showing at all).
 // ---------------------------------------------------------------------
-const MAP_ISOBAR_INTERVAL_HPA = 4;
+const MAP_ISOBAR_INTERVAL_HPA = 2;
 
 // Null if the level doesn't cross this edge at all; otherwise the
 // interpolated screen point where it does.
@@ -1905,18 +1926,24 @@ function renderMapLegends() {
   // legend on this map already follows.
   //
   // Blended through blendOverBg at TEMP_LAYER_ALPHA against this
-  // palette's own land colour — NOT the pure tempColor() stop shown
-  // before this fix. The layer itself never paints a cell at full
-  // strength (see its draw(), TEMP_LAYER_ALPHA), so a legend built from
-  // the pure colour was always going to look more saturated than
-  // anything actually on the map — confirmed as the real cause behind
-  // a reported 17°C reading looking like it belonged to the legend's
-  // ~21-22°C swatch instead: the map's own blended 17° and the
-  // legend's pure, unblended ~21-22° happened to land close enough in
-  // that lighter half of the ramp to be mistaken for each other. Land
-  // is an approximation (the true backdrop varies — sea, terrain
-  // shading, other layers underneath), but it's the single most common
-  // one and a far closer preview than full strength ever was.
+  // palette's own land colour — NOT the pure tempColor() stop. The
+  // layer itself never paints a cell at full strength (see its draw(),
+  // TEMP_LAYER_ALPHA), so a legend built from the pure colour was
+  // always going to look more saturated than anything actually on the
+  // map.
+  //
+  // First pass at this (TEMP_LAYER_ALPHA 0.55, blending the legend over
+  // flat land) wasn't enough on its own — land is only an approximation
+  // of the real backdrop (sea has no land/sea split at all here, and
+  // terrain's hillshade is already altering the land colour by the
+  // time this paints over it), and at 0.55 either could still pull the
+  // actual on-map colour far enough from this flat-land preview to
+  // read as a different swatch entirely — reported as a 12°C reading
+  // looking like it belonged to a noticeably different temperature's
+  // colour. TEMP_LAYER_ALPHA raised to 0.8 alongside this (see its own
+  // comment) shrinks how far any real backdrop can pull the result away
+  // from this preview, without giving up the see-through effect
+  // entirely the way full opacity would.
   if (mapLayerVisible("temperature")) {
     const row = document.createElement("div");
     row.className = "map-legend-row";

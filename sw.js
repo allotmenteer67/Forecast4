@@ -296,7 +296,37 @@
 // already had, so a tap on either button can't be misread as a swipe
 // gesture starting there. index.html, style.css, app.js, fishing.js,
 // fishing-ui.js and tide-ui.js are all in SHELL_FILES.
-const CACHE_NAME = "cloude-shell-v57";
+//
+// Bumped to v58: split into two caches instead of one. Everything
+// above this point was one CACHE_NAME shared by the app-shell files
+// AND the static geo data files (data/waterways.json — 8+MB on its
+// own — plus elevation-uk.json, coastline-50m.json, lakes-50m.json,
+// places.json). That meant every shell bump above, including ones
+// for a one-line CSS tweak with nothing to do with maps, wiped the geo
+// data out of the cache too (activate deletes anything that isn't the
+// current CACHE_NAME) and forced a full re-fetch of 10MB+ on the next
+// map open — on a phone, possibly on poor signal, for data that never
+// actually changed.
+//
+// SHELL_CACHE_NAME still bumps on every deploy exactly as CACHE_NAME
+// always did. GEO_CACHE_NAME is new and versioned completely
+// separately — it should only ever be bumped when the underlying data
+// files themselves are regenerated (a new elevation build, more
+// waterways coverage), never for an ordinary app-code deploy. The
+// activate handler below now keeps both names alive, so a shell bump
+// no longer touches the geo cache at all.
+//
+// The geo files are also now precached proactively (GEO_DATA_FILES,
+// added to install alongside SHELL_FILES) rather than only being
+// cached lazily the first time map.html happens to be opened — so a
+// fresh install downloads them once, up front, and every map open
+// after that is offline-safe even if the map page itself was never
+// visited yet. Guarded by caches.has(GEO_CACHE_NAME) first, so a
+// routine shell-only deploy (GEO_CACHE_NAME unchanged) doesn't
+// re-trigger that whole fetch on every single install — only a
+// genuinely fresh geo cache (first install ever, or a deliberate
+// GEO_CACHE_NAME bump) does.
+const SHELL_CACHE_NAME = "cloude-shell-v58";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -325,18 +355,65 @@ const SHELL_FILES = [
   "manifest.json"
 ];
 
+// Bump this only when the DATA underneath actually changes (a fresh
+// elevation build, a wider waterways extract, a places.json update) —
+// never for an app-code deploy. Bumping it is exactly like bumping
+// SHELL_CACHE_NAME: it makes activate() below drop the old geo cache
+// and install() repopulate it fresh, the same "force a clean refetch"
+// escape hatch SHELL_CACHE_NAME has always given the app files.
+const GEO_CACHE_NAME = "cloude-geo-v1";
+
+// Rivers/canals, terrain, coastline, lakes, place points — see the
+// v58 note above for why these are cached separately from the app
+// shell. Matched by exact filename in the fetch handler below, not a
+// blanket "anything under data/" rule, because data/ also holds
+// precache-config.json / precache-weather.json / history.json, which
+// are refreshed daily by GitHub Actions and need the ordinary
+// frequently-revalidated shell treatment, not this rarely-bumped one.
+const GEO_DATA_FILES = [
+  "data/waterways.json",
+  "data/elevation-uk.json",
+  "data/coastline-50m.json",
+  "data/lakes-50m.json",
+  "data/places.json"
+];
+
+function isGeoDataRequest(pathname) {
+  return GEO_DATA_FILES.some(file => pathname.endsWith("/" + file));
+}
+
 self.addEventListener("install", event => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(SHELL_FILES))
-      .then(() => self.skipWaiting())
+    (async () => {
+      const shellCache = await caches.open(SHELL_CACHE_NAME);
+      await shellCache.addAll(SHELL_FILES);
+
+      // Only populate the geo cache if it doesn't exist yet under its
+      // current name — a plain shell deploy (GEO_CACHE_NAME unchanged)
+      // means it's already sitting there from an earlier install, so
+      // skip re-downloading 10MB+ of rivers/terrain/coastline for
+      // nothing. This only actually fetches on a genuinely fresh
+      // install (new device, cleared site data) or right after a
+      // deliberate GEO_CACHE_NAME bump.
+      const hasGeoCache = await caches.has(GEO_CACHE_NAME);
+      if (!hasGeoCache) {
+        const geoCache = await caches.open(GEO_CACHE_NAME);
+        await geoCache.addAll(GEO_DATA_FILES);
+      }
+
+      await self.skipWaiting();
+    })()
   );
 });
 
 self.addEventListener("activate", event => {
   event.waitUntil(
     caches.keys()
-      .then(names => Promise.all(names.filter(n => n !== CACHE_NAME).map(n => caches.delete(n))))
+      .then(names => Promise.all(
+        names
+          .filter(n => n !== SHELL_CACHE_NAME && n !== GEO_CACHE_NAME)
+          .map(n => caches.delete(n))
+      ))
       .then(() => self.clients.claim())
   );
 });
@@ -351,8 +428,15 @@ self.addEventListener("fetch", event => {
   // offline. This service worker is deliberately never in that path.
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
 
+  // Same stale-while-revalidate strategy either way — only WHICH cache
+  // a file lives in differs (see the v58 note above). A geo data file
+  // still gets a background revalidation fetch on every request just
+  // like a shell file does; what changes is that a shell version bump
+  // can no longer evict it.
+  const cacheName = isGeoDataRequest(url.pathname) ? GEO_CACHE_NAME : SHELL_CACHE_NAME;
+
   event.respondWith(
-    caches.open(CACHE_NAME).then(async cache => {
+    caches.open(cacheName).then(async cache => {
       const cached = await cache.match(event.request);
       const network = fetch(event.request)
         .then(response => {
