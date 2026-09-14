@@ -2000,7 +2000,32 @@ function loadLocationData(force = false) {
       // (restored from the very same cached snapshot by
       // resetForLocationChange(), just before this function was
       // called), so this is genuine, not a guess.
-      document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat: state.lat, lon: state.lon } }));
+      // Deferred with setTimeout rather than dispatched immediately: on
+      // a fresh page load (not just an in-page switch) this whole branch
+      // runs synchronously as part of app.js's own top-level script
+      // execution, which happens BEFORE the browser even reaches the
+      // <script src="mapstrip3.js"> tag further down index.html.
+      // Dispatching immediately meant the event fired and was gone
+      // before mapstrip3.js's own listener had been registered to hear
+      // it — the map strip then sat showing nothing until something
+      // else nudged it. A zero-delay timeout runs only once every
+      // script tag on the page has finished its own initial synchronous
+      // execution, so every listener — mapstrip3.js's included — is
+      // guaranteed to already be in place by the time this actually
+      // fires.
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat: state.lat, lon: state.lon } }));
+      }, 0);
+      // Tide has no listener for that event at all — runLoadLocationData
+      // (the slow path below) calls renderTideRow() directly instead,
+      // right after lat/lon are known. This fast path skipped that call
+      // entirely, so on a page load/return that hits this exact branch,
+      // tideRow was left exactly as the static HTML defines it (hidden)
+      // — nothing had ever run to un-hide it. Calling it here too closes
+      // that gap; it cascades into renderFishingRow() on its own, and
+      // reads from state/its own cache rather than fetching anything, so
+      // this is cheap and instant, not a new network request.
+      if (typeof renderTideRow === "function") renderTideRow();
       return Promise.resolve();
     }
   }
