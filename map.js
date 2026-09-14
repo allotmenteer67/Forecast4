@@ -1,0 +1,3271 @@
+// map.js — the expanded map page.
+//
+// Loaded after app.js and tide.js, so it reuses loadConditionUnits()
+// (units follow the choice already made in Settings — the map never gets
+// its own km/miles setting) and haversineKm() rather than redefining
+// either.
+//
+// WHAT THIS MAP IS, AND ISN'T
+//
+// It is drawn from the same merged global models the headline figures
+// use, at roughly 10 km spacing. It is deliberately NOT built on UKMO's
+// 2 km UKV model, despite that being far higher resolution, for three
+// reasons worth recording because the temptation to "upgrade" it later
+// will be strong:
+//
+//   1. UKMO open data carries an additional 4-hour delay on top of the
+//      normal run cycle (Open-Meteo say so themselves, and add that it
+//      makes the forecast less accurate as a result). Four hours is
+//      useless for "should I hang the washing out".
+//   2. UKV is not one of the app's six sources, so a UKV map could not
+//      be FFV-corrected at all. It would be raw, uncorrected model
+//      output drawn immediately above bias-corrected headline numbers,
+//      and the two would visibly disagree.
+//   3. Sampling finer than the model's own grid adds no information.
+//      At 9-25 km native resolution, a 10 km grid is already at the
+//      limit of what the data actually contains.
+//
+// So this map answers "where is the rain and which way is it moving",
+// not "will it rain here in twenty minutes". The hourly slider on the
+// front page remains the better answer to the second question.
+
+const MAP_CENTRE_KEY = "forecast-compare:map:centre";
+const MAP_ZOOM_KEY = "forecast-compare:map:zoom";
+const MAP_PALETTE_KEY = "forecast-compare:map:palette";
+const MAP_PREVIOUS_KEY = "forecast-compare:map:previousAdopted";
+const MAP_BACK_ENABLED_KEY = "forecast-compare:map:backButton";
+
+// Fixed levels rather than pinch-to-zoom. A fixed level means a fixed
+// grid that can be cached and reused; continuous zoom would imply
+// refetching at arbitrary extents. It also avoids fighting the sheet's
+// own dismiss gesture, and one-handed tapping beats a two-finger
+// gesture when you are stood at the allotment holding a spade.
+const MAP_ZOOM_RADII_KM = [25, 50, 100, 150];
+
+// Ring radii per zoom level. Fixed rings would be either invisible at
+// the widest level or off-canvas at the closest.
+const MAP_RING_RADII_KM = { 25: [10, 20], 50: [15, 30], 100: [30, 60], 150: [50, 100] };
+// A separate table of genuinely round MILE values, not the km ones
+// converted — 30km becomes "19mi" when converted, which reads as an
+// oddly specific measurement nobody actually thinks in. 20mi is what
+// someone using miles would actually expect to see there.
+const MAP_RING_RADII_MI = { 25: [5, 10], 50: [10, 20], 100: [20, 40], 150: [30, 60] };
+
+// The grid is fetched wider than it is displayed, so ordinary panning
+// reveals data already in hand rather than triggering a refetch. Only
+// dragging past this margin costs a new request.
+const MAP_FETCH_MARGIN = 1.5;
+
+// ~10 km at the closest zoom, matching the coarsest of the merged
+// models (finer would just be resampling interpolation that already
+// happened upstream) — but widened at the two wider zoom levels
+// specifically to keep the POINT COUNT, and so the payload size, from
+// growing unboundedly with the viewing area. Flat 10km spacing at
+// 100km radius meant ~960 points and a multi-megabyte response once
+// wind/temperature/pressure joined rain in the same request (5
+// variables instead of 1) — squarely why "couldn't load map data"
+// started showing up more often on a wide, zoomed-out view: that
+// response was routinely taking longer to arrive than the fetch
+// timeout allowed, especially on a slower connection. Detail that
+// dense was never visible at that zoom anyway.
+const MAP_GRID_SPACING_KM = { 25: 10, 50: 14, 100: 20, 150: 25 };
+
+const MAP_STALE_MS = 30 * 60 * 1000;
+
+// Hour slider step, in hours. Open-Meteo itself has no half-hourly data
+// for anything this map draws (only precipitation offers a separate
+// 15-minute feed, on a different endpoint, and only for some models) —
+// so 0.5 here is purely a client-side blend between the two nearest
+// HOURLY values already sitting in mapGrid, not genuinely finer-grained
+// weather. It makes the scrub feel smoother; it doesn't reveal a rain
+// band's real start time any more precisely than the hourly data always
+// did.
+//
+// This single constant is meant to be the ONLY thing that needs to
+// change if this turns out to look too smooth, or to misrepresent the
+// data — every part of it (the slider's own step, mapHourValue's
+// rounding, sampleGrid/sampleWindDir's hour-axis interpolation, and
+// mapHourClock's readout) is driven from this one number and every one
+// of them already collapses back to its exact old behaviour at whole
+// hours. Setting this back to 1 is the entire "unbuild" — nothing else
+// needs touching.
+const MAP_HOUR_STEP = 0.5;
+
+const KM_PER_DEG_LAT = 111.32;
+
+// ---------------------------------------------------------------------
+// Palettes
+//
+// Base and ramp are chosen TOGETHER as matched presets rather than as
+// two independent settings. They are not separable in practice: on a
+// light base the palest blues vanish, so a light preset's ramp has to
+// start at mid-blue, while a dark base can use the full range. Offering
+// them as separate dropdowns would let someone build a combination in
+// which light rain is invisible.
+//
+// The map deliberately does NOT follow the app's colour theme. It is a
+// data surface, not chrome — the same reasoning that keeps the tide
+// graph's Raw and Corrected lines fixed. With seven themes, a
+// theme-derived ramp would fight the rain layer for the same part of
+// the colour space in at least three of them.
+// ---------------------------------------------------------------------
+const MAP_PALETTES = [
+  {
+    id: "paper",
+    name: "Paper",
+    // Land now uses the app's own --accent-light green (#e4efe6) rather
+    // than a neutral beige — safe to do now that no data layer uses
+    // green anywhere (rain is blue, temperature runs purple→red,
+    // pressure is unfilled contour lines), and it ties the map visually
+    // back to the rest of the app. Sea is paler than before for the
+    // same underlying reason as the land change: the palest rain band
+    // needs to actually stand out against it, and the old sea tone sat
+    // too close to that band's own colour.
+    land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", ring: "#8a887f",
+    // A warm burnt-orange for isobars — previously these shared the
+    // plain "ink" colour, which sat too close to the coastline/label
+    // tone to read as its own thing at a glance. Distinct from rain's
+    // blue ramp, temperature's purple-to-red scale, and land's green.
+    isobar: "#B5541C",
+    // Same reasoning again for saved-place markers: needs to read as
+    // "yours" at a glance, distinct from both ink (ordinary town
+    // labels) and isobar's orange. A plum/purple has no other claim on
+    // this palette at all.
+    marker: "#7A3E86",
+    // Rivers/canals — closer to the sea's own hue than a fresh colour,
+    // since a river genuinely IS the same substance as the sea, just
+    // narrower. Deliberately more saturated than the very pale sea
+    // fill: a thin 1px line in that pale a blue would all but disappear
+    // against light land.
+    river: "#8FB9E2",
+    // Starts at mid-blue, not near-white: on a light base the palest
+    // stops of a conventional radar ramp read as "no rain".
+    ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"]
+  },
+  {
+    id: "slate",
+    name: "Slate",
+    // Land uses the app's own --accent-dark green (#234f39), same
+    // reasoning as Paper above. Sea lightened from the original
+    // near-black so the palest rain band doesn't get lost against it —
+    // "paler" means lighter here, the opposite direction from Paper's
+    // sea change, since a dark theme needs MORE separation from black
+    // to show a pale colour, not less.
+    land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", ring: "#8f8f86",
+    // A warm amber rather than Paper's burnt-orange — needs to pop
+    // against dark green land and dark blue-grey sea alike, which a
+    // darker orange wouldn't on this theme.
+    isobar: "#E8A33D",
+    // A soft pink rather than Paper's plum — needs to stay legible
+    // against dark land/sea, which a darker purple wouldn't.
+    marker: "#E37BC4",
+    // Same reasoning as Paper's river colour — a mid-tone pulled from
+    // this palette's own rain ramp, since a river is the same "water"
+    // concept as the sea and rain, not a new one.
+    river: "#85B7EB",
+    // Dark base, so the full range including the pale end is usable.
+    ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"]
+  },
+  {
+    id: "mono",
+    name: "High contrast",
+    // Deliberately NOT given the green land treatment the other two
+    // palettes got — this one's whole purpose is no hue at all, for
+    // anyone who can't reliably separate colours by shade. Introducing
+    // green here would undermine the one thing this palette is for.
+    land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", ring: "#777777",
+    // Pure black rather than a hue — same "no colour at all" rule the
+    // rest of this palette follows. Isobars still read as distinct from
+    // the coastline here because they're drawn heavier (see the
+    // pressure layer's own lineWidth), not because of a different tone.
+    isobar: "#000000",
+    // Same "no hue" rule — saved places are told apart from towns by
+    // shape (a triangle, not a dot), not colour, on this palette.
+    marker: "#000000",
+    // No hue at all, same rule as the rest of this palette — told apart
+    // from the coastline by being drawn thinner/dashed rather than by
+    // colour (see the waterways layer's own line style).
+    river: "#7C7C7C",
+    // No hue at all. For bright daylight, and for anyone who can't
+    // reliably separate the blues.
+    ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"]
+  }
+];
+
+function mapPalette() {
+  let id = "paper";
+  try { id = localStorage.getItem(MAP_PALETTE_KEY) || "paper"; } catch {}
+  return MAP_PALETTES.find(p => p.id === id) || MAP_PALETTES[0];
+}
+
+// Temperature and pressure get their own FIXED colour scales rather
+// than one per palette (unlike rain's ramp above) — real-world
+// temperature maps are blue-cold/red-hot almost universally regardless
+// of app theme, and inventing a "Slate" or "Paper" variant of that
+// would just be decoration with no convention behind it. One
+// consequence worth stating plainly: the "High contrast" mono palette
+// was built so rain reads by shade alone for anyone who can't reliably
+// separate blues — temperature and pressure don't get that treatment,
+// and showing them at the same time as rain (or each other) in mono
+// mode will be harder to tell apart than rain alone is.
+//
+// Temperature is a smooth gradient between these stops, not discrete
+// bands — the original 6-step banding (6°C per colour change) read as
+// coarse, and widening the range to actually cover a UK heatwave/cold
+// snap (-10 to 34°C, both seen in recent years) at a similarly coarse
+// step would have meant a dozen-plus swatches, unworkable as a legend
+// on a phone. A continuous scale changes colour at every degree and
+// only needs a handful of tick labels to explain itself.
+const MAP_TEMP_MIN_C = -10;
+const MAP_TEMP_MAX_C = 34;
+const MAP_TEMP_COLOR_STOPS = [
+  { t: -10, rgb: [90, 40, 140] },  // deep purple — proper winter cold
+  { t: 0, rgb: [43, 108, 176] },   // blue — freezing
+  { t: 12, rgb: [99, 179, 237] },  // light blue — cool
+  { t: 20, rgb: [246, 173, 85] },  // amber — warm
+  { t: 27, rgb: [237, 137, 54] },  // orange — hot
+  { t: 34, rgb: [197, 48, 48] }    // red — heatwave
+];
+
+// The layer itself paints each cell at less than full opacity (see its
+// draw() below) so terrain/land still shows through underneath —
+// named here, once, rather than left as a literal 0.55 inside draw(),
+// because the legend gradient needs the EXACT same number to preview
+// honestly (see renderMapLegends' own temperature block: a mismatch
+// here is exactly what produced the reported "17°C on the map looks
+// like the legend's swatch for 21-22°C" bug below).
+const TEMP_LAYER_ALPHA = 0.55;
+
+function tempColor(value) {
+  const v = Math.max(MAP_TEMP_MIN_C, Math.min(MAP_TEMP_MAX_C, value));
+  const stops = MAP_TEMP_COLOR_STOPS;
+  let lo = stops[0], hi = stops[stops.length - 1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (v >= stops[i].t && v <= stops[i + 1].t) { lo = stops[i]; hi = stops[i + 1]; break; }
+  }
+  const span = hi.t - lo.t || 1;
+  const f = (v - lo.t) / span;
+  const r = Math.round(lo.rgb[0] + (hi.rgb[0] - lo.rgb[0]) * f);
+  const g = Math.round(lo.rgb[1] + (hi.rgb[1] - lo.rgb[1]) * f);
+  const b = Math.round(lo.rgb[2] + (hi.rgb[2] - lo.rgb[2]) * f);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function hexToRgb(hex) {
+  const m = hex.replace("#", "").match(/.{2}/g).map(h => parseInt(h, 16));
+  return [m[0], m[1], m[2]];
+}
+
+// Composites an rgb(...) string at the given alpha over a solid
+// background, the same "paint at globalAlpha over whatever's
+// underneath" maths canvas itself does — used only by the temperature
+// legend below, so the gradient bar shows the colour a cell actually
+// ends up looking like once blended with land, not the pure,
+// never-actually-seen-at-full-strength stop colour.
+function blendOverBg(rgbString, alpha, bgRgb) {
+  const m = rgbString.match(/\d+/g).map(Number);
+  const r = Math.round(m[0] * alpha + bgRgb[0] * (1 - alpha));
+  const g = Math.round(m[1] * alpha + bgRgb[1] * (1 - alpha));
+  const b = Math.round(m[2] * alpha + bgRgb[2] * (1 - alpha));
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+// A single translucent grey wash rather than three competing colour
+// fields — this app already tried and rejected stacking more than one
+// colour wash at once (see the isobars comment further down: a second
+// colour field on top of Rain/Temperature read as "muddy", which is
+// exactly why Pressure moved to contour lines instead of its own wash).
+// Three cloud-band washes layered on each other would hit the same
+// problem worse. The three bands still feed this — see
+// effectiveCloudCover in app.js, shared with the frost-risk check and
+// the headline sky icon — just combined into one shade before it's
+// painted, rather than painted three times.
+const MAP_CLOUD_RGB = [90, 96, 104];
+function cloudColor(effectivePct) {
+  const v = Math.max(0, Math.min(100, effectivePct));
+  const alpha = (v / 100) * 0.55; // capped below full opacity so whatever's underneath (rain, land, sea) stays legible even at 100% cover
+  return `rgba(${MAP_CLOUD_RGB[0]}, ${MAP_CLOUD_RGB[1]}, ${MAP_CLOUD_RGB[2]}, ${alpha.toFixed(2)})`;
+}
+
+
+// Highest index whose threshold the value clears — used by temperature
+// and pressure, which (unlike rain) always have a value worth showing;
+// there's no "dry" band to hide below.
+function bandIndexFor(value, thresholds) {
+  let idx = 0;
+  for (let i = 0; i < thresholds.length; i++) {
+    if (value >= thresholds[i]) idx = i;
+  }
+  return idx;
+}
+
+// ---------------------------------------------------------------------
+// Layer visibility — independent toggles, not a single-layer switcher.
+// Rain defaults on (the map's original purpose); the three added later
+// default off so nobody's map suddenly looks different after an update.
+// Deliberately no mutual exclusion: showing rain and temperature at
+// once will look muddier than either alone (two colour washes occupying
+// the same pixels), but that trade was the explicit ask — a forced
+// single-layer switcher would be easier to keep legible but wouldn't be
+// what this is for.
+// ---------------------------------------------------------------------
+const MAP_LAYER_TOGGLES_KEY = "forecast-compare:map:layers";
+const MAP_LAYER_IDS = ["rain", "wind", "pressure", "temperature", "cloud"];
+const MAP_LAYER_DEFAULTS = { rain: true, wind: false, pressure: false, temperature: false, cloud: false };
+
+function loadMapLayerToggles() {
+  try {
+    const raw = localStorage.getItem(MAP_LAYER_TOGGLES_KEY);
+    if (raw) return { ...MAP_LAYER_DEFAULTS, ...JSON.parse(raw) };
+  } catch {}
+  return { ...MAP_LAYER_DEFAULTS };
+}
+
+function saveMapLayerToggle(id, visible) {
+  const toggles = loadMapLayerToggles();
+  toggles[id] = visible;
+  try { localStorage.setItem(MAP_LAYER_TOGGLES_KEY, JSON.stringify(toggles)); } catch {}
+}
+
+function mapLayerVisible(id) {
+  return !!loadMapLayerToggles()[id];
+}
+
+// ---------------------------------------------------------------------
+// Layer registry
+//
+// Every drawable thing on the map is a layer with a draw(ctx, view)
+// method, rendered in array order — so array order IS z-order, and
+// anything inserted before "coastline" sits underneath it.
+//
+// This exists specifically so terrain can be added later without
+// touching the render loop. The map ships flat, but a flat map feels
+// wrong once you know the rain is sitting on the Mendips rather than
+// the Levels, so the slot is left ready:
+//
+//   1. Generate an elevation grid ONCE, offline, from Open-Meteo's free
+//      elevation API (up to 100 coordinates per request, no key). Not at
+//      runtime — terrain doesn't change.
+//   2. Save it as terrain.json in the same shape as the coastline files.
+//   3. Register a layer here, BEFORE "coastline", with a draw() that
+//      renders contour bands or shading from it.
+//
+// Nothing else needs to change. Deliberately not attempted now: choosing
+// band intervals and deciding whether shading or contours reads better
+// at 100 km across is easy to underestimate, and much easier to judge
+// against a working flat map than in the abstract.
+// ---------------------------------------------------------------------
+const mapLayers = [];
+
+function registerMapLayer(layer) {
+  mapLayers.push(layer);
+}
+
+// Bundled vector data, fetched once and cached in memory for the life of
+// the page. These files ship with the app and cache with the app shell
+// via sw.js, so panning never touches the network however far you drag —
+// only the weather does.
+//
+// Sourced from Natural Earth, which is public domain: no permission
+// needed, no attribution required. That matters here, because the whole
+// reason for not using a tile service was to avoid both a live
+// dependency and crediting somebody else's weather app.
+const mapVectorData = { coastline: null, lakes: null, places: null, waterways: null };
+
+// A missing file must degrade, not break. If the coastline hasn't been
+// added to the repo yet the map still pans, still draws rain, and still
+// adopts locations — it just has no land. That keeps this page useful
+// while the GeoJSON is still being prepared.
+async function loadMapVectors() {
+  const files = [
+    ["coastline", "data/coastline-50m.json"],
+    ["lakes", "data/lakes-50m.json"],
+    ["places", "data/places.json"],
+    // Rivers and canals only (no streams/ditches — see
+    // prepare-waterways-data.html for why) plus lakes above. Both were
+    // built once, offline, by that page rather than fetched live —
+    // same pattern as coastline/places. A missing file here degrades
+    // exactly like a missing coastline does: the layer below just
+    // draws nothing.
+    ["waterways", "data/waterways.json"]
+  ];
+  await Promise.all(files.map(async ([key, path]) => {
+    try {
+      const response = await fetch(path, { cache: "force-cache" });
+      if (!response.ok) return;
+      mapVectorData[key] = await response.json();
+    } catch {
+      // Left null. Its layer draws nothing.
+    }
+  }));
+}
+
+// ---------------------------------------------------------------------
+// Projection
+//
+// A local equirectangular projection centred on the view, not full Web
+// Mercator. Over a 200 km span the difference is well under a pixel, and
+// this keeps the maths readable: everything is just kilometres from the
+// centre, scaled to pixels.
+// ---------------------------------------------------------------------
+function kmPerDegLon(lat) {
+  return KM_PER_DEG_LAT * Math.cos(lat * Math.PI / 180);
+}
+
+// The bottom time/conditions pill (.map-scale in style.css: 8px from
+// the bottom, ~25px tall at its usual single line — 14px font at a
+// normal ~1.2 line-height plus 4px padding top and bottom) visually
+// eats into the bottom of the square canvas. MAP_CROSSHAIR_BAR_ADJUST
+// is half that pill's total footprint (8 + 25, halved), which is
+// exactly what shifts a plain 50% centre up to the centre of the
+// space actually above the pill instead. Kept as its own named
+// constant, not a magic number inline, because .map-crosshair's CSS
+// `top: calc(50% - Xpx)` needs this same value — the two are only
+// ever correct together, the same way cx/cy needed to match the
+// crosshair's old top:58% before this change.
+//
+// Supersedes an earlier deliberate choice, worth recording rather than
+// silently overwriting: this used to be `h * 0.58`, biasing the centre
+// down so more of the view showed the direction weather approaches
+// from (the UK's prevailing south-westerlies) than the direction
+// already past. Confirmed on-device that the bottom pill made that
+// bias look more pronounced than intended — genuine visual centring
+// against the space actually usable above the pill won out over
+// keeping the weather-direction bias.
+const MAP_CROSSHAIR_BAR_ADJUST = 17;
+
+function makeView(canvas, centre, radiusKm) {
+  // CSS pixels, not the canvas's backing-store pixels. renderMap()
+  // scales the context by the device pixel ratio, so everything below —
+  // font sizes, line widths, cell sizes — is expressed at the size it
+  // will actually appear.
+  //
+  // This was the bug behind the unreadable ring labels. The canvas is
+  // sized at rect.width * dpr for sharpness, but the context was never
+  // scaled to match, so drawing happened in device pixels: a "10px"
+  // label rendered at 10 device pixels, which is barely 3 CSS pixels on
+  // a modern phone. Not small — microscopic. The same fault made every
+  // line hairline-thin and the rain cells a third of their intended
+  // size.
+  const dpr = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
+  const w = canvas.width / dpr, h = canvas.height / dpr;
+  // Scale from the WIDTH, so the stated radius is always what you get
+  // left-to-right regardless of how tall the canvas happens to be.
+  const pxPerKm = w / (radiusKm * 2);
+  return {
+    w, h, pxPerKm, centre, radiusKm,
+    cx: w / 2,
+    cy: h / 2 - MAP_CROSSHAIR_BAR_ADJUST,
+    x(lon) { return this.cx + (lon - centre.lon) * kmPerDegLon(centre.lat) * this.pxPerKm; },
+    y(lat) { return this.cy - (lat - centre.lat) * KM_PER_DEG_LAT * this.pxPerKm; },
+    lon(px) { return centre.lon + (px - this.cx) / (kmPerDegLon(centre.lat) * this.pxPerKm); },
+    lat(py) { return centre.lat - (py - this.cy) / (KM_PER_DEG_LAT * this.pxPerKm); }
+  };
+}
+
+// ---------------------------------------------------------------------
+// GeoJSON rendering
+// ---------------------------------------------------------------------
+function eachRing(geometry, visit) {
+  if (!geometry) return;
+  const t = geometry.type, c = geometry.coordinates;
+  if (t === "LineString") visit(c);
+  else if (t === "MultiLineString" || t === "Polygon") c.forEach(visit);
+  else if (t === "MultiPolygon") c.forEach(poly => poly.forEach(visit));
+}
+
+// Bounding box of what the view can actually show, in lon/lat — used
+// below to skip whole rings that can't possibly be on screen before
+// spending any time transforming their points.
+function viewBounds(view) {
+  const lonA = view.lon(0), lonB = view.lon(view.w);
+  const latA = view.lat(0), latB = view.lat(view.h);
+  return {
+    lonMin: Math.min(lonA, lonB), lonMax: Math.max(lonA, lonB),
+    latMin: Math.min(latA, latB), latMax: Math.max(latA, latB)
+  };
+}
+
+function ringIntersectsView(ring, bounds) {
+  let lonMin = Infinity, lonMax = -Infinity, latMin = Infinity, latMax = -Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const [lon, lat] = ring[i];
+    if (lon < lonMin) lonMin = lon;
+    if (lon > lonMax) lonMax = lon;
+    if (lat < latMin) latMin = lat;
+    if (lat > latMax) latMax = lat;
+  }
+  return lonMax >= bounds.lonMin && lonMin <= bounds.lonMax &&
+         latMax >= bounds.latMin && latMin <= bounds.latMax;
+}
+
+// Was walking and transforming EVERY point of EVERY ring in the whole
+// coastline file on every single frame, however far off screen it was —
+// the comment below about "canvas clips for us" was true for drawing
+// correctness, but canvas still has to receive every one of those
+// moveTo/lineTo calls before it can clip anything, so a screen showing
+// one small bay was still paying to transform Scotland, Ireland and
+// everything else in the file, every frame, regardless of which
+// weather layers were on. Confirmed on-device as a real, constant drag
+// cost that persisted even with Temperature and Pressure switched off
+// (the layers already exempted from dragging — see mapIsPanning) —
+// this runs unconditionally, coastline having no toggle at all.
+//
+// A ring's own bounding box (cheap: one pass over its points, no
+// canvas calls) is compared against the current view's bounding box
+// before doing any of the expensive per-point transform-and-draw work.
+// This changes nothing about what ends up on screen — a ring that
+// WOULD be visible is drawn exactly as before — it only skips the ones
+// that provably can't be, which at a typical zoom is most of the file.
+function drawGeoJson(ctx, geo, view, { fill, stroke, lineWidth = 1 }) {
+  if (!geo) return;
+  const features = geo.type === "FeatureCollection" ? geo.features : [geo];
+  const bounds = viewBounds(view);
+  ctx.lineWidth = lineWidth;
+  features.forEach(feature => {
+    const geometry = feature.geometry || feature;
+    eachRing(geometry, ring => {
+      if (!ringIntersectsView(ring, bounds)) return;
+      ctx.beginPath();
+      // Skips points far outside the view rather than clipping properly.
+      // Canvas clips for us; this only avoids pathological coordinate
+      // values when zoomed right in on a global file.
+      ring.forEach(([lon, lat], i) => {
+        const px = view.x(lon), py = view.y(lat);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+      if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
+    });
+  });
+}
+
+// Not built on drawGeoJson above: that function fills-then-strokes each
+// ring identically, but rivers and canals need per-FEATURE styling (a
+// canal drawn dashed, a river solid — the traditional OS-map
+// convention for "this watercourse is man-made"), which a single
+// shared fill/stroke option can't express. Everything else — the
+// bounding-box skip, the point-transform loop — is the same technique.
+function drawMapWaterways(ctx, geo, view, colour) {
+  if (!geo) return;
+  const features = geo.type === "FeatureCollection" ? geo.features : [geo];
+  const bounds = viewBounds(view);
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = 1;
+  features.forEach(feature => {
+    const geometry = feature.geometry || feature;
+    // A canal is man-made — dashed is the traditional cartographic way
+    // of saying "this watercourse was built, not carved by the land
+    // itself", which a plain solid line (river) doesn't claim.
+    ctx.setLineDash(feature.properties?.kind === "canal" ? [4, 3] : []);
+    eachRing(geometry, ring => {
+      if (!ringIntersectsView(ring, bounds)) return;
+      ctx.beginPath();
+      ring.forEach(([lon, lat], i) => {
+        const px = view.x(lon), py = view.y(lat);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+    });
+  });
+  ctx.setLineDash([]); // reset — later layers must not inherit this
+}
+
+// ---------------------------------------------------------------------
+// Weather grid
+//
+// grid = { lat0, lon0, dLat, dLon, rows, cols, hours, values[hour][row][col] }
+//
+// fetchWeatherGrid() is live — real Open-Meteo precipitation, one
+// request per pan/zoom/refresh. buildStubGrid() is kept alongside it,
+// unused by the running app, purely as an offline fallback for testing
+// pan/zoom/adopt/palettes/the hour slider without burning API calls or
+// needing a connection; swap the call in ensureGrid() to reach for it.
+// ---------------------------------------------------------------------
+let mapGrid = null;
+let mapGridFetchedAt = 0;
+let mapGridCentre = null;
+
+// ---- Persistent grid cache ----
+// ensureGrid's in-memory checks below (MAP_STALE_MS + the movement test)
+// already stop a pan or a zoom from refetching unnecessarily WITHIN one
+// visit to this page. What they can't help with is that map.html is its
+// own document: every navigation here starts with mapGrid === null, so
+// front page -> map -> back -> map paid for a whole grid each time. At
+// 81-361 locations per fetch, and Open-Meteo billing multi-location
+// requests per location, a few trips to the map is a meaningful slice of
+// a 10,000/day free-tier allowance — the same arithmetic that produced
+// the daily-limit error the map strip's own cache now avoids.
+//
+// TTL is MAP_STALE_MS deliberately, not a new number: a restored entry
+// is then indistinguishable from an in-memory grid of the same age, and
+// ensureGrid's existing staleness and movement logic governs it without
+// needing to know the cache exists at all. Nothing gets shown that
+// wouldn't already have been shown by staying on the page.
+const MAP_GRID_CACHE_KEY = "forecast-compare:mapGrid";
+
+// Values are rounded on the way in. A full 150km grid is ~208,000
+// numbers, and stored at full float precision that runs to well over a
+// megabyte of a ~5MB localStorage budget this app shares with FFV
+// history, eligibility and everything else. One decimal place is finer
+// than any of these layers actually render (rain bands, a temperature
+// gradient, isobars, wind arrows) and roughly halves the payload.
+function roundGridFrames(frames) {
+  // null is preserved rather than coerced to 0. fetchWeatherGrid stores
+  // a genuine null wherever Open-Meteo had no value, and the render
+  // layers treat that as "nothing to draw" — flattening it to 0 would
+  // invent a real 0mm/0°C/0hPa reading instead, which for temperature
+  // and pressure especially would draw plainly wrong data rather than a
+  // gap.
+  return frames.map(frame => frame.map(row => row.map(v =>
+    (v === null || v === undefined) ? null : Math.round(v * 10) / 10
+  )));
+}
+
+function mapGridCacheKey(centre, radiusKm) {
+  return `${centre.lat.toFixed(2)},${centre.lon.toFixed(2)}@${radiusKm}`;
+}
+
+function saveMapGridCache(centre, radiusKm, grid) {
+  try {
+    const slim = { ...grid };
+    for (const field of ["rain", "temp", "pressure", "windSpeed", "windDir", "cloudLow", "cloudMid", "cloudHigh"]) {
+      if (Array.isArray(slim[field])) slim[field] = roundGridFrames(slim[field]);
+    }
+    localStorage.setItem(MAP_GRID_CACHE_KEY, JSON.stringify({
+      key: mapGridCacheKey(centre, radiusKm),
+      cachedAt: Date.now(),
+      grid: slim
+    }));
+  } catch {
+    // Almost always a quota rejection on the largest zoom. Drop the
+    // entry entirely rather than leaving a half-written or stale one
+    // behind — the map then behaves exactly as it did before this cache
+    // existed, which is a perfectly good outcome.
+    try { localStorage.removeItem(MAP_GRID_CACHE_KEY); } catch {}
+  }
+}
+
+// Only ever consulted when there's nothing in memory (see ensureGrid),
+// so this can't override a fresher grid the current session already has.
+// Restores mapGridFetchedAt to the ORIGINAL fetch time, not now —
+// pretending a restored grid is brand new would let it sit unrefreshed
+// for another full MAP_STALE_MS on top of however long it was cached.
+function hydrateMapGridFromCache(centre, radiusKm) {
+  try {
+    const raw = localStorage.getItem(MAP_GRID_CACHE_KEY);
+    if (!raw) return false;
+    const entry = JSON.parse(raw);
+    if (entry.key !== mapGridCacheKey(centre, radiusKm)) return false;
+    if (Date.now() - entry.cachedAt > MAP_STALE_MS) return false;
+    mapGrid = entry.grid;
+    mapGridCentre = { ...centre };
+    mapGridFetchedAt = entry.cachedAt;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Anchored to real latitude and longitude, NOT to the grid's own row and
+// column indices.
+//
+// The first version keyed off indices, which meant the pattern was
+// identical relative to whatever the centre happened to be. Panning
+// moved the shower correctly while the finger was down, then the grid
+// regenerated around the new centre on release and the shower snapped
+// straight back to where it started. It looked exactly like the pan
+// being undone, but the centre was moving fine all along — it was the
+// fake weather that followed it. Real data will not do this; anchoring
+// the stub to the world means the stub does not either.
+function stubValueAt(lat, lon, t) {
+  const u = (lon + 4.0) * 1.4;
+  const v = (lat - 51.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const d = (u * 0.8 + v * 0.3) - front;
+  const band = Math.exp(-(d * d) / 0.09) * 1.6;
+  const blob = Math.exp(-(((u - 0.9) ** 2) + ((v + 0.4) ** 2)) / 0.10) * 0.9;
+  return Math.max(0, band + blob - 0.05);
+}
+
+// Rough plausible-looking stand-ins for the three added fields, built
+// from the same u/v/front terms as rain above so all four stay loosely
+// consistent with each other (temperature drops and pressure falls
+// near the "front", wind backs veered ahead of it) — good enough for
+// exercising the toggle UI and the wind animation offline, not a real
+// physical model.
+function stubTempAt(lat, lon, t) {
+  const v = (lat - 51.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const seasonalBase = 14 - v * 3;
+  return seasonalBase - Math.exp(-((front + 0.6) ** 2) / 0.5) * 4;
+}
+
+function stubPressureAt(lat, lon, t) {
+  const u = (lon + 4.0) * 1.4;
+  const v = (lat - 51.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const d = (u * 0.8 + v * 0.3) - front;
+  return 1013 - Math.exp(-(d * d) / 0.2) * 22;
+}
+
+function stubWindAt(lat, lon, t) {
+  const u = (lon + 4.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const speed = 8 + Math.exp(-((u - front) ** 2) / 0.3) * 22;
+  const dir = (220 + t * 1.5 + u * 20) % 360;
+  return { speed, dir };
+}
+
+// Rides the same synthetic "front" as stubWindAt/stubPressureAt above —
+// heavier low cloud right where that front sits, thinning out with
+// distance from it; mid follows loosely; high stays a fairly flat haze
+// regardless of the front, same as real high cirrus tends to drift
+// fairly independently of a single surface system.
+function stubCloudAt(lat, lon, t) {
+  const u = (lon + 4.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const low = Math.min(100, Math.max(0, 20 + Math.exp(-((u - front) ** 2) / 0.4) * 70));
+  const mid = Math.min(100, Math.max(0, 15 + Math.exp(-((u - front) ** 2) / 0.6) * 50));
+  const high = Math.min(100, Math.max(0, 30 + Math.sin(u * 0.7 + t * 0.05) * 20));
+  return { low, mid, high };
+}
+
+// Shared by the stub and the live fetch below, so the two can never
+// silently drift into different grid shapes — sampleGrid() has to agree
+// with whichever one actually filled `values`.
+function buildGridShape(centre, radiusKm) {
+  const spacingKm = MAP_GRID_SPACING_KM[radiusKm] || 10;
+  const spanKm = radiusKm * MAP_FETCH_MARGIN;
+  const dLat = spacingKm / KM_PER_DEG_LAT;
+  const dLon = spacingKm / kmPerDegLon(centre.lat);
+  const rows = Math.ceil((spanKm * 2) / spacingKm) + 1;
+  const cols = rows;
+  const lat0 = centre.lat - (rows - 1) / 2 * dLat;
+  const lon0 = centre.lon - (cols - 1) / 2 * dLon;
+  return { lat0, lon0, dLat, dLon, rows, cols };
+}
+
+function buildStubGrid(centre, radiusKm) {
+  const { lat0, lon0, dLat, dLon, rows, cols } = buildGridShape(centre, radiusKm);
+  const hours = 48;
+  // Rounded down to the top of the current hour — real Open-Meteo data
+  // is always bucketed on the hour, and the stub should behave the same
+  // way rather than showing minute-precise labels the live data never
+  // would.
+  const startOfHour = new Date();
+  startOfHour.setMinutes(0, 0, 0);
+  const times = [];
+  const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [], cloudLow = [], cloudMid = [], cloudHigh = [];
+  for (let t = 0; t < hours; t++) {
+    times.push(new Date(startOfHour.getTime() + t * 3600000).toISOString());
+    const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [], cloudLowFrame = [], cloudMidFrame = [], cloudHighFrame = [];
+    for (let r = 0; r < rows; r++) {
+      const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [], cloudLowRow = [], cloudMidRow = [], cloudHighRow = [];
+      for (let c = 0; c < cols; c++) {
+        const lat = lat0 + r * dLat, lon = lon0 + c * dLon;
+        rainRow.push(stubValueAt(lat, lon, t));
+        tempRow.push(stubTempAt(lat, lon, t));
+        pressureRow.push(stubPressureAt(lat, lon, t));
+        const wind = stubWindAt(lat, lon, t);
+        speedRow.push(wind.speed);
+        dirRow.push(wind.dir);
+        const cloud = stubCloudAt(lat, lon, t);
+        cloudLowRow.push(cloud.low);
+        cloudMidRow.push(cloud.mid);
+        cloudHighRow.push(cloud.high);
+      }
+      rainFrame.push(rainRow); tempFrame.push(tempRow); pressureFrame.push(pressureRow);
+      speedFrame.push(speedRow); dirFrame.push(dirRow);
+      cloudLowFrame.push(cloudLowRow); cloudMidFrame.push(cloudMidRow); cloudHighFrame.push(cloudHighRow);
+    }
+    rain.push(rainFrame); temp.push(tempFrame); pressure.push(pressureFrame);
+    windSpeed.push(speedFrame); windDir.push(dirFrame);
+    cloudLow.push(cloudLowFrame); cloudMid.push(cloudMidFrame); cloudHigh.push(cloudHighFrame);
+  }
+  return { lat0, lon0, dLat, dLon, rows, cols, hours, times, rain, temp, pressure, windSpeed, windDir, cloudLow, cloudMid, cloudHigh, stub: true };
+}
+
+const MAP_FORECAST_HOURS = 48;
+
+// forecast_days: 3, not 2 — the Hour slider always shows the next 48
+// hours from THIS MOMENT, not from local midnight, so on a late evening
+// two days of data could run out before the slider does. Three always
+// leaves a full 48-hour margin regardless of what time "now" happens
+// to be. Same convention as fetchHourlyForecast()'s real-source fetch.
+const MAP_FORECAST_DAYS = 3;
+
+// One request, comma-separated coordinate lists (Open-Meteo supports
+// multiple locations natively — up to 1000 per call — and returns an
+// array of one object per location, in the order requested, each
+// shaped exactly like a single-location response). Deliberately the
+// merged global models rather than ukmo_uk_deterministic_2km — see the
+// note at the top of this file for why. pressure_msl (sea-level,
+// height-corrected), not surface_pressure — the same choice
+// collect-weather.js already makes for the Compare page's Pressure
+// condition, since the map's area can span real elevation differences
+// that surface pressure alone would show as a fake gradient.
+// wind_speed_unit: mph to match every other real fetch in this app —
+// see the README note on the km/h-labelled-as-mph bug that convention
+// was introduced to fix.
+//
+// Cost: four hourly variables instead of one, on the same one-request-
+// per-point shape as before — assume roughly 4x the "API call" cost per
+// point against the 10,000/day free-tier limit now that wind, pressure
+// and temperature ride along with rain. At 10 km spacing a 100 km-
+// radius view can reach several hundred points, so this is worth
+// watching if "Couldn't load map data" starts showing up on a well
+// zoomed-out view — more so than before this change.
+async function fetchWeatherGrid(centre, radiusKm) {
+  const { lat0, lon0, dLat, dLon, rows, cols } = buildGridShape(centre, radiusKm);
+  const lats = [];
+  const lons = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      lats.push((lat0 + r * dLat).toFixed(4));
+      lons.push((lon0 + c * dLon).toFixed(4));
+    }
+  }
+
+  const params = new URLSearchParams({
+    latitude: lats.join(","),
+    longitude: lons.join(","),
+    // cloud_cover_low/mid/high ride along here too now — one more
+    // request field, same one-request-per-point shape as before (see
+    // this function's own cost note above the definition).
+    hourly: "precipitation,temperature_2m,pressure_msl,wind_speed_10m,wind_direction_10m,cloud_cover_low,cloud_cover_mid,cloud_cover_high",
+    wind_speed_unit: "mph",
+    forecast_days: String(MAP_FORECAST_DAYS),
+    timezone: "auto"
+  });
+
+  const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, 30000);
+  if (!res.ok) throw new Error(`Map weather fetch failed: ${res.status}`);
+  const data = await res.json();
+
+  // A single point comes back as one object rather than an array — the
+  // grid always has more than one point in practice, but this keeps the
+  // indexing below from ever having to special-case it.
+  const points = Array.isArray(data) ? data : [data];
+  if (points.length !== rows * cols) {
+    throw new Error("Map weather fetch returned an unexpected number of points");
+  }
+
+  // Every point sits inside the same small area and shares one
+  // timezone, so "now" only needs working out once rather than per
+  // point. Same tolerant lookup as fetchHourlyForecast() uses for the
+  // real-source hourly view, for the same reason: matching by parsed
+  // time rather than string equality survives whatever exact minute
+  // Open-Meteo's hourly buckets land on.
+  const now = new Date();
+  const nowIndex = points[0].hourly.time.findIndex(
+    t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000
+  );
+  const startIdx = nowIndex >= 0 ? nowIndex : 0;
+
+  const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [], cloudLow = [], cloudMid = [], cloudHigh = [];
+  for (let h = 0; h < MAP_FORECAST_HOURS; h++) {
+    const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [], cloudLowFrame = [], cloudMidFrame = [], cloudHighFrame = [];
+    for (let r = 0; r < rows; r++) {
+      const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [], cloudLowRow = [], cloudMidRow = [], cloudHighRow = [];
+      for (let c = 0; c < cols; c++) {
+        const point = points[r * cols + c];
+        const i = startIdx + h;
+        const v = point.hourly.precipitation[i];
+        rainRow.push(v === null || v === undefined ? 0 : v);
+        tempRow.push(point.hourly.temperature_2m[i] ?? null);
+        pressureRow.push(point.hourly.pressure_msl[i] ?? null);
+        speedRow.push(point.hourly.wind_speed_10m[i] ?? null);
+        dirRow.push(point.hourly.wind_direction_10m[i] ?? null);
+        cloudLowRow.push(point.hourly.cloud_cover_low[i] ?? null);
+        cloudMidRow.push(point.hourly.cloud_cover_mid[i] ?? null);
+        cloudHighRow.push(point.hourly.cloud_cover_high[i] ?? null);
+      }
+      rainFrame.push(rainRow); tempFrame.push(tempRow); pressureFrame.push(pressureRow);
+      speedFrame.push(speedRow); dirFrame.push(dirRow);
+      cloudLowFrame.push(cloudLowRow); cloudMidFrame.push(cloudMidRow); cloudHighFrame.push(cloudHighRow);
+    }
+    rain.push(rainFrame); temp.push(tempFrame); pressure.push(pressureFrame);
+    windSpeed.push(speedFrame); windDir.push(dirFrame);
+    cloudLow.push(cloudLowFrame); cloudMid.push(cloudMidFrame); cloudHigh.push(cloudHighFrame);
+  }
+
+  return {
+    lat0, lon0, dLat, dLon, rows, cols, hours: MAP_FORECAST_HOURS,
+    times: points[0].hourly.time.slice(startIdx, startIdx + MAP_FORECAST_HOURS),
+    rain, temp, pressure, windSpeed, windDir, cloudLow, cloudMid, cloudHigh, stub: false
+  };
+}
+
+// No in-flight guard existed here at all — unlike ensureTerrain,
+// ensureGrid could be, and was being, called multiple times in close
+// succession (pan-end, double-tap zoom, and the initial page load's
+// own forced call could all land within moments of each other) with
+// nothing to stop each one starting its own completely independent
+// fetch-plus-retry sequence. Several of those firing at once is a
+// realistic way to trip Open-Meteo's own rate limiting on a free
+// endpoint — which is likely the actual cause of the "rate limited"
+// messages users were seeing — and then each of THOSE independent
+// sequences runs its own 1.5s-wait-then-retry dance on top, with
+// results landing at staggered times and overwriting each other. That
+// combination is what could stretch into several minutes of the map
+// appearing stuck. Fixed the same way ensureTerrain now works: only
+// one fetch runs at a time, and a call that arrives while one is
+// already in flight is coalesced into "run once more when this one
+// finishes" rather than starting its own parallel attempt.
+let mapGridInFlight = null;
+let mapGridQueuedArgs = null;
+
+async function ensureGrid(centre, radiusKm, force) {
+  // Nothing in memory yet — this is a fresh arrival on the page, which
+  // is precisely the case the persistent cache exists for. Done before
+  // the staleness/movement tests below so a restored grid is then judged
+  // by exactly the same rules as one fetched in this session; a hit that
+  // turns out to be stale or too far from the current centre still falls
+  // through to a fetch, same as always.
+  if (!mapGrid && !force) hydrateMapGridFromCache(centre, radiusKm);
+
+  const stale = Date.now() - mapGridFetchedAt > MAP_STALE_MS;
+  const moved = !mapGridCentre || haversineKm(
+    mapGridCentre.lat, mapGridCentre.lon, centre.lat, centre.lon
+  ) > radiusKm * (MAP_FETCH_MARGIN - 1);
+  if (!force && mapGrid && !stale && !moved) return;
+
+  if (mapGridInFlight) {
+    mapGridQueuedArgs = { centre, radiusKm, force };
+    return;
+  }
+
+  mapGridInFlight = runGridFetch(centre, radiusKm);
+  await mapGridInFlight;
+  mapGridInFlight = null;
+
+  if (mapGridQueuedArgs) {
+    const next = mapGridQueuedArgs;
+    mapGridQueuedArgs = null;
+    await ensureGrid(next.centre, next.radiusKm, next.force);
+  }
+}
+
+async function runGridFetch(centre, radiusKm) {
+  try {
+    mapGrid = await fetchWeatherGrid(centre, radiusKm);
+    mapGridCentre = { ...centre };
+    mapGridFetchedAt = Date.now();
+    saveMapGridCache(centre, radiusKm, mapGrid);
+    setMapStatus("");
+  } catch (err) {
+    // One silent retry before giving up — a lot of what shows up as
+    // "couldn't load" on mobile is a momentary signal drop rather than
+    // anything actually wrong, and a short pause is often all it takes.
+    // Only tried once: a genuinely dead connection or a real server
+    // error shouldn't sit here retrying indefinitely.
+    try {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      mapGrid = await fetchWeatherGrid(centre, radiusKm);
+      mapGridCentre = { ...centre };
+      mapGridFetchedAt = Date.now();
+      saveMapGridCache(centre, radiusKm, mapGrid);
+      setMapStatus("");
+    } catch (retryErr) {
+      // Keep whatever was last drawn rather than blanking. If the daily
+      // limit is ever hit, a slightly stale map beats a broken one —
+      // and the rest of Cloude is unaffected either way, because this
+      // fetch is entirely separate from loadLocationData().
+      //
+      // The reason is named rather than one blanket sentence for every
+      // failure — a timeout, a rate limit, and a genuine network drop
+      // want different responses (wait it out, wait longer, or check
+      // the connection), and lumping them together made this
+      // impossible to tell apart from the outside.
+      const reason = describeMapFetchError(retryErr);
+      const suffix = typeof openMeteoErrorSuffix === "function" ? openMeteoErrorSuffix() : "";
+      setMapStatus(mapGrid
+        ? `Couldn't refresh the map just now (${reason})${suffix} — showing the last one.`
+        : `Couldn't load map data just now (${reason})${suffix}.`);
+    }
+  }
+  // Every caller used to chain .then(renderMap) onto ensureGrid itself,
+  // which broke the moment a call could return early (coalesced into
+  // the queue above) without ever actually fetching anything new.
+  // Rendering here instead, once the real fetch (whichever call
+  // actually triggered it) finishes, means the screen always reflects
+  // the latest data regardless of which caller's promise resolves when.
+  renderMap();
+}
+
+// fetchWithTimeout (app.js) already converts its own AbortError into a
+// plain Error with this exact message before it ever reaches here, so
+// that's what's actually checked for a timeout — not err.name, which
+// would never match by this point. Everything else genuinely is
+// offline/DNS/TLS territory that a message can't usefully subdivide
+// further from here.
+function describeMapFetchError(err) {
+  if (err instanceof Error && /^Timed out/.test(err.message)) return "timed out";
+  if (err instanceof Error && /^Map weather fetch failed: 429/.test(err.message)) return "rate limited";
+  if (err instanceof Error && /^Map weather fetch failed: \d+/.test(err.message)) return err.message.replace("Map weather fetch failed: ", "server error ");
+  if (err instanceof Error && /unexpected number of points/.test(err.message)) return "unexpected response";
+  return "connection problem";
+}
+
+// field: "rain" | "temp" | "pressure" | "windSpeed" | "windDir" — each a
+// same-shaped [hour][row][col] array off the grid object.
+//
+// hour can be fractional (see MAP_HOUR_STEP) — h0/h1 below bracket it
+// and th is how far between them. At a whole-number hour (the only
+// case possible when MAP_HOUR_STEP is 1) th is always exactly 0, so
+// atHour(h1) is never even called and this returns precisely what the
+// old single-index lookup did — the interpolation only does anything
+// once a fractional hour can actually reach this function.
+function sampleGrid(grid, field, hour, lat, lon) {
+  if (!grid) return null;
+  const fr = (lat - grid.lat0) / grid.dLat;
+  const fc = (lon - grid.lon0) / grid.dLon;
+  if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) return null;
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(r0 + 1, grid.rows - 1), c1 = Math.min(c0 + 1, grid.cols - 1);
+  const tr = fr - r0, tc = fc - c0;
+
+  function atHour(h) {
+    const f = grid[field][h];
+    if (f[r0][c0] === null || f[r0][c1] === null || f[r1][c0] === null || f[r1][c1] === null) {
+      // Wind direction is angular — averaging raw degrees across a wrap
+      // (e.g. 350° and 10°) would bilinear-blend to 180°, exactly
+      // backwards. Nearest-point lookup sidesteps that entirely rather
+      // than doing circular interpolation for one field only.
+      return f[Math.round(fr)]?.[Math.round(fc)] ?? null;
+    }
+    // Bilinear. Legitimate here in a way that sampling postcodes was not:
+    // the model holds a continuous field that its grid samples, so
+    // interpolating between cell centres recovers the field rather than
+    // magnifying an interpolation that already happened.
+    return (
+      f[r0][c0] * (1 - tr) * (1 - tc) + f[r0][c1] * (1 - tr) * tc +
+      f[r1][c0] * tr * (1 - tc) + f[r1][c1] * tr * tc
+    );
+  }
+
+  const clampedHour = Math.min(Math.max(hour, 0), grid.hours - 1);
+  const h0 = Math.floor(clampedHour), h1 = Math.min(h0 + 1, grid.hours - 1);
+  const th = clampedHour - h0;
+  const v0 = atHour(h0);
+  if (th === 0) return v0;
+  const v1 = atHour(h1);
+  // Don't manufacture a value by blending real data with a gap — fall
+  // back to whichever side actually has one, same "no colour means no
+  // data" rule the rest of this map follows.
+  if (v0 === null || v1 === null) return v0 ?? v1;
+  return v0 * (1 - th) + v1 * th;
+}
+
+// windDir specifically: bilinear-interpolating raw compass degrees is
+// wrong across the 0°/360° wrap, so this always samples the nearest
+// grid point rather than blending — a small loss of smoothness that a
+// sparse arrow layout would hide anyway. Rounds to the nearest WHOLE
+// hour too, for the same reason — a fractional hour (see MAP_HOUR_STEP)
+// snaps to whichever real hourly reading is closest rather than
+// attempting to blend a direction, which circular interpolation could
+// do correctly but isn't worth the added complexity for an arrow layer
+// this sparse to begin with.
+function sampleWindDir(grid, hour, lat, lon) {
+  if (!grid) return null;
+  const fr = (lat - grid.lat0) / grid.dLat;
+  const fc = (lon - grid.lon0) / grid.dLon;
+  if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) return null;
+  const r = Math.round(Math.min(Math.max(fr, 0), grid.rows - 1));
+  const c = Math.round(Math.min(Math.max(fc, 0), grid.cols - 1));
+  const h = Math.round(Math.min(Math.max(hour, 0), grid.hours - 1));
+  const v = grid.windDir[h][r][c];
+  return v === null || v === undefined ? null : v;
+}
+
+// ---------------------------------------------------------------------
+// Layers
+// ---------------------------------------------------------------------
+registerMapLayer({
+  id: "base",
+  draw(ctx, view) {
+    const p = mapPalette();
+    ctx.fillStyle = p.sea;
+    ctx.fillRect(0, 0, view.w, view.h);
+  }
+});
+
+// --- terrain slot goes here (see the registry comment above) ---
+
+registerMapLayer({
+  id: "coastline",
+  draw(ctx, view) {
+    const p = mapPalette();
+    drawGeoJson(ctx, mapVectorData.coastline, view, { fill: p.land, stroke: p.coast });
+  }
+});
+
+// --- terrain slot (see the registry comment above) ---
+//
+// Registered AFTER coastline rather than in the slot marked above it:
+// the coastline layer FILLS the land with a solid colour, so anything
+// drawn before it gets painted straight over. Hillshading has to sit
+// on top of that fill to be visible at all — but still below rain/
+// wind/isobars, which is what the slot was really about.
+//
+// Shaded relief rather than colour bands, deliberately: this is
+// texture, not a data layer. Green land stays green and just gains
+// shadow, so it adds detail without introducing a fourth colour field
+// competing with rain, temperature and pressure for the same pixels.
+// ---------------------------------------------------------------------
+
+// Elevation comes from a STATIC FILE committed to the repo
+// (data/elevation-uk.json), not from a live API call.
+//
+// It used to be fetched from Open-Meteo's Elevation API on demand,
+// per area, and cached in IndexedDB. That was the wrong shape for this
+// data and caused real damage: elevation is fixed — it doesn't change
+// between forecasts or between years — yet every new area you looked at
+// spent 676-1521 locations of a WEATHER api's rate limit to re-learn
+// the same unchanging hills. Because Open-Meteo weights that limit by
+// number of locations, terrain alone was several times heavier than
+// everything else in the app combined, and a single map open could
+// exhaust the minutely limit and take the actual weather down with it.
+//
+// Now it's just another data file alongside data/coastline-50m.json and
+// data/places.json: fetched once from the app's own origin, cached by
+// the service worker like every other app file, and costing exactly
+// nothing against any weather API forever after. Panning, zooming, and
+// looking at a forecast a few miles away are all free.
+//
+// The file is built once by scripts/build-elevation.js (a manual
+// GitHub Action) and then never needs touching again.
+const TERRAIN_DATA_URL = "data/elevation-uk.json";
+
+// One grid for the whole country, loaded once into memory. No key, no
+// per-area cache, no staleness check, no in-flight guard — all of that
+// machinery existed only to manage repeated network fetches that no
+// longer happen.
+let mapTerrain = null;
+let terrainLoadStarted = false;
+const mapTerrainStatusEl = document.getElementById("mapTerrainStatus");
+
+function setTerrainStatus(message) {
+  if (!mapTerrainStatusEl) return;
+  mapTerrainStatusEl.textContent = message || "";
+  mapTerrainStatusEl.classList.toggle("is-error", !!message);
+}
+
+async function loadTerrainData() {
+  if (terrainLoadStarted) return;
+  terrainLoadStarted = true;
+  try {
+    const res = await fetchWithTimeout(TERRAIN_DATA_URL, {}, 20000);
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+
+    // Stored flat (row-major) in the file to keep its size down; the
+    // renderer wants rows, so it's reshaped once here rather than doing
+    // index arithmetic on every sampled pixel.
+    const values = [];
+    for (let r = 0; r < data.rows; r++) {
+      values.push(data.values.slice(r * data.cols, (r + 1) * data.cols));
+    }
+
+    // terrainShadeAt needs the real ground distance between samples to
+    // turn an elevation difference into a slope. Derived from the grid's
+    // own latitude spacing rather than hardcoded, so changing the
+    // resolution in build-elevation.js needs no matching change here.
+    const spacingKm = data.dLat * KM_PER_DEG_LAT;
+
+    mapTerrain = { ...data, values, spacingKm };
+    setTerrainStatus("");
+    renderMap();
+  } catch (err) {
+    console.error("Terrain data load failed:", err);
+    // Almost always means the file hasn't been built and committed yet
+    // (see scripts/build-elevation.js) rather than anything transient,
+    // so the message says so rather than suggesting a retry that won't
+    // help. Terrain is decoration — the map is fully usable without it.
+    setTerrainStatus("Terrain data not available — run the \"Build elevation data\" action once to generate it.");
+    terrainLoadStarted = false; // allow a retry on the next map open
+  }
+}
+
+// Elevation at a FRACTIONAL grid position, bilinearly interpolated
+// between the four surrounding samples.
+//
+// This replaces nearest-neighbour lookup (Math.round on the grid
+// coordinates), which was the real reason terrain rendered as visibly
+// large blocks: with rounding, every screen pixel falling inside one
+// grid cell got an identical elevation, so the "texture" being drawn
+// was literally the sample grid itself. Interpolating makes elevation
+// vary continuously across each cell, so the shading stops being a
+// mosaic of flat tiles.
+//
+// Worth being clear about what this does and doesn't do: it removes the
+// blockiness, but it cannot invent detail the source grid never had. A
+// ridge narrower than the sample spacing still isn't in the data. This
+// makes the hillshade smooth and plausible, not higher-resolution.
+function terrainElevationAt(grid, fr, fc) {
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
+  if (r0 < 0 || c0 < 0 || r0 > grid.rows - 1 || c0 > grid.cols - 1) return null;
+  const tr = fr - r0, tc = fc - c0;
+
+  const z00 = grid.values[r0][c0], z01 = grid.values[r0][c1];
+  const z10 = grid.values[r1][c0], z11 = grid.values[r1][c1];
+  if ([z00, z01, z10, z11].some(v => v === null || v === undefined)) return null;
+
+  const top = z00 + (z01 - z00) * tc;
+  const bottom = z10 + (z11 - z10) * tc;
+  return top + (bottom - top) * tr;
+}
+
+// Hillshade at a fractional grid position, from interpolated elevations
+// one full cell either side. Same north-west light convention and same
+// slope maths as before — only the sampling underneath it changed.
+function terrainShadeAt(grid, fr, fc) {
+  const zC = terrainElevationAt(grid, fr, fc);
+  if (zC === null) return 0;
+
+  // Sea is stored as 0 in the grid file (build-elevation clamps negative
+  // and null values), which is a REAL number as far as the slope maths
+  // is concerned — and that caused a genuinely misleading bug. At any
+  // coastline, elevation appears to jump from 0 to whatever the land is
+  // across a single 8.3km step: a 200m clifftop reads as a 24 m/km
+  // gradient, indistinguishable from real upland. Every coast and
+  // estuary therefore lit up as strongly as actual mountains — the
+  // Severn estuary shading like Dartmoor was exactly this, artificial
+  // cliffs rather than relief.
+  //
+  // Substituting this cell's own height for any sea neighbour makes the
+  // gradient across that direction zero, so the fake cliff disappears
+  // while genuine relief on coastal land still shades normally from
+  // whichever directions are land. Discarding those cells entirely
+  // (returning 0) was the other option, but that would leave an
+  // unshaded band right around every coast — most of Cornwall and Wales
+  // would go flat, which trades one wrong picture for another.
+  const landOr = v => (v === null || v <= 0 ? zC : v);
+  const zN = landOr(terrainElevationAt(grid, fr - 1, fc));
+  const zS = landOr(terrainElevationAt(grid, fr + 1, fc));
+  const zW = landOr(terrainElevationAt(grid, fr, fc - 1));
+  const zE = landOr(terrainElevationAt(grid, fr, fc + 1));
+
+  // Elevation change north-south and east-west, in metres, across two
+  // grid steps (one either side).
+  const dzdx = (zE - zW) / 2;
+  const dzdy = (zS - zN) / 2;
+
+  // Normalised by real ground distance into a true slope (rise/run)
+  // rather than left as metres-per-grid-step. Without this the same
+  // hillside reads differently at different grid resolutions, and a
+  // fixed divisor can't calibrate for both — the original version
+  // divided raw metres by 60, which clipped to the clamp for anything
+  // past gentle countryside, rendering most of upland Britain as one
+  // flat maximum-intensity block. A slope value is small and
+  // well-behaved regardless of spacing (~0.003 flat, ~0.09 for a steep
+  // mountainside).
+  //
+  // spacingKm is set once in loadTerrainData() from the grid file's own
+  // dLat, so changing the resolution in build-elevation.js needs no
+  // matching change here.
+  const stepMetres = grid.spacingKm * 1000;
+  const slopeX = dzdx / stepMetres;
+  const slopeY = dzdy / stepMetres;
+  const EXAGGERATION = 8;
+  return Math.max(-1, Math.min(1, (slopeX - slopeY) * EXAGGERATION));
+}
+
+// Smoothly blended shade, instead of "whatever the nearest grid node
+// says". This is what actually fixes the blocky look — and it's a
+// rendering fix, not a data one: the old code rounded to the nearest
+// node, so every screen pixel falling inside the same grid cell got an
+// identical value and painted as one flat square. At a typical zoom a
+// single cell covers roughly 20 screen pixels, which is exactly the size
+// of the boxes that were visible. Fetching a finer grid would have made
+// the boxes smaller without making them any less box-like; interpolating
+// removes them regardless of resolution, and costs nothing extra to
+// download.
+//
+// Standard bilinear blend: take the shade at the four grid nodes
+// surrounding this point and weight each by how close the point is to
+// it, so the value moves continuously across a cell rather than
+// snapping at its edges.
+function terrainShadeBilinear(grid, fr, fc) {
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
+  const tr = fr - r0, tc = fc - c0; // 0..1 position within the cell
+
+  const s00 = terrainShadeAt(grid, r0, c0);
+  const s01 = terrainShadeAt(grid, r0, c1);
+  const s10 = terrainShadeAt(grid, r1, c0);
+  const s11 = terrainShadeAt(grid, r1, c1);
+
+  const top = s00 + (s01 - s00) * tc;
+  const bottom = s10 + (s11 - s10) * tc;
+  return top + (bottom - top) * tr;
+}
+
+// Builds a canvas clip region from the coastline outline so the terrain
+// layer can only paint on land.
+//
+// The previous approach — testing the nearest grid node's elevation and
+// skipping if it was sea — can't work at the edges, because the grid is
+// 8.3km per node while a coastline is far finer than that. A node up to
+// half a cell inland still reads "land", so shading bled several
+// kilometres out over open water. Clipping to the same coastline
+// polygon the base layer already fills gives an exact edge that doesn't
+// depend on grid resolution at all.
+function clipToLand(ctx, view) {
+  const geo = mapVectorData.coastline;
+  if (!geo) return false;
+  const features = geo.type === "FeatureCollection" ? geo.features : [geo];
+  // Same bounding-box skip as drawGeoJson above, and for the same
+  // reason: this runs the instant a drag ends (terrain's own redraw —
+  // see below), which is exactly the "jump" moment, and walking the
+  // full coastline file unculled here made that moment slower than it
+  // needed to be on top of everything drawGeoJson was already costing
+  // mid-drag.
+  const bounds = viewBounds(view);
+  ctx.beginPath();
+  features.forEach(feature => {
+    eachRing(feature.geometry || feature, ring => {
+      if (!ringIntersectsView(ring, bounds)) return;
+      ring.forEach(([lon, lat], i) => {
+        const px = view.x(lon), py = view.y(lat);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+    });
+  });
+  // Lakes added into the SAME path as the coastline, not a separate
+  // clip — a lake sits above sea level (Loch Ness ~16m, Windermere
+  // ~39m), so nothing about the coastline fix above already excludes
+  // it; without this, terrain shading carried on straight across a
+  // lake's surface as if it were ordinary land. Harmless no-op while
+  // data/lakes-50m.json is still the empty placeholder — this only
+  // starts doing anything once real lake polygons exist there.
+  const lakeGeo = mapVectorData.lakes;
+  if (lakeGeo) {
+    const lakeFeatures = lakeGeo.type === "FeatureCollection" ? lakeGeo.features : [lakeGeo];
+    lakeFeatures.forEach(feature => {
+      eachRing(feature.geometry || feature, ring => {
+        if (!ringIntersectsView(ring, bounds)) return;
+        ring.forEach(([lon, lat], i) => {
+          const px = view.x(lon), py = view.y(lat);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+      });
+    });
+  }
+  // evenodd so inland water bodies (lakes, and sea punched out of the
+  // coastline outline) all stay excluded, matching how the base and
+  // lakes layers fill them.
+  ctx.clip("evenodd");
+  return true;
+}
+
+registerMapLayer({
+  id: "terrain",
+  draw(ctx, view) {
+    const grid = mapTerrain;
+    if (!grid) return;
+    // Skipped entirely while a drag is in progress. This is the single
+    // heaviest layer on the map by a wide margin — clipToLand() walks
+    // the full coastline geometry to build a clip path, then this loops
+    // over every 3px cell of the canvas doing a bilinear lookup and a
+    // fillRect. Confirmed on-device: dragging could freeze the screen
+    // for several seconds, and stayed slow even with every weather
+    // layer switched off — because none of those toggles touch this
+    // layer at all, it has none. A plain, flat land colour for the
+    // handful of frames a drag actually lasts is far less disruptive
+    // than that freeze; mapIsPanning flips back to false and this
+    // redraws in full once the drag ends (see the panning section
+    // below for exactly where).
+    if (mapIsPanning) return;
+    // Save/restore around the clip so it can't leak into any layer drawn
+    // after this one.
+    ctx.save();
+    clipToLand(ctx, view);
+    // 3px rather than 4: with the interpolation below there is now real
+    // detail to resolve between grid nodes, where before every pixel in
+    // a cell was identical and a smaller step just drew the same value
+    // more times.
+    const cell = 3;
+    for (let px = 0; px < view.w; px += cell) {
+      for (let py = 0; py < view.h; py += cell) {
+        const lat = view.lat(py + cell / 2), lon = view.lon(px + cell / 2);
+        const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
+        if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
+        // Sea check uses the nearest node rather than an interpolated
+        // height: blending across a coastline would produce fractional
+        // "heights" just offshore and paint shadow onto open water.
+        const z = grid.values[Math.round(fr)][Math.round(fc)];
+        if (z === null || z === undefined || z <= 0) continue;
+        const shade = terrainShadeBilinear(grid, fr, fc);
+        if (Math.abs(shade) < 0.02) continue; // flat ground: leave the land colour alone entirely
+        ctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
+        // Cap raised 0.32 -> 0.50 and the multiplier 0.4 -> 0.7, after
+        // the first look at real terrain showed the whole layer reading
+        // uniformly too pale. Both original numbers were arrived at by
+        // calculation rather than by looking at anything, so this is the
+        // first time they've been set against actual output.
+        //
+        // Both raised together deliberately: the multiplier alone would
+        // only have brightened gentle slopes (steep ground was already
+        // hitting the cap), and the cap alone would only have deepened
+        // the strongest shadows while leaving lowland relief invisible.
+        // The complaint was that everything was too faint, so both the
+        // ramp and its ceiling needed lifting.
+        ctx.globalAlpha = Math.min(0.50, Math.abs(shade) * 0.7);
+        ctx.fillRect(px, py, cell, cell);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+});
+
+registerMapLayer({
+  id: "lakes",
+  draw(ctx, view) {
+    const p = mapPalette();
+    drawGeoJson(ctx, mapVectorData.lakes, view, { fill: p.sea, stroke: p.coast });
+  }
+});
+
+registerMapLayer({
+  id: "waterways",
+  draw(ctx, view) {
+    const p = mapPalette();
+    // Clipped to land, same technique and same clipToLand() the terrain
+    // layer above already uses. This is the actual fix for rivers
+    // drawing straight out into the sea at estuary mouths — a previous
+    // session's own handover notes claimed this had already been done,
+    // but the real code here never called clipToLand for this layer at
+    // all, and the bug was confirmed still present even after a full
+    // Safari "delete website data" wipe ruled out a stale cache as the
+    // explanation. Skipped while panning, the same trade-off terrain
+    // makes and for the same reason: clipToLand's own coastline walk
+    // isn't free, and paying it every drag frame for a layer this thin
+    // isn't worth it — rivers simply don't redraw for the handful of
+    // frames an actual drag lasts, then reappear, correctly clipped,
+    // the moment it ends.
+    if (mapIsPanning) return;
+    ctx.save();
+    clipToLand(ctx, view);
+    drawMapWaterways(ctx, mapVectorData.waterways, view, p.river);
+    ctx.restore();
+  }
+});
+
+// Real hourly precipitation, in mm/hr — one threshold per ramp colour.
+// Below the first threshold is drawn as nothing at all (dry), not the
+// palest band, so "no colour" always means "no rain" rather than "a
+// trace too faint to bother with" being indistinguishable from actual
+// dry weather. Chosen to roughly track the intensity bands the Met
+// Office and BBC already use in words (very light/light/moderate/
+// heavy/torrential) rather than an abstract 0–1 scale — this replaced
+// a sqrt(value) curve that was tuned for the stub's synthetic 0–1.6
+// range and never revisited once real Open-Meteo data went live, which
+// meant the palest band could never actually be reached by a real mm/hr
+// figure. renderRainLegend() reads this same array, so the on-screen key
+// and the fill colours can never drift out of sync with each other.
+const RAIN_BAND_THRESHOLDS = [0.1, 0.5, 1, 2, 4, 8];
+
+// Highest band whose threshold the value clears, or -1 for "don't draw
+// this cell at all" (dry, or no data).
+function rainBandIndex(value) {
+  if (value === null || value === undefined || value < RAIN_BAND_THRESHOLDS[0]) return -1;
+  let idx = 0;
+  for (let i = 1; i < RAIN_BAND_THRESHOLDS.length; i++) {
+    if (value >= RAIN_BAND_THRESHOLDS[i]) idx = i;
+  }
+  return idx;
+}
+
+registerMapLayer({
+  id: "temperature",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("temperature")) return;
+    // Skipped while actively dragging — same treatment as terrain (see
+    // its own draw() for the full reasoning) and for the same reason:
+    // confirmed on-device that dragging could still feel laggy and
+    // unresponsive even after terrain was exempted, specifically when
+    // Temperature or Pressure were switched on. This loops a colour
+    // sample over every 6px cell of the canvas every frame; skipping it
+    // for the handful of frames an actual drag lasts is far less
+    // disruptive than the map appearing to freeze then jump.
+    if (mapIsPanning) return;
+    const hour = mapHourValue();
+    const cell = 6;
+    for (let px = 0; px < view.w; px += cell) {
+      for (let py = 0; py < view.h; py += cell) {
+        const value = sampleGrid(mapGrid, "temp", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
+        if (value === null || value === undefined) continue;
+        ctx.fillStyle = tempColor(value);
+        ctx.globalAlpha = TEMP_LAYER_ALPHA;
+        ctx.fillRect(px, py, cell, cell);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+});
+
+registerMapLayer({
+  id: "cloud",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("cloud")) return;
+    // Same drag exemption as Temperature above, same reasoning — this
+    // samples three grid fields per cell instead of one, so it's if
+    // anything more worth skipping mid-drag, not less.
+    if (mapIsPanning) return;
+    const hour = mapHourValue();
+    const cell = 6;
+    for (let px = 0; px < view.w; px += cell) {
+      for (let py = 0; py < view.h; py += cell) {
+        const lat = view.lat(py + cell / 2), lon = view.lon(px + cell / 2);
+        const low = sampleGrid(mapGrid, "cloudLow", hour, lat, lon);
+        const mid = sampleGrid(mapGrid, "cloudMid", hour, lat, lon);
+        const high = sampleGrid(mapGrid, "cloudHigh", hour, lat, lon);
+        if (low === null || low === undefined) continue;
+        const value = effectiveCloudCover(low, mid, high);
+        if (value < 8) continue; // near-clear cells stay uncoloured, same "no colour means nothing to show" rule Rain follows
+        ctx.fillStyle = cloudColor(value);
+        ctx.fillRect(px, py, cell, cell);
+      }
+    }
+  }
+});
+
+// ---------------------------------------------------------------------
+// Isobars — marching squares over the pressure grid, at the standard
+// synoptic-chart spacing of 4 hPa. Chosen over a colour wash (the
+// original approach) for two reasons at once: it's the familiar
+// convention from every other pressure chart, and it stacks cleanly
+// with rain/temperature underneath rather than adding a third
+// competing colour field to a display that was already getting muddy
+// with two.
+// ---------------------------------------------------------------------
+const MAP_ISOBAR_INTERVAL_HPA = 4;
+
+// Null if the level doesn't cross this edge at all; otherwise the
+// interpolated screen point where it does.
+function edgeCrossing(vA, vB, ax, ay, bx, by, level) {
+  if (vA === null || vB === null || (vA >= level) === (vB >= level)) return null;
+  const t = (level - vA) / (vB - vA);
+  return { x: ax + (bx - ax) * t, y: ay + (by - ay) * t };
+}
+
+// One contour level at a time, over the grid's own lattice (not a
+// finer screen-space resampling like the colour-wash layers use) —
+// isobars are about the shape of the pressure field itself, not pixel
+// smoothness, and the model's real ~10km spacing is the honest
+// resolution to draw them at.
+function marchingSquaresSegments(grid, hourIdx, view, level) {
+  const segments = [];
+  const field = grid.pressure[hourIdx];
+  for (let r = 0; r < grid.rows - 1; r++) {
+    for (let c = 0; c < grid.cols - 1; c++) {
+      const vTL = field[r][c], vTR = field[r][c + 1];
+      const vBL = field[r + 1][c], vBR = field[r + 1][c + 1];
+      if ([vTL, vTR, vBL, vBR].some(v => v === null || v === undefined)) continue;
+
+      const latT = grid.lat0 + r * grid.dLat, latB = grid.lat0 + (r + 1) * grid.dLat;
+      const lonL = grid.lon0 + c * grid.dLon, lonR = grid.lon0 + (c + 1) * grid.dLon;
+      const xL = view.x(lonL), xR = view.x(lonR);
+      const yT = view.y(latT), yB = view.y(latB);
+
+      const top = edgeCrossing(vTL, vTR, xL, yT, xR, yT, level);
+      const right = edgeCrossing(vTR, vBR, xR, yT, xR, yB, level);
+      const bottom = edgeCrossing(vBL, vBR, xL, yB, xR, yB, level);
+      const left = edgeCrossing(vTL, vBL, xL, yT, xL, yB, level);
+
+      const points = [top, right, bottom, left].filter(Boolean);
+      if (points.length === 2) {
+        segments.push([points[0], points[1]]);
+      } else if (points.length === 4) {
+        // The ambiguous "saddle" case — the level crosses all four
+        // edges, and there are two equally-valid ways to connect them
+        // into two lines. Pairing top-with-bottom and left-with-right
+        // is a fixed, arbitrary choice rather than resolving the true
+        // topology (which needs checking the cell's centre value too) —
+        // fine for a readable isobar, not claiming survey precision.
+        segments.push([top, bottom]);
+        segments.push([left, right]);
+      }
+    }
+  }
+  return segments;
+}
+
+// marchingSquaresSegments produces one independent little segment per
+// grid cell, in no particular order — fine for a straight-line render,
+// but it means there's no continuous line to smooth. The two cells
+// either side of any shared grid edge compute that edge's crossing
+// point identically (same interpolation, same inputs), so segments
+// that belong to the same contour share EXACT endpoint coordinates.
+// This chains them back into ordered polylines by walking outward from
+// each segment's endpoints until nothing more matches, so each
+// contour can be drawn — and smoothed — as one continuous line rather
+// than a pile of disconnected cell-sized strokes.
+function chainSegmentsIntoPaths(segments) {
+  const key = pt => `${pt.x.toFixed(2)},${pt.y.toFixed(2)}`;
+  const byPoint = new Map();
+  segments.forEach((seg, i) => {
+    [0, 1].forEach(end => {
+      const k = key(seg[end]);
+      if (!byPoint.has(k)) byPoint.set(k, []);
+      byPoint.get(k).push({ i, end });
+    });
+  });
+
+  const used = new Array(segments.length).fill(false);
+  const paths = [];
+
+  function extend(path, atEnd) {
+    for (;;) {
+      const tip = atEnd ? path[path.length - 1] : path[0];
+      const candidates = (byPoint.get(key(tip)) || []).filter(m => !used[m.i]);
+      if (!candidates.length) return;
+      const { i, end } = candidates[0];
+      used[i] = true;
+      const next = segments[i][end === 0 ? 1 : 0];
+      if (atEnd) path.push(next); else path.unshift(next);
+    }
+  }
+
+  segments.forEach((seg, i) => {
+    if (used[i]) return;
+    used[i] = true;
+    const path = [seg[0], seg[1]];
+    extend(path, true);
+    extend(path, false);
+    paths.push(path);
+  });
+
+  return paths;
+}
+
+// Rounds a polyline's corners by drawing a quadratic curve through the
+// midpoint of each pair of points, rather than straight lines between
+// the raw grid-cell crossings — a standard, cheap smoothing trick (no
+// spline maths needed) that turns the model grid's own faceted,
+// stair-stepped contour into something that reads as hand-drawn.
+function drawSmoothPath(ctx, points) {
+  if (points.length < 2) return;
+  if (points.length === 2) {
+    ctx.moveTo(points[0].x, points[0].y);
+    ctx.lineTo(points[1].x, points[1].y);
+    return;
+  }
+  ctx.moveTo(points[0].x, points[0].y);
+  ctx.lineTo((points[0].x + points[1].x) / 2, (points[0].y + points[1].y) / 2);
+  for (let i = 1; i < points.length - 1; i++) {
+    const midX = (points[i].x + points[i + 1].x) / 2;
+    const midY = (points[i].y + points[i + 1].y) / 2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+  }
+  ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+}
+
+registerMapLayer({
+  id: "pressure",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("pressure")) return;
+    // Skipped while actively dragging — see temperature's own draw()
+    // just above for the shared reasoning. This is the single most
+    // expensive layer on the whole map: a full marching-squares pass
+    // over the entire grid PER isobar level (often several levels a
+    // frame), each one then chained into paths and smoothed. Confirmed
+    // on-device as the layer most responsible for the drag feeling
+    // unresponsive — worse than temperature, since temperature is one
+    // pass and this is several.
+    if (mapIsPanning) return;
+    const p = mapPalette();
+    // Rounded to the nearest WHOLE hour, unlike the colour-wash layers
+    // above — marching squares traces contours directly off the raw
+    // grid array (mapGrid.pressure[hour], a real array index, not a
+    // lat/lon sample through sampleGrid), and blending an entire
+    // contour LINE between two hours isn't the same operation as
+    // blending a colour: it would mean re-running marching squares on
+    // an interpolated pressure field and somehow cross-fading the
+    // resulting paths, not just averaging two numbers. Same call as
+    // wind direction above — snap to the nearest real reading rather
+    // than attempt something more elaborate for a fractional hour that,
+    // per MAP_HOUR_STEP's own comment, isn't genuinely higher-resolution
+    // data anyway.
+    const hour = Math.round(Math.min(mapHourValue(), mapGrid.hours - 1));
+    const field = mapGrid.pressure[hour];
+    const flat = field.flat().filter(v => v !== null && v !== undefined);
+    if (!flat.length) return;
+    const minP = Math.min(...flat), maxP = Math.max(...flat);
+    const lo = Math.floor(minP / MAP_ISOBAR_INTERVAL_HPA) * MAP_ISOBAR_INTERVAL_HPA;
+    const hi = Math.ceil(maxP / MAP_ISOBAR_INTERVAL_HPA) * MAP_ISOBAR_INTERVAL_HPA;
+
+    ctx.save();
+    // A dedicated colour (see MAP_PALETTES) rather than the plain "ink"
+    // tone used elsewhere — that blended into the coastline/label
+    // colour too easily. Text uses the same colour as the line it
+    // labels, and both are a size up from before (1.2→1.8 stroke,
+    // 11→13px text) so isobars read clearly at a glance rather than
+    // needing a squint.
+    ctx.strokeStyle = p.isobar;
+    ctx.lineWidth = 1.8;
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 0.85;
+    ctx.font = "700 13px -apple-system, system-ui, sans-serif";
+
+    for (let level = lo; level <= hi; level += MAP_ISOBAR_INTERVAL_HPA) {
+      const segments = marchingSquaresSegments(mapGrid, hour, view, level);
+      if (!segments.length) continue;
+      const paths = chainSegmentsIntoPaths(segments);
+
+      ctx.beginPath();
+      paths.forEach(path => drawSmoothPath(ctx, path));
+      ctx.stroke();
+
+      // One label per level, near the middle of the longest chained
+      // contour — a label on every little segment would be as
+      // cluttered as the colour wash this replaced, and the longest
+      // path is the one most likely to still be on screen wherever the
+      // map happens to be panned.
+      const longest = paths.reduce((a, b) => (b.length > a.length ? b : a), paths[0]);
+      const mid = longest[Math.floor(longest.length / 2)];
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      ctx.strokeText(String(level), mid.x + 3, mid.y - 3);
+      ctx.fillStyle = p.isobar;
+      ctx.fillText(String(level), mid.x + 3, mid.y - 3);
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = p.isobar;
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+});
+
+registerMapLayer({
+  id: "rain",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("rain")) return;
+    const p = mapPalette();
+    const hour = mapHourValue();
+    // 6px cells. Small enough that the model's own grid doesn't show as
+    // blocks, large enough to stay smooth while dragging on a phone.
+    const cell = 6;
+    for (let px = 0; px < view.w; px += cell) {
+      for (let py = 0; py < view.h; py += cell) {
+        const value = sampleGrid(mapGrid, "rain", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
+        const band = rainBandIndex(value);
+        if (band < 0) continue;
+        ctx.fillStyle = p.ramp[band];
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(px, py, cell, cell);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+});
+
+// Sparse arrows rather than one per grid cell — a 6px-spaced field of
+// arrows would be solid ink at this zoom. Spacing is in screen pixels,
+// not world distance, so the arrow density looks the same at every
+// zoom level rather than thinning out or clumping as radiusKm changes.
+const MAP_WIND_ARROW_SPACING_PX = 46;
+
+// Fixed length per speed band, not a continuous scale — same reasoning
+// as rain's discrete bands: a handful of clearly different sizes reads
+// at a glance, where a continuous gradient just looks like "some
+// arrows are randomly bigger" without a key to compare against. Bands
+// follow the everyday language for wind (calm/breezy/windy/gale)
+// rather than an arbitrary split.
+// 10mph divisions, as many as comfortably fit across an iPhone-width
+// legend without crowding — six bands reads cleanly at a glance (the
+// whole point of banding rather than a continuous scale) and covers
+// everything from calm to a genuine severe gale.
+const MAP_WIND_SPEED_THRESHOLDS = [0, 10, 20, 30, 40, 50]; // mph, lower bound per band
+const MAP_WIND_ARROW_LENGTHS = [8, 12, 16, 20, 24, 28]; // px, one per band above
+
+function windArrowLength(speedMph) {
+  return MAP_WIND_ARROW_LENGTHS[bandIndexFor(speedMph, MAP_WIND_SPEED_THRESHOLDS)];
+}
+
+// Downwind, not meteorological "from" — matches the headline wind
+// arrow's own convention elsewhere in the app (anyRealWindDirection() /
+// the rotating arrow in app.js), on the same reasoning: "which way will
+// this push me" is more directly useful here than the raw met reading.
+function windArrowAngleRad(metFromDegrees) {
+  return ((metFromDegrees + 180) % 360) * Math.PI / 180;
+}
+
+registerMapLayer({
+  id: "wind",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("wind")) return;
+    const p = mapPalette();
+    const hour = mapHourValue();
+    ctx.strokeStyle = p.ink;
+    ctx.fillStyle = p.ink;
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = "round";
+    for (let px = MAP_WIND_ARROW_SPACING_PX / 2; px < view.w; px += MAP_WIND_ARROW_SPACING_PX) {
+      for (let py = MAP_WIND_ARROW_SPACING_PX / 2; py < view.h; py += MAP_WIND_ARROW_SPACING_PX) {
+        const lat = view.lat(py), lon = view.lon(px);
+        const speed = sampleGrid(mapGrid, "windSpeed", hour, lat, lon);
+        const dir = sampleWindDir(mapGrid, hour, lat, lon);
+        if (speed === null || dir === null) continue;
+        const angle = windArrowAngleRad(dir);
+        const len = windArrowLength(speed);
+        const dx = Math.sin(angle), dy = -Math.cos(angle);
+        const x0 = px - dx * len * 0.5, y0 = py - dy * len * 0.5;
+        const x1 = px + dx * len * 0.5, y1 = py + dy * len * 0.5;
+
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+
+        // Bigger head than a typical arrowhead so the direction reads
+        // clearly at map size, even for the shortest (calm) arrows.
+        const headLen = 8;
+        const headAngle = Math.PI / 6;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(
+          x1 - Math.sin(angle - headAngle) * headLen,
+          y1 + Math.cos(angle - headAngle) * headLen
+        );
+        ctx.lineTo(
+          x1 - Math.sin(angle + headAngle) * headLen,
+          y1 + Math.cos(angle + headAngle) * headLen
+        );
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+});
+
+// The legend is DOM, not canvas — same reasoning as the crosshair: it
+// never needs redrawing mid-pan, and real text is sharper and far
+// cheaper to keep accessible than canvas-drawn labels would be. Called
+// from renderMap() so a palette change (paper/night/mono) or a layer
+// toggle is reflected immediately rather than only on next page load.
+//
+// One row per VISIBLE colour-wash layer — rain, temperature, pressure —
+// each labelled so a legend showing up under the map always says which
+// quantity it's for; wind gets a plain caption instead, since an arrow
+// field's "value" is a direction and rough length, not a colour scale.
+function renderMapLegends() {
+  const container = document.getElementById("mapLegends");
+  if (!container) return;
+  container.innerHTML = "";
+
+  function addRow(labelText, thresholds, ramp, unit) {
+    const row = document.createElement("div");
+    row.className = "map-legend-row";
+    const caption = document.createElement("span");
+    caption.className = "map-legend-caption";
+    caption.textContent = labelText;
+    row.appendChild(caption);
+    const strip = document.createElement("div");
+    strip.className = "map-legend";
+    thresholds.forEach((threshold, i) => {
+      const swatch = document.createElement("span");
+      swatch.className = "map-legend-swatch";
+      swatch.style.background = ramp[i];
+      const label = document.createElement("span");
+      label.className = "map-legend-label";
+      if (threshold === -Infinity) {
+        label.textContent = `<${thresholds[1]}${unit}`;
+      } else if (i === thresholds.length - 1) {
+        label.textContent = `${threshold}+${unit}`;
+      } else {
+        label.textContent = `${threshold}${unit}`;
+      }
+      const item = document.createElement("span");
+      item.className = "map-legend-item";
+      item.append(swatch, label);
+      strip.appendChild(item);
+    });
+    row.appendChild(strip);
+    container.appendChild(row);
+  }
+
+  if (mapLayerVisible("rain")) {
+    const p = mapPalette();
+    addRow("Rain, mm/hr", RAIN_BAND_THRESHOLDS, p.ramp, "");
+  }
+
+  // A gradient bar, not swatches — temperature is a continuous scale
+  // now (see MAP_TEMP_COLOR_STOPS), so discrete boxes would misrepresent
+  // it as banded again. Built from the exact same colour stops the
+  // layer paints with, the same "one source of truth" rule every other
+  // legend on this map already follows.
+  //
+  // Blended through blendOverBg at TEMP_LAYER_ALPHA against this
+  // palette's own land colour — NOT the pure tempColor() stop shown
+  // before this fix. The layer itself never paints a cell at full
+  // strength (see its draw(), TEMP_LAYER_ALPHA), so a legend built from
+  // the pure colour was always going to look more saturated than
+  // anything actually on the map — confirmed as the real cause behind
+  // a reported 17°C reading looking like it belonged to the legend's
+  // ~21-22°C swatch instead: the map's own blended 17° and the
+  // legend's pure, unblended ~21-22° happened to land close enough in
+  // that lighter half of the ramp to be mistaken for each other. Land
+  // is an approximation (the true backdrop varies — sea, terrain
+  // shading, other layers underneath), but it's the single most common
+  // one and a far closer preview than full strength ever was.
+  if (mapLayerVisible("temperature")) {
+    const row = document.createElement("div");
+    row.className = "map-legend-row";
+    const caption = document.createElement("span");
+    caption.className = "map-legend-caption";
+    caption.textContent = "Temperature, °C";
+    row.appendChild(caption);
+
+    const p = mapPalette();
+    const bgRgb = hexToRgb(p.land);
+    const span = MAP_TEMP_MAX_C - MAP_TEMP_MIN_C;
+    const stops = MAP_TEMP_COLOR_STOPS
+      .map(s => `${blendOverBg(tempColor(s.t), TEMP_LAYER_ALPHA, bgRgb)} ${((s.t - MAP_TEMP_MIN_C) / span) * 100}%`)
+      .join(", ");
+    const bar = document.createElement("div");
+    bar.className = "map-legend-gradient";
+    bar.style.background = `linear-gradient(to right, ${stops})`;
+    row.appendChild(bar);
+
+    const ticks = document.createElement("div");
+    ticks.className = "map-legend-ticks";
+    [MAP_TEMP_MIN_C, 0, 10, 20, 30, MAP_TEMP_MAX_C].forEach(t => {
+      const tick = document.createElement("span");
+      tick.textContent = `${t}°`;
+      ticks.appendChild(tick);
+    });
+    row.appendChild(ticks);
+    container.appendChild(row);
+  }
+
+  // Same gradient-bar shape as Temperature above, built from cloudColor
+  // itself so this can't drift from what the layer actually paints. The
+  // caption spells out the weighting rather than leaving it implicit —
+  // this bar necessarily shows one blended shade, not three, so it's
+  // worth being upfront that low cloud counts for more than high.
+  if (mapLayerVisible("cloud")) {
+    const row = document.createElement("div");
+    row.className = "map-legend-row";
+    const caption = document.createElement("span");
+    caption.className = "map-legend-caption";
+    caption.textContent = "Cloud, % (low cloud weighted heaviest, high lightest)";
+    row.appendChild(caption);
+
+    const bar = document.createElement("div");
+    bar.className = "map-legend-gradient";
+    bar.style.background = `linear-gradient(to right, ${cloudColor(0)}, ${cloudColor(100)})`;
+    row.appendChild(bar);
+
+    const ticks = document.createElement("div");
+    ticks.className = "map-legend-ticks";
+    [0, 25, 50, 75, 100].forEach(t => {
+      const tick = document.createElement("span");
+      tick.textContent = `${t}%`;
+      ticks.appendChild(tick);
+    });
+    row.appendChild(ticks);
+    container.appendChild(row);
+  }
+
+  // A caption, not a legend — isobars are a familiar convention (every
+  // synoptic chart labels its own lines directly, same as this layer
+  // does), so the useful thing to state here is just the spacing
+  // between them, not a colour key that no longer exists.
+  if (mapLayerVisible("pressure")) {
+    const row = document.createElement("div");
+    row.className = "map-legend-row map-legend-note";
+    row.textContent = `Isobars, every ${MAP_ISOBAR_INTERVAL_HPA} hPa — labelled in hPa`;
+    container.appendChild(row);
+  }
+
+  // Arrow length is the thing that actually needs a key — colour swatch
+  // legends don't apply to a direction-and-length field, so this draws
+  // small reference arrows at each band's real length instead, in the
+  // current palette's own ink colour so it always matches what's on the
+  // map.
+  if (mapLayerVisible("wind")) {
+    const p = mapPalette();
+    const row = document.createElement("div");
+    row.className = "map-legend-row";
+    const caption = document.createElement("span");
+    caption.className = "map-legend-caption";
+    caption.textContent = "Wind, mph";
+    row.appendChild(caption);
+
+    const strip = document.createElement("div");
+    strip.className = "map-legend";
+    const svgNS = "http://www.w3.org/2000/svg";
+    // Horizontal, not the map's own vertical arrows — a vertical arrow
+    // tall enough to show the longest band's real length was taller
+    // than the icon box, clipping its own point off. Horizontal gives
+    // it the width to grow into instead, which a legend row has plenty
+    // of, and doesn't need to match the compass-direction arrows on the
+    // map itself (this key is about relative LENGTH = speed, not
+    // direction).
+    const svgW = 44, svgH = 20, cy = 10, startX = 4;
+    MAP_WIND_SPEED_THRESHOLDS.forEach((threshold, i) => {
+      const len = MAP_WIND_ARROW_LENGTHS[i];
+      const tipX = startX + len;
+      const item = document.createElement("span");
+      item.className = "map-legend-item";
+
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("width", String(svgW));
+      svg.setAttribute("height", String(svgH));
+      svg.setAttribute("viewBox", `0 0 ${svgW} ${svgH}`);
+      const line = document.createElementNS(svgNS, "line");
+      line.setAttribute("x1", String(startX)); line.setAttribute("y1", String(cy));
+      line.setAttribute("x2", String(tipX)); line.setAttribute("y2", String(cy));
+      line.setAttribute("stroke", p.ink);
+      line.setAttribute("stroke-width", "1.8");
+      line.setAttribute("stroke-linecap", "round");
+      svg.appendChild(line);
+      const head = document.createElementNS(svgNS, "polygon");
+      head.setAttribute("points", `${tipX + 6},${cy} ${tipX - 1},${cy - 4} ${tipX - 1},${cy + 4}`);
+      head.setAttribute("fill", p.ink);
+      svg.appendChild(head);
+      item.appendChild(svg);
+
+      const label = document.createElement("span");
+      label.className = "map-legend-label";
+      label.textContent = i === MAP_WIND_SPEED_THRESHOLDS.length - 1 ? `${threshold}+` : `${threshold}`;
+      item.appendChild(label);
+      strip.appendChild(item);
+    });
+    row.appendChild(strip);
+    container.appendChild(row);
+  }
+}
+
+registerMapLayer({
+  id: "coastline-outline",
+  draw(ctx, view) {
+    const p = mapPalette();
+    // Redraws just the OUTLINE (no fill — the "coastline" layer near
+    // the top already filled the land) on top of every weather colour
+    // layer. Confirmed on a real device: a heavy rain patch sitting
+    // over the coast completely buried the thin coastline stroke
+    // underneath it, leaving no way to tell where the actual shoreline
+    // was — the rain's own colour and opacity are deliberately
+    // untouched by this (asked not to change those), this just gives
+    // the coast edge a second, later chance to still be visible on top
+    // of whatever colour layers happen to be covering it. Width bumped
+    // 1 -> 1.5 on top of that second chance — still reported as too
+    // faint to read clearly against a heavy rain band even once
+    // redrawn on top of it.
+    drawGeoJson(ctx, mapVectorData.coastline, view, { stroke: p.coast, lineWidth: 1.5 });
+  }
+});
+
+registerMapLayer({
+  id: "rings",
+  draw(ctx, view) {
+    const p = mapPalette();
+    const home = homeCoords();
+    if (!home) return;
+    const hx = view.x(home.lon), hy = view.y(home.lat);
+    const imperial = usingMiles();
+    // Pick the table already in the right unit rather than picking a km
+    // radius and converting it for the label — see MAP_RING_RADII_MI's
+    // own comment for why that produced odd numbers like "19mi".
+    const radii = imperial ? (MAP_RING_RADII_MI[view.radiusKm] || [20, 40]) : (MAP_RING_RADII_KM[view.radiusKm] || [30, 60]);
+    const kmPerUnit = imperial ? 1.60934 : 1;
+    ctx.save();
+    radii.forEach(value => {
+      const km = value * kmPerUnit;
+      const r = km * view.pxPerKm;
+
+      // A solid halo pass first, in the base land colour — the inner
+      // and outer rings were already the exact same colour, but the
+      // outer one covers more ground and so is more likely to cross a
+      // patch of rain/temperature colouring close to its own tone,
+      // where it effectively vanishes. This halo is what actually
+      // guarantees both rings stay visible against whatever happens to
+      // be underneath them, the same trick the labels below already
+      // use against a dark rain wash.
+      ctx.setLineDash([]);
+      ctx.strokeStyle = p.land;
+      ctx.lineWidth = 3;
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      ctx.arc(hx, hy, r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // The actual dashed ring, identical style for inner and outer.
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = p.ring;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.arc(hx, hy, r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      const text = `${value} ${imperial ? "mi" : "km"}`;
+      ctx.font = "600 13px -apple-system, system-ui, sans-serif";
+      // Outlined in the base colour first: these labels sit on top of
+      // whatever the rain layer drew, which at the heavy end is dark
+      // enough to swallow them entirely.
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      ctx.strokeText(text, hx + 5, hy - r - 4);
+      ctx.fillStyle = p.ink;
+      ctx.fillText(text, hx + 5, hy - r - 4);
+    });
+    ctx.restore();
+    ctx.fillStyle = p.ink;
+    ctx.beginPath();
+    ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+});
+
+// Rough visual footprint for the largest towns/cities only (population
+// rank 1-2 — see places.json/prepare-map-data). There's no real
+// building-footprint or built-up-area boundary data behind this
+// (places.json is just a point, a name, and a population rank), so
+// this is deliberately NOT presented as an accurate boundary — it's a
+// soft "this dot is a substantial urban area, not a village" visual
+// cue, sized loosely by rank rather than to true survey scale.
+const MAP_LARGE_TOWN_OUTLINE_KM = { 1: 5, 2: 3 };
+
+registerMapLayer({
+  id: "places",
+  draw(ctx, view) {
+    const places = mapVectorData.places;
+    if (!places || !places.length) return;
+    const p = mapPalette();
+    // Was 25→6, 50→4, 100/150→2 — the two widest tiers in particular
+    // capped hard at only the biggest cities, which tested as too
+    // sparse for a sense of scale on a real central-UK location where
+    // several genuinely mid-size towns (Leicester/Derby/Coventry-scale)
+    // never became candidates at all, not just ones thinned out by the
+    // collision check below. Raised at every tier, most at the wide
+    // end where the old cap bit hardest. Still self-limiting either
+    // way: more towns become ELIGIBLE, but the existing overlap check
+    // a few lines down still thins whichever of them would actually
+    // collide — raising this cap can't by itself make the map
+    // cluttered, only less sparse.
+    const maxRank = view.radiusKm <= 25 ? 6 : view.radiusKm <= 50 ? 5 : view.radiusKm <= 100 ? 4 : 3;
+
+    // Drawn first, underneath the dots/labels below, and in a plain
+    // neutral grey independent of the current palette — it needs to
+    // read as "decoration around the marker", never as a real map
+    // feature (a lake, a boundary) that could be confused with an
+    // actual data layer.
+    ctx.save();
+    ctx.strokeStyle = "rgba(120,120,120,0.55)";
+    ctx.lineWidth = 1;
+    places
+      .filter(place => (place.rank || 0) <= 2 && (place.rank || 0) <= maxRank)
+      .forEach(place => {
+        const radiusKm = MAP_LARGE_TOWN_OUTLINE_KM[place.rank];
+        if (!radiusKm) return;
+        const px = view.x(place.lon), py = view.y(place.lat);
+        const r = radiusKm * view.pxPerKm;
+        if (px < -r || px > view.w + r || py < -r || py > view.h + r) return;
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+    ctx.restore();
+
+    ctx.font = "11px -apple-system, system-ui, sans-serif";
+    ctx.fillStyle = p.ink;
+    // Which places fall within the current view geographically — used
+    // below to judge whether the rank cutoff has left the view too
+    // sparse to give any sense of scale, independent of the later
+    // per-label edge/collision checks.
+    const bounds = {
+      lonMin: view.lon(0), lonMax: view.lon(view.w),
+      latMax: view.lat(0), latMin: view.lat(view.h)
+    };
+    const inView = place => place.lon >= bounds.lonMin && place.lon <= bounds.lonMax &&
+                             place.lat >= bounds.latMin && place.lat <= bounds.latMax;
+
+    // Rank thinning does more work than the rings at the wider levels.
+    // Two rules together: rank (a place's own importance, from the
+    // source data) and collision (whatever is left must not overlap).
+    // Rank alone leaves a mess in dense areas; collision alone drops
+    // cities in favour of whichever village happened to draw first.
+    let candidates = places.filter(place => (place.rank || 0) <= maxRank);
+
+    // Sparse-area fallback. Confirmed on a real device: a wide view
+    // dominated by open countryside and a large rain patch left a
+    // single town name on screen — nowhere near enough to judge scale
+    // or location against. Backfills with the nearest smaller places
+    // (any rank) until there are at least a handful, regardless of the
+    // cutoff above. Only engages when the ordinary rank filter has left
+    // the view genuinely sparse — a normally busy view already clears
+    // this count on rank alone, so nothing changes there.
+    const visibleFromRank = candidates.filter(inView).length;
+    if (visibleFromRank < 4) {
+      const already = new Set(candidates);
+      const extra = places
+        .filter(place => inView(place) && !already.has(place))
+        .sort((a, b) => {
+          const da = Math.hypot(a.lon - view.centre.lon, a.lat - view.centre.lat);
+          const db = Math.hypot(b.lon - view.centre.lon, b.lat - view.centre.lat);
+          return da - db;
+        })
+        .slice(0, 4 - visibleFromRank);
+      candidates = candidates.concat(extra);
+    }
+
+    const drawn = [];
+    candidates
+      .sort((a, b) => (a.rank || 0) - (b.rank || 0))
+      .forEach(place => {
+        const px = view.x(place.lon), py = view.y(place.lat);
+        const width = ctx.measureText(place.name).width;
+        // Was checking only the DOT's position (px), not where the
+        // label text drawn to its right (px + 5 ... px + 5 + width)
+        // actually ends up. A dot could sit safely inside the canvas
+        // while its name ran past the right edge and got clipped —
+        // exactly the cut-off town names ("Northam...", "Milto...")
+        // seen on a real device. The dot-only checks on the other three
+        // sides are still fine: nothing is ever drawn to the left of,
+        // above, or below the dot.
+        if (px < 6 || px + 5 + width > view.w - 4 || py < 12 || py > view.h - 4) return;
+        const box = { x: px, y: py, w: width + 14, h: 14 };
+        if (drawn.some(d => Math.abs(d.x - box.x) < (d.w + box.w) / 2 && Math.abs(d.y - box.y) < 14)) return;
+        drawn.push(box);
+        ctx.beginPath();
+        ctx.arc(px, py, 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillText(place.name, px + 5, py + 4);
+      });
+  }
+});
+
+// ---------------------------------------------------------------------
+// Saved places on the map
+//
+// Reuses the exact same PLACES_KEY store Settings' saved-places list
+// already writes to (app.js) — a place saved here shows up there and
+// vice versa, with no new storage format. Each entry is stored as
+// {postcode, label} where "postcode" is whatever was typed or adopted
+// (a real postcode, a place name, or a "lat,lon" string — see
+// resolveLocation), so it has to be resolved into actual coordinates
+// before it can be plotted; that resolution is cached here rather than
+// repeated every render.
+let mapSavedPlaces = [];
+let mapSavedPlacesRawSignature = null;
+// Screen-space hit areas for the markers just drawn, rebuilt every
+// render — endPan's tap handling checks a tap against these to decide
+// whether it landed on a saved place.
+let mapSavedPlaceHitboxes = [];
+
+async function refreshSavedPlacesForMap() {
+  const raw = loadPlaces();
+  const signature = JSON.stringify(raw);
+  // Re-resolving every entry is a handful of network lookups — skipped
+  // whenever the saved list hasn't actually changed, which is every
+  // render except the first and right after "Add to forecast".
+  if (signature === mapSavedPlacesRawSignature) return;
+  mapSavedPlacesRawSignature = signature;
+
+  const resolved = [];
+  for (const place of raw) {
+    // A place labelled "Home" already gets its own dot and distance
+    // rings (see the "rings" layer) — giving it a second marker here
+    // too would be the same location marked twice.
+    if ((place.label || "").trim().toLowerCase() === "home") continue;
+    try {
+      const r = await resolveLocation(place.postcode);
+      resolved.push({ lat: r.lat, lon: r.lon, label: place.label || place.postcode });
+    } catch {
+      // A saved place that no longer resolves (a postcode that's
+      // stopped working, a deleted area) just doesn't get a marker —
+      // silent, the same way a lot of this map's other decoration
+      // fails rather than surfacing an error for something optional.
+    }
+  }
+  mapSavedPlaces = resolved;
+  renderMap();
+}
+
+registerMapLayer({
+  id: "saved-places",
+  draw(ctx, view) {
+    mapSavedPlaceHitboxes = [];
+    if (!mapSavedPlaces.length) return;
+    const p = mapPalette();
+    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+    mapSavedPlaces.forEach(place => {
+      const x = view.x(place.lon), y = view.y(place.lat);
+      if (x < -20 || x > view.w + 20 || y < -20 || y > view.h + 20) return;
+      // A downward-pointing triangle, tip on the actual coordinate —
+      // the same logic as a classic map pin simplified to its cheapest
+      // possible shape: the POINT is what marks the spot, not the
+      // triangle's centre. A plain dot (like the places layer's towns)
+      // would have been ambiguous next to those — this needs to read
+      // as "yours", not as another town.
+      ctx.fillStyle = p.marker;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 7, y - 12);
+      ctx.lineTo(x + 7, y - 12);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = p.ink;
+      ctx.textAlign = "center";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      ctx.strokeText(place.label, x, y - 16);
+      ctx.fillText(place.label, x, y - 16);
+      ctx.textAlign = "left";
+
+      // Generous hitbox — a triangle tip is a small, precise target for
+      // a fingertip, so this is deliberately bigger than the visible
+      // shape rather than matching it exactly.
+      mapSavedPlaceHitboxes.push({ x, y: y - 8, radius: 22, place });
+    });
+  }
+});
+
+// Screen-space hit areas for tide markers, same pattern as
+// mapSavedPlaceHitboxes just above.
+let mapTideLocationHitboxes = [];
+
+// Plots every saved tide location (see tide.js's own TIDE_LOCATIONS_KEY
+// store, loaded before map.js on this page) as its own marker — reads
+// straight from localStorage on every draw rather than caching a
+// resolved copy like refreshSavedPlacesForMap does for weather places:
+// a tide location already carries its own lat/lon directly (no
+// geocoding lookup needed to plot it), so there's no async work here
+// worth caching against.
+//
+// A tap only recentres the crosshair here, exactly like a saved weather
+// place's own marker does (see goTo() below) — it does NOT touch
+// "Forecast for here" or start collecting weather at that spot. Turning
+// a tide location into a weather one too stays a separate, explicit
+// step through the ordinary crosshair+"Forecast for here" flow, same as
+// it would starting from anywhere else on the map — nothing here
+// defaults to it.
+registerMapLayer({
+  id: "tide-locations",
+  draw(ctx, view) {
+    mapTideLocationHitboxes = [];
+    if (typeof loadTideLocations !== "function") return; // tide.js not on this page
+    const locations = loadTideLocations();
+    if (!locations.length) return;
+    const p = mapPalette();
+    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+    locations.forEach(loc => {
+      const x = view.x(loc.lon), y = view.y(loc.lat);
+      if (x < -20 || x > view.w + 20 || y < -20 || y > view.h + 20) return;
+
+      // A small circle with a wave inside, in the same "water" colour
+      // the map already uses for rivers/coastline — reads as "tide" at
+      // a glance rather than competing with the downward-triangle
+      // weather-place markers above, since a tide spot and a weather
+      // place are different things that can legitimately sit at the
+      // same coordinates without looking like the same marker twice.
+      ctx.fillStyle = p.river;
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x - 4.5, y + 0.5);
+      ctx.bezierCurveTo(x - 2.5, y - 2.5, x - 1.5, y + 2.5, x + 0.5, y - 0.5);
+      ctx.bezierCurveTo(x + 2.5, y - 3, x + 3.5, y + 1, x + 4.5, y - 0.5);
+      ctx.stroke();
+
+      ctx.fillStyle = p.ink;
+      ctx.textAlign = "center";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      // resolveLocation (app.js) builds this as "name, county" — just
+      // the name here keeps the map's own labels short and consistent
+      // with the saved-places markers above, which only ever show a
+      // plain place name too. The full "name, county" label is still
+      // what's stored and shown everywhere else (the tide card, its
+      // sheet title, Settings' locations list) — this only trims what's
+      // painted on the map itself.
+      const shortLabel = loc.label.split(",")[0].trim();
+      ctx.strokeText(shortLabel, x, y - 14);
+      ctx.fillText(shortLabel, x, y - 14);
+      ctx.textAlign = "left";
+
+      mapTideLocationHitboxes.push({ x, y, radius: 20, location: loc });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------
+// Resolved once on load, and cached here for the life of the page.
+let mapHome = null;
+// Set only when a saved place is explicitly labelled "Home" — see
+// resolveMapHome() below. Kept separate from mapHome rather than
+// overwriting it, so the ordinary fallback logic in homeCoords()
+// doesn't need to know or care which case produced an answer.
+let mapHomeExplicit = null;
+
+function homeCoords() {
+  // An explicit "Home" saved place always wins, checked before
+  // anything else — a deliberately-named place is a permanent choice
+  // and should hold regardless of what the front page currently
+  // happens to be showing (see the note on resolveMapHome below for
+  // the coupling this fixes).
+  if (mapHomeExplicit) return mapHomeExplicit;
+  if (typeof state === "object" && state && state.lat != null && state.lon != null) {
+    return { lat: state.lat, lon: state.lon };
+  }
+  return mapHome;
+}
+
+// app.js only starts loadLocationData() when the page has a headline
+// grid or a comparison table, and this page has neither — deliberately,
+// so the map can never block or be blocked by the main forecast load.
+// The side effect is that state.lat and state.lon stay null here
+// forever, which silently took out both the distance rings and the Home
+// button: each needs to know where home actually is.
+//
+// So the map resolves it once itself. One extra lookup on a page that
+// already fetches weather, and it fails quietly — the map still pans and
+// still draws rain without it, it just has nothing to measure from.
+//
+// Checks for an explicit "Home" saved place FIRST, and unconditionally —
+// not just as a fallback when state.lat/lon is empty. Without this,
+// Home was silently tied to state.postcode: whatever place happens to
+// be active on the FRONT page when this page loads, which is "wherever
+// I last switched to", not "home". Renaming a saved place "Home"
+// wouldn't have changed anything, and switching your active postcode to
+// "Work" would have quietly moved the distance rings to measure from
+// Work instead. A saved place named "Home" is now a genuine, stable
+// anchor regardless of either of those.
+async function resolveMapHome() {
+  if (!mapHomeExplicit) {
+    try {
+      const explicit = loadPlaces().find(p => (p.label || "").trim().toLowerCase() === "home");
+      if (explicit) {
+        const resolved = await resolveLocation(explicit.postcode);
+        mapHomeExplicit = { lat: resolved.lat, lon: resolved.lon };
+      }
+    } catch {
+      // The saved "Home" place exists but couldn't be resolved (offline,
+      // a postcode that's since stopped working) — falls through to the
+      // ordinary behaviour below rather than leaving Home unavailable
+      // entirely over a place that used to work.
+    }
+  }
+  if (homeCoords()) return;
+  try {
+    const postcode = typeof state === "object" && state ? state.postcode : null;
+    if (!postcode) return;
+    const resolved = await resolveLocation(postcode);
+    mapHome = { lat: resolved.lat, lon: resolved.lon };
+  } catch {
+    // Ambiguous or unreachable — rings and Home stay unavailable rather
+    // than guessing at a location.
+  }
+}
+
+function usingMiles() {
+  try {
+    const units = loadConditionUnits();
+    // Wind, not Rain — a UK user very commonly has mm for rain and mph
+    // for wind at the same time (the app's own README notes exactly
+    // this as a real user's actual settings), so Rain's unit was often
+    // giving the wrong answer for anyone in that entirely normal
+    // combination. Wind's unit is the one actually about distance/speed
+    // rather than a depth measurement, making it the closer proxy for
+    // "does this person think in miles or km" — still no new map-
+    // specific setting introduced, just reading the more relevant one
+    // of the two that already exist.
+    return units.wind === "imperial";
+  } catch {
+    return false;
+  }
+}
+
+function loadMapCentre() {
+  try {
+    const raw = localStorage.getItem(MAP_CENTRE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.lat === "number" && typeof parsed.lon === "number") return parsed;
+    }
+  } catch {}
+  return homeCoords() || { lat: 51.13, lon: -2.99 };
+}
+
+function saveMapCentre(centre) {
+  try { localStorage.setItem(MAP_CENTRE_KEY, JSON.stringify(centre)); } catch {}
+}
+
+function loadMapZoom() {
+  try {
+    const v = parseInt(localStorage.getItem(MAP_ZOOM_KEY), 10);
+    if (v >= 0 && v < MAP_ZOOM_RADII_KM.length) return v;
+  } catch {}
+  return 1;
+}
+
+function saveMapZoom(index) {
+  try { localStorage.setItem(MAP_ZOOM_KEY, String(index)); } catch {}
+}
+
+// "Previous" means the previous ADOPTED location — the last place a
+// forecast was actually fetched for — not the previous view. A view is
+// wherever the map happened to be mid-drag, which changes constantly and
+// is useless as a destination; an adopted location is somewhere you
+// deliberately went.
+// NOTE: the Back button was removed from map.html — fast, smooth
+// dragging made "go back to the previous adopted location" redundant
+// enough not to be worth a slot in a four-control row. loadPreviousAdopted()
+// and backButtonEnabled() below are therefore currently unused, and are
+// kept (rather than deleted along with the button) only because
+// savePreviousAdopted IS still called on adopt/Home, so the stored value
+// stays correct and the button could be restored without rebuilding its
+// state handling. If Back is still absent in a few months, delete all
+// three together.
+function loadPreviousAdopted() {
+  try {
+    const raw = localStorage.getItem(MAP_PREVIOUS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}
+
+function savePreviousAdopted(entry) {
+  try { localStorage.setItem(MAP_PREVIOUS_KEY, JSON.stringify(entry)); } catch {}
+}
+
+// Built and wired, then put behind a setting that defaults on, rather
+// than built and hidden. Hidden-but-live code doesn't get exercised, so
+// it rots quietly and fails against state that changed shape underneath
+// it. Behind a default-on toggle it is used, and if it is still switched
+// off in three months it can be deleted knowing exactly what it does.
+function backButtonEnabled() {
+  try { return localStorage.getItem(MAP_BACK_ENABLED_KEY) !== "off"; } catch { return true; }
+}
+
+let mapCentre = loadMapCentre();
+let mapZoomIndex = loadMapZoom();
+
+// ---------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------
+const mapCanvas = document.getElementById("mapCanvas");
+const mapStatusEl = document.getElementById("mapStatus");
+const mapHourInput = document.getElementById("mapHour");
+// The HTML attribute is left at step="1" — this is the one place that
+// actually applies MAP_HOUR_STEP, so reverting that single constant is
+// the whole story regardless of what map.html happens to say.
+if (mapHourInput) mapHourInput.step = String(MAP_HOUR_STEP);
+
+function mapHourValue() {
+  // parseFloat, not parseInt — parseInt truncates "2.5" straight down
+  // to 2, silently discarding the half-hour position entirely. Harmless
+  // either way at MAP_HOUR_STEP === 1, since the slider only ever holds
+  // whole numbers then.
+  return mapHourInput ? parseFloat(mapHourInput.value) || 0 : 0;
+}
+
+// "+7h" makes you do the arithmetic before you can act on it. The
+// question being asked is "will it be raining when I get there", and
+// that is a clock time. Days are named once they stop being today,
+// because "09:00" alone is ambiguous over a 48-hour slider.
+//
+// Reads the grid's own hourly timestamps rather than adding
+// hoursAhead*3600000 to the exact current instant — Open-Meteo's hourly
+// buckets always land on the hour, but "now" usually doesn't, so that
+// arithmetic used to show things like "03:36" for the +1h mark. That
+// implies a precision (rain arriving at exactly 03:36, not 03:00 or
+// 04:00) the forecast never claimed — same hour-only convention as the
+// front page's own hourly slider and every other scrolling view in the
+// app. Falls back to the old arithmetic only in the brief window before
+// the first grid has loaded.
+function mapHourClock(hoursAhead) {
+  const times = mapGrid?.times;
+  let when;
+  if (times && times[Math.floor(hoursAhead)] !== undefined) {
+    // A fractional hoursAhead (see MAP_HOUR_STEP) is a genuine midpoint
+    // between two real hourly timestamps already in the grid — computed
+    // as such here, rather than falling through to the plain-arithmetic
+    // branch below, which anchors to the actual live clock instead of
+    // the grid's own reference time and would quietly drift out of step
+    // with it by however stale the cached grid happens to be. At a
+    // whole-number hoursAhead this is exactly times[hoursAhead], same
+    // as before.
+    const h0 = Math.floor(hoursAhead), h1 = Math.min(h0 + 1, times.length - 1);
+    const t0 = Date.parse(times[h0]), t1 = Date.parse(times[h1]);
+    when = new Date(t0 + (t1 - t0) * (hoursAhead - h0));
+  } else {
+    when = new Date(Date.now() + hoursAhead * 3600000);
+  }
+  const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const isToday = when.toDateString() === new Date().toDateString();
+  if (hoursAhead === 0) return `Now, ${time}`;
+  if (isToday) return time;
+  return `${when.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+}
+
+// Shorthand conditions at the crosshair (mapCentre — wherever the map
+// is currently centred on, the same point "Forecast for here" would
+// adopt) for whichever hour the slider is on. Only for layers actually
+// switched on, matching what's drawn: showing a rain figure while the
+// rain layer itself is hidden would read as data appearing from
+// nowhere. compassLabel() comes from app.js, already loaded before this
+// file on every page that includes the map.
+function buildMapReadout(hour) {
+  if (!mapGrid) return "";
+  const parts = [];
+
+  if (mapLayerVisible("wind")) {
+    const speed = sampleGrid(mapGrid, "windSpeed", hour, mapCentre.lat, mapCentre.lon);
+    const dir = sampleWindDir(mapGrid, hour, mapCentre.lat, mapCentre.lon);
+    if (speed !== null && dir !== null) parts.push(`${compassLabel(dir)} ${Math.round(speed)}mph`);
+  }
+  if (mapLayerVisible("rain")) {
+    const rain = sampleGrid(mapGrid, "rain", hour, mapCentre.lat, mapCentre.lon);
+    if (rain !== null && rain !== undefined) {
+      parts.push(rain < RAIN_BAND_THRESHOLDS[0] ? "dry" : `${rain.toFixed(1)}mm/hr`);
+    }
+  }
+  if (mapLayerVisible("temperature")) {
+    const temp = sampleGrid(mapGrid, "temp", hour, mapCentre.lat, mapCentre.lon);
+    if (temp !== null && temp !== undefined) parts.push(`${Math.round(temp)}°C`);
+  }
+  if (mapLayerVisible("pressure")) {
+    const pressure = sampleGrid(mapGrid, "pressure", hour, mapCentre.lat, mapCentre.lon);
+    if (pressure !== null && pressure !== undefined) parts.push(`${Math.round(pressure)}hPa`);
+  }
+  if (mapLayerVisible("cloud")) {
+    const low = sampleGrid(mapGrid, "cloudLow", hour, mapCentre.lat, mapCentre.lon);
+    const mid = sampleGrid(mapGrid, "cloudMid", hour, mapCentre.lat, mapCentre.lon);
+    const high = sampleGrid(mapGrid, "cloudHigh", hour, mapCentre.lat, mapCentre.lon);
+    if (low !== null && low !== undefined) {
+      parts.push(`${Math.round(effectiveCloudCover(low, mid, high))}% cloud`);
+    }
+  }
+
+  return parts.join(" · ");
+}
+
+function setMapStatus(message) {
+  if (!mapStatusEl) return;
+  mapStatusEl.textContent = message || "";
+  mapStatusEl.classList.toggle("is-error", !!message);
+}
+
+function sizeMapCanvas() {
+  if (!mapCanvas) return;
+  const rect = mapCanvas.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  mapCanvas.width = Math.round(rect.width * dpr);
+  mapCanvas.height = Math.round(rect.height * dpr);
+}
+
+// ---------------------------------------------------------------------
+
+function renderMap() {
+  if (!mapCanvas) return;
+  const ctx = mapCanvas.getContext("2d");
+  const dpr = mapCanvas.width / (mapCanvas.getBoundingClientRect().width || mapCanvas.width);
+  // Everything after this draws in CSS pixels and comes out sharp.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const view = makeView(mapCanvas, mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
+  mapLayers.forEach(layer => {
+    ctx.save();
+    try { layer.draw(ctx, view); } catch { /* one bad layer must not blank the map */ }
+    ctx.restore();
+  });
+  // Legends describe which layers are switched on and their colour
+  // ramps — neither depends on where the map is centred, only on
+  // toggle/palette state. Rebuilding this DOM tree (several elements
+  // per active layer) on every single pointermove frame was pure waste
+  // and part of what made dragging feel frozen — skipped while panning,
+  // rebuilt once more when the drag settles (see endPan below) so it's
+  // never actually stale for more than the length of one drag.
+  if (!mapIsPanning) renderMapLegends();
+  updateMapChrome();
+}
+
+function updateMapChrome() {
+  const scale = document.getElementById("mapScale");
+  if (scale) {
+    const stale = mapGrid && Date.now() - mapGridFetchedAt > MAP_STALE_MS;
+    const hour = mapHourValue();
+    const readout = buildMapReadout(hour);
+    // The zoom-distance figure ("62mi across") that used to live here
+    // has been dropped outright rather than just relocated — it was
+    // reported as clutter the pill didn't need, not as something
+    // missing a clear home. mapHourClock's own "Now, " prefix (meant
+    // for the Hour slider's label, where saying "you're at Now" is the
+    // point) is stripped here too — in this pill the time itself is
+    // already the whole story, so pill-specific formatting rather than
+    // changing mapHourClock, which mapHourLabel below still uses as-is.
+    const clock = mapHourClock(hour).replace(/^Now, /, "");
+    scale.textContent = clock + (readout ? ` · ${readout}` : "") + (stale ? " · older data" : "");
+  }
+
+  const hourLabel = document.getElementById("mapHourLabel");
+  if (hourLabel) hourLabel.textContent = mapHourClock(mapHourValue());
+
+  const adopt = document.getElementById("mapAdopt");
+  if (adopt) {
+    // Plain label, no distance. It used to append "(N km out)" so that
+    // pressing it was never a surprise about WHERE "here" was — but
+    // that made the button's width jump around constantly while
+    // panning, and it was the widest thing in a row that now has to fit
+    // four controls. The crosshair already shows exactly where "here"
+    // is, which was the real reassurance; the number was a second,
+    // costlier way of saying the same thing.
+    adopt.textContent = "Forecast for here";
+  }
+
+  const home = document.getElementById("mapHome");
+  if (home) home.disabled = !homeCoords();
+
+  // Index 0 is the CLOSEST zoom (see MAP_ZOOM_RADII_KM), so "in"
+  // decreases it and "out" increases it. Disabled rather than hidden at
+  // the limits: a control that vanishes shifts the whole row sideways
+  // and moves the other buttons out from under your thumb.
+  const zoomIn = document.getElementById("mapZoomIn");
+  if (zoomIn) zoomIn.disabled = mapZoomIndex <= 0;
+  const zoomOut = document.getElementById("mapZoomOut");
+  if (zoomOut) zoomOut.disabled = mapZoomIndex >= MAP_ZOOM_RADII_KM.length - 1;
+}
+
+// ---------------------------------------------------------------------
+// Panning and tap
+//
+// Single-finger drag, which means touch-action: none on the canvas —
+// the canvas stops the page scrolling over itself. That is why drag
+// exists ONLY on this page and the front-page strip is tap-only: a
+// scroll-blocking canvas inside a scrolling column feels broken.
+//
+// Double-tap-to-zoom (in, recentring on wherever was tapped; wrapping
+// back out to the widest view once already at the closest level) was
+// removed after the buttons below took over as the primary way to
+// zoom — the two were colliding: a tap on a saved-place marker,
+// followed shortly by an ordinary tap elsewhere, could read as a
+// double-tap and zoom unexpectedly. One clear way to zoom (the
+// buttons) beat two overlapping ones. Tap itself stays — it's still
+// how a saved-place marker gets hit.
+// ---------------------------------------------------------------------
+let panPointerId = null;
+let panLast = null;
+let panStart = null;
+let panMoved = false;
+
+// True for the duration of an actual drag (once movement has crossed
+// MAP_TAP_MOVE_TOLERANCE_PX below — a tap never sets this at all). Read
+// by the terrain layer (skips its expensive per-pixel pass entirely
+// while this is true) and by renderMap() (skips the legend DOM rebuild)
+// — see both for why. Reset to false, and both skipped things brought
+// back for one full-quality render, as soon as the drag ends.
+let mapIsPanning = false;
+
+// Coalesces pointermove into at most one renderMap() per animation
+// frame. Previously every single pointermove event called renderMap()
+// directly and synchronously — a touch surface can report far more of
+// these than the screen can actually redraw for, so a fast drag queued
+// up many full redraws back to back with no chance to catch up between
+// them. Confirmed on-device as multi-second freezes during dragging.
+// This keeps only the latest position (mapCentre is already updated
+// synchronously below — cheap arithmetic — only the expensive redraw
+// itself is deferred and coalesced).
+let mapPanRenderQueued = false;
+function scheduleMapRender() {
+  if (mapPanRenderQueued) return;
+  mapPanRenderQueued = true;
+  requestAnimationFrame(() => {
+    mapPanRenderQueued = false;
+    renderMap();
+  });
+}
+
+const MAP_TAP_MOVE_TOLERANCE_PX = 10; // beyond this it's a drag, not a tap
+const MAP_TAP_MAX_DURATION_MS = 400;
+
+if (mapCanvas) {
+  mapCanvas.addEventListener("pointerdown", e => {
+    // touch-action: none (style.css) should be enough on its own per
+    // spec, but WebKit has a known history of still letting its own
+    // gesture recognizer briefly arm on touchstart regardless — this
+    // claims the touch as early and explicitly as possible, which is a
+    // stronger, more direct signal than touch-action alone in practice
+    // on some iOS versions. Flagged honestly: this is the standard fix
+    // for exactly the symptom described (a pause before the drag
+    // visibly starts, easing once already moving), not something
+    // verified against the specific device — worth confirming it
+    // actually closes the gap once tried, rather than assuming it does.
+    e.preventDefault();
+    panPointerId = e.pointerId;
+    panLast = { x: e.clientX, y: e.clientY };
+    panStart = { x: e.clientX, y: e.clientY, time: Date.now() };
+    panMoved = false;
+    // Set true here, on first touch, rather than waiting for movement
+    // to cross MAP_TAP_MOVE_TOLERANCE_PX (see pointermove below). It
+    // used to wait — meaning every drag's first few pixels of movement
+    // still ran the FULL render (terrain, temperature, pressure all
+    // included), before the fast path this flag exists for had even
+    // switched on. Confirmed on-device as the actual cause of a
+    // specific, repeatable lag: a pause right at the start of every new
+    // touch, real finger movement piling up during it, then a sudden
+    // catch-up once movement crossed the threshold and the fast
+    // renders kicked in. Reset unconditionally at the top of endPan
+    // below — including for a plain tap that never becomes a drag at
+    // all — so this never stays stuck on past the touch that set it.
+    mapIsPanning = true;
+    mapCanvas.setPointerCapture(e.pointerId);
+  });
+
+  mapCanvas.addEventListener("pointermove", e => {
+    if (e.pointerId !== panPointerId || !panLast) return;
+    // mapIsPanning is already true from pointerdown — this only needs
+    // to track panMoved now, which distinguishes an actual drag from a
+    // tap (endPan uses it) and has different tolerances for a reason:
+    // a tap should stay a tap even with a pixel or two of natural
+    // finger wobble.
+    if (Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y) > MAP_TAP_MOVE_TOLERANCE_PX) {
+      panMoved = true;
+    }
+    // No dpr correction here any more: pointer coordinates and the
+    // view are both in CSS pixels now.
+    const view = makeView(mapCanvas, mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
+    const dxKm = (e.clientX - panLast.x) / view.pxPerKm;
+    const dyKm = (e.clientY - panLast.y) / view.pxPerKm;
+    mapCentre = {
+      lat: mapCentre.lat + dyKm / KM_PER_DEG_LAT,
+      lon: mapCentre.lon - dxKm / kmPerDegLon(mapCentre.lat)
+    };
+    panLast = { x: e.clientX, y: e.clientY };
+    // Was a direct renderMap() call here — see scheduleMapRender()'s own
+    // comment above for why that was the main cause of the freeze.
+    scheduleMapRender();
+  });
+
+  function endPan(e) {
+    if (e.pointerId !== panPointerId) return;
+    panPointerId = null;
+    const wasTap = !panMoved && Date.now() - panStart.time < MAP_TAP_MAX_DURATION_MS;
+    panLast = null;
+    // Reset unconditionally, before any branch below — pointerdown sets
+    // this true on first touch (see its own comment there), so every
+    // exit path from here needs to clear it again, including a plain
+    // tap that hits a saved-place marker and returns early just below.
+    // Left stuck true past this point would mean that marker's own
+    // renderMap() call — and every render after it, until the next
+    // drag completes — silently kept skipping terrain/temperature/
+    // pressure. A real regression, not just a missed optimisation.
+    mapIsPanning = false;
+
+    if (wasTap) {
+      // A tap on a saved-place marker jumps straight there rather than
+      // falling through to the ordinary drag-end handling below.
+      const rect = mapCanvas.getBoundingClientRect();
+      const tapX = e.clientX - rect.left, tapY = e.clientY - rect.top;
+      const hitMarker = mapSavedPlaceHitboxes.find(m => Math.hypot(m.x - tapX, m.y - tapY) <= m.radius);
+      if (hitMarker) {
+        goTo(hitMarker.place, { remember: true });
+        return;
+      }
+      // Same recentre-only behaviour as a weather-place marker above —
+      // see the tide-locations layer's own comment for why this
+      // deliberately doesn't also adopt the location as a weather spot.
+      const hitTide = mapTideLocationHitboxes.find(m => Math.hypot(m.x - tapX, m.y - tapY) <= m.radius);
+      if (hitTide) {
+        goTo({ lat: hitTide.location.lat, lon: hitTide.location.lon }, { remember: true });
+        return;
+      }
+    }
+
+    // Drag is genuinely over — restore terrain and the legend rebuild
+    // (both skipped mid-drag, see mapIsPanning's own comment) with one
+    // full-quality render right away, rather than waiting on the
+    // network round-trip below. ensureGrid usually resolves instantly
+    // anyway (it only refetches if the drag left the previously-fetched
+    // margin), but "usually instant" still isn't "synchronous", and
+    // terrain reappearing should never be held up behind a weather
+    // fetch that may not even be happening.
+    renderMap();
+
+    saveMapCentre(mapCentre);
+    // Only refetches if the drag left the margin — panning back and
+    // forth over the same ground costs nothing.
+    ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
+    loadTerrainData();
+  }
+  mapCanvas.addEventListener("pointerup", endPan);
+  mapCanvas.addEventListener("pointercancel", endPan);
+}
+
+// ---------------------------------------------------------------------
+// Controls
+// ---------------------------------------------------------------------
+function goTo(centre, { remember } = {}) {
+  if (remember) savePreviousAdopted({ lat: mapCentre.lat, lon: mapCentre.lon });
+  mapCentre = { lat: centre.lat, lon: centre.lon };
+  saveMapCentre(mapCentre);
+  ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
+  loadTerrainData();
+  renderMap();
+}
+
+document.getElementById("mapHome")?.addEventListener("click", () => {
+  const home = homeCoords();
+  if (home) goTo(home, { remember: true });
+});
+
+// Explicit zoom buttons — now the only way to zoom, after double-tap-
+// to-zoom was tried, then kept alongside these once iOS's own
+// double-tap gesture made it unreliable on its own, then removed
+// entirely once it started colliding with taps on saved-place markers
+// (see the panning section above for the full history). A plain
+// button can't be intercepted by an OS gesture, and can't be confused
+// with an unrelated tap elsewhere on the map either.
+//
+// Deliberately do NOT recentre on anything — they zoom around wherever
+// the map is already centred, which is what the crosshair is pointing
+// at. There's no tapped point to recentre on any more, since there's
+// no tap gesture driving this at all.
+function stepMapZoom(delta) {
+  const next = mapZoomIndex + delta;
+  if (next < 0 || next > MAP_ZOOM_RADII_KM.length - 1) return;
+  mapZoomIndex = next;
+  saveMapZoom(mapZoomIndex);
+  renderMap();
+  ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
+  loadTerrainData();
+}
+
+// -1 zooms IN because index 0 is the closest tier — see MAP_ZOOM_RADII_KM.
+// blur() after each tap — an iOS habit, not a bug in this app's own
+// CSS: these buttons carry no custom :active/:focus styling of their
+// own, so the "stuck filled-in" look reported after tapping zoom is
+// WebKit's default focus/active appearance on a touch-activated
+// button, which iOS doesn't clear until focus moves elsewhere (a
+// desktop browser clears it on its own mouseup in a way touch never
+// quite mirrors). Explicitly dropping focus the moment the tap is
+// handled is the standard fix, and does nothing on desktop/keyboard
+// use beyond returning focus to the page afterwards.
+document.getElementById("mapZoomIn")?.addEventListener("click", e => { stepMapZoom(-1); e.currentTarget.blur(); });
+document.getElementById("mapZoomOut")?.addEventListener("click", e => { stepMapZoom(1); e.currentTarget.blur(); });
+
+// Promise-based, standing in for confirm() specifically because a
+// native dialog's buttons are OS-controlled and can't be relabelled at
+// all — its default "Cancel" read as "cancel adopting the forecast",
+// when Cancel here only ever meant "don't ALSO save this as a place"
+// (adopting happens either way, see the click handler below). Plain
+// Yes/No removes that ambiguity. Kept as a plain function returning a
+// Promise, not baked into the click handler directly, so the await
+// below reads the same way confirm() itself used to.
+function askMapSaveConfirm() {
+  const backdrop = document.getElementById("mapSaveConfirmBackdrop");
+  const dialog = document.getElementById("mapSaveConfirm");
+  const yesButton = document.getElementById("mapSaveConfirmYes");
+  const noButton = document.getElementById("mapSaveConfirmNo");
+  if (!backdrop || !dialog || !yesButton || !noButton) return Promise.resolve(false);
+
+  return new Promise(resolve => {
+    function cleanup(result) {
+      backdrop.hidden = true;
+      dialog.hidden = true;
+      yesButton.removeEventListener("click", onYes);
+      noButton.removeEventListener("click", onNo);
+      backdrop.removeEventListener("click", onNo);
+      resolve(result);
+    }
+    function onYes() { cleanup(true); }
+    // Tapping the dimmed backdrop counts as "No" — the same "outside a
+    // popover closes it without committing" convention the Go-to menu
+    // already uses, and the safer of the two answers to default a
+    // stray tap toward regardless.
+    function onNo() { cleanup(false); }
+    yesButton.addEventListener("click", onYes);
+    noButton.addEventListener("click", onNo);
+    backdrop.addEventListener("click", onNo);
+    backdrop.hidden = false;
+    dialog.hidden = false;
+  });
+}
+
+// Was two separate buttons — "Forecast for here" (adopt + navigate) and
+// "Add to forecast" (bookmark, stay put) — merged into one now that the
+// second no longer needs its own slot in an already-full control row.
+//
+// The save is AWAITED before navigating away, not fired-and-forgotten:
+// resolveLocation is a network round-trip, and location.href changing
+// while that's still in flight risks the browser cancelling it
+// mid-request — losing the very thing someone just said yes to saving.
+// A brief pause before leaving the page is the honest trade for that
+// actually working reliably.
+document.getElementById("mapAdopt")?.addEventListener("click", async () => {
+  if (await askMapSaveConfirm()) {
+    const postcodeStr = `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`;
+    const places = loadPlaces();
+    if (!places.some(place => place.postcode === postcodeStr)) {
+      try {
+        const resolved = await resolveLocation(postcodeStr);
+        places.push({ postcode: postcodeStr, label: resolved.label || postcodeStr });
+        savePlaces(places);
+      } catch {
+        // Couldn't resolve it well enough to save a bookmark — the
+        // adopt below still goes ahead regardless; failing to save an
+        // optional extra shouldn't block the thing actually being
+        // asked for.
+      }
+    }
+  }
+
+  savePreviousAdopted({ lat: mapCentre.lat, lon: mapCentre.lon });
+  // Adoption is deliberate and never accidental, because every adopted
+  // centre becomes a new coordinate-based areaCode with no FFV, no
+  // eligibility, and a year-long backfill behind it. Free-panning that
+  // adopted automatically would quietly spawn dozens of half-learned
+  // areas.
+  try {
+    localStorage.setItem(CURRENT_POSTCODE_KEY, `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`);
+  } catch {}
+  location.href = "index.html";
+});
+
+// "Go to" — a plain dropdown, not the sheet overlay used elsewhere in
+// the app (tide/fishing detail) — this page has no sheet markup at all,
+// and a short list of saved places doesn't need one. Mirrors the front
+// page's own place-chip menu (index.html/app.js) rather than inventing
+// a second pattern for the same basic interaction.
+const mapGoToButton = document.getElementById("mapGoTo");
+const mapGoToMenu = document.getElementById("mapGoToMenu");
+
+function closeMapGoToMenu() {
+  if (mapGoToMenu) mapGoToMenu.hidden = true;
+  if (mapGoToButton) mapGoToButton.setAttribute("aria-expanded", "false");
+}
+
+function renderMapGoToMenu() {
+  if (!mapGoToMenu) return;
+  mapGoToMenu.innerHTML = "";
+  const places = loadPlaces();
+  if (!places.length) {
+    const empty = document.createElement("p");
+    empty.className = "map-goto-empty";
+    empty.textContent = "No saved places yet — try \u201cForecast for here\u201d and choose to save it.";
+    mapGoToMenu.appendChild(empty);
+    return;
+  }
+  places.forEach(place => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "map-goto-item";
+    item.textContent = place.label || place.postcode;
+    item.addEventListener("click", async () => {
+      closeMapGoToMenu();
+      // Not pre-resolved — a saved place is a postcode/name/coordinate
+      // STRING (see the saved-places note above), so jumping to one
+      // needs the same lookup as plotting it does. Usually fast; this
+      // has no separate loading state because the map itself doesn't
+      // move until it resolves, which is feedback enough for a single
+      // deliberate tap.
+      try {
+        const resolved = await resolveLocation(place.postcode);
+        goTo({ lat: resolved.lat, lon: resolved.lon }, { remember: true });
+      } catch {
+        // Couldn't resolve right now (offline, a postcode that's since
+        // stopped working) — the entry stays in the list for next time
+        // rather than being removed over a transient failure.
+      }
+    });
+    mapGoToMenu.appendChild(item);
+  });
+}
+
+mapGoToButton?.addEventListener("click", () => {
+  const isOpen = mapGoToMenu && !mapGoToMenu.hidden;
+  if (isOpen) {
+    closeMapGoToMenu();
+  } else {
+    renderMapGoToMenu();
+    if (mapGoToMenu) mapGoToMenu.hidden = false;
+    mapGoToButton.setAttribute("aria-expanded", "true");
+  }
+});
+
+// Tapping anywhere outside the menu closes it — same convention as the
+// front page's place-chip menu. Deliberately `.contains()` rather than
+// `=== mapGoToButton`: a tap on the button's own SVG icon has that SVG
+// (or its inner <path>) as e.target, not the <button> itself, so a
+// strict reference check treated the button's OWN opening click as an
+// outside click and closed the menu again in the same event — found by
+// actually running this rather than just reading it back.
+document.addEventListener("click", e => {
+  if (!mapGoToMenu || mapGoToMenu.hidden) return;
+  if (mapGoToMenu.contains(e.target) || mapGoToButton.contains(e.target)) return;
+  closeMapGoToMenu();
+});
+
+// Manual dragging always wins — the "input" listener below stops
+// playback the instant someone touches the slider themselves, the same
+// "a deliberate action beats an automatic one" rule the front page's
+// own hourly view already follows for its 5-second-hold-turned-
+// persistent behaviour.
+let mapHourPlayTimer = null;
+const mapHourPlayButton = document.getElementById("mapHourPlay");
+
+function stopMapHourPlay() {
+  if (mapHourPlayTimer) {
+    clearTimeout(mapHourPlayTimer);
+    mapHourPlayTimer = null;
+  }
+  if (mapHourPlayButton) {
+    mapHourPlayButton.setAttribute("aria-label", "Play");
+    // .hidden does nothing on an inline <svg> (it's an SVGElement, not
+    // an HTMLElement, so the .hidden property doesn't reflect the
+    // attribute the way it does elsewhere) — same fix, same reasoning,
+    // as the front page's own stopHourPlay in app.js, which this now
+    // matches exactly rather than the old plain textContent swap.
+    mapHourPlayButton.querySelector(".hour-play-icon-play").style.display = "";
+    mapHourPlayButton.querySelector(".hour-play-icon-pause").style.display = "none";
+  }
+}
+
+// Was setInterval(..., 700) — a fixed clock, regardless of how long
+// each render actually took. Confirmed on-device as the actual cause
+// of Play showing 2-3 hour "jumps" with Pressure and Temperature
+// switched on: those two are genuinely the most expensive layers
+// (isobars are marching-squares contour tracing; temperature is a
+// full-canvas gradient fill), and once a single renderMap() call takes
+// longer than 700ms, the fixed timer is already overdue the instant it
+// finishes — so the next tick fires almost immediately and does its
+// own long render, and so on. Each tick's own code only ever adds
+// exactly 1 hour; nothing here was skipping steps. What was happening
+// is the BROWSER only gets an idle moment to actually paint a frame to
+// the screen occasionally in between, so several genuine +1 increments
+// could happen invisibly while the screen was still showing the last
+// one it managed to paint — reading as a multi-hour jump that wasn't
+// really there in the data, only in what got displayed.
+//
+// Self-scheduling setTimeout instead: the next step is only ever
+// queued once the current render has actually finished, so the update
+// rate can never outrun what the device can actually draw and paint.
+// Rain-only still plays at roughly the original pace, since a render
+// that finishes well under 700ms just waits out the rest of it as
+// before. With Pressure and Temperature on, the honest trade is that
+// each step now genuinely takes as long as it takes — slower in real
+// seconds when the layers are heavy — rather than silently skipping
+// hours to keep pretending it can hit a fixed cadence it can't sustain.
+function scheduleMapHourPlayStep() {
+  mapHourPlayTimer = setTimeout(() => {
+    // parseFloat + MAP_HOUR_STEP, not the old hardcoded parseInt/+1 —
+    // at MAP_HOUR_STEP === 1 this behaves identically (parseFloat reads
+    // a whole number just as well as parseInt does, and +1 is +1), so
+    // this only starts stepping in halves once that constant does.
+    const next = (parseFloat(mapHourInput.value) || 0) + MAP_HOUR_STEP;
+    mapHourInput.value = next > 47 ? 0 : next;
+    renderMap();
+    scheduleMapHourPlayStep();
+  }, 700);
+}
+
+function startMapHourPlay() {
+  if (mapHourPlayTimer || !mapHourInput) return;
+  scheduleMapHourPlayStep();
+  if (mapHourPlayButton) {
+    mapHourPlayButton.setAttribute("aria-label", "Pause");
+    mapHourPlayButton.querySelector(".hour-play-icon-play").style.display = "none";
+    mapHourPlayButton.querySelector(".hour-play-icon-pause").style.display = "";
+  }
+}
+
+mapHourPlayButton?.addEventListener("click", () => {
+  if (mapHourPlayTimer) stopMapHourPlay(); else startMapHourPlay();
+});
+
+// Stops playback rather than fighting it — a background tab advancing
+// the slider with nobody watching serves no purpose and just wastes a
+// timer.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") stopMapHourPlay();
+});
+
+mapHourInput?.addEventListener("input", () => {
+  stopMapHourPlay();
+  renderMap();
+});
+
+window.addEventListener("resize", () => { sizeMapCanvas(); renderMap(); });
+
+// Layer toggle checkboxes — built once from MAP_LAYER_IDS rather than
+// four near-identical listeners, so adding a fifth layer later is one
+// entry in that array plus a matching checkbox in map.html, not another
+// hand-written block here.
+const mapLayerToggleEls = {};
+MAP_LAYER_IDS.forEach(id => {
+  const el = document.getElementById(`mapLayer_${id}`);
+  if (!el) return;
+  mapLayerToggleEls[id] = el;
+  const toggles = loadMapLayerToggles();
+  el.checked = !!toggles[id];
+  el.addEventListener("change", () => {
+    saveMapLayerToggle(id, el.checked);
+    // Skipped while Play is running, rather than rendering immediately
+    // as usual. This used to fire its own renderMap() straight away —
+    // harmless on its own, but it happens completely outside Play's own
+    // self-paced chain (see scheduleMapHourPlayStep above), so it could
+    // still land at the same moment as Play's own scheduled tick and
+    // compete for the same main thread right when timing matters most.
+    // Confirmed on-device: toggling a layer during Play, even switching
+    // straight back off again afterwards, could leave the hour gap
+    // stuck wrong. mapLayerVisible() reads straight from localStorage on
+    // every draw, so there's nothing stale to worry about — Play's own
+    // very next tick (at most a second away) picks up the change with
+    // no extra render needed. Toggling while paused still renders
+    // immediately, exactly as before.
+    if (!mapHourPlayTimer) renderMap();
+  });
+});
+
+(async function initMap() {
+  sizeMapCanvas();
+  renderMap();
+
+  await resolveMapHome();
+  // Only recentre if nothing was stored — a remembered position must
+  // survive, that being the whole point of remembering it.
+  let stored = null;
+  try { stored = localStorage.getItem(MAP_CENTRE_KEY); } catch {}
+  if (!stored && homeCoords()) mapCentre = { ...homeCoords() };
+  renderMap();
+
+  await loadMapVectors();
+  renderMap();
+  // Fire-and-forget, same reasoning as terrain below: saved places are
+  // decoration on top of the weather map, not something worth delaying
+  // it for. Each one needs its own geocoding lookup, so this can take a
+  // moment on a slow connection — the map is fully usable in the
+  // meantime, markers just appear a beat later.
+  refreshSavedPlacesForMap();
+  await ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex], true);
+  // Terrain is static and cached forever once fetched, so this is
+  // fire-and-forget rather than awaited — it renders itself the
+  // moment it lands, and must never hold up the weather map.
+  //
+  // Held back a moment longer than that, though: the weather grid that
+  // just finished is itself a large multi-location request, and having
+  // terrain's batches land in the same few seconds is what stacks two
+  // heavy requests into one minutely window. Terrain is decoration and
+  // nobody is waiting on it, so giving the weather request room to clear
+  // first costs nothing visible and removes the overlap entirely.
+  loadTerrainData();
+  renderMap();
+})();

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <script>
+    // Applies a saved colour theme before the page paints — see index.html
+    // for the full explanation; duplicated identically in every page's head.
+    (function () {
+      try {
+        var theme = localStorage.getItem("forecast-compare:theme");
+        if (theme && theme !== "mint") document.documentElement.dataset.theme = theme;
+      } catch {}
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+  <!-- maximum-scale=1/user-scalable=no is deliberately only on THIS
+       page, not copied into the other pages' otherwise-identical head.
+       This page has a drag-panning canvas that already blocks the
+       browser's default touch handling (touch-action: none) — iOS's
+       own page-level double-tap/pinch zoom was a real, reported
+       annoyance regardless, landing on the canvas and its surrounding
+       buttons alike during ordinary use ("scrolling around and
+       stabbing at the screen"). Originally this was ALSO fighting the
+       page's own double-tap-to-zoom gesture specifically, before that
+       gesture was removed entirely (see the panning section of map.js
+       for why) — but the plain iOS-zoom-during-ordinary-use annoyance
+       was real on its own and is reason enough to keep this regardless
+       of that gesture's fate. Turning off the BROWSER's zoom here
+       doesn't touch iOS's actual accessibility Zoom feature (Settings >
+       Accessibility > Zoom) — that's a separate, OS-level magnifier
+       unaffected by this setting. What it does remove is casual
+       pinch-to-read-small-text as a fallback, which matters on
+       Compare's table or Settings' labels — neither of which lives on
+       this page, so nothing here is scoped more broadly than the
+       actual complaint. -->
+  <meta name="theme-color" content="#2f6f4f">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cloude">
+  <title>Map — Cloude</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <!-- Reuses the exact same .title-bar/.title-bar-right structure the
+           front page's header already uses (see index.html), rather than
+           a bespoke layout for this page — settings icon left, title
+           centred, and (in place of the front page's place chip)
+           "Back to Cloude" sits in the same right-hand slot. Same classes
+           means same phone/iPad behaviour for free: icon in the true
+           top-left corner on a phone, and icon+back-link grouped at the
+           right of a centred title on iPad — identical to how the front
+           page itself already differs between the two, not a new
+           inconsistency. Replaces the old standalone right-aligned
+           back-link sitting above its own separate, centred <h1>. -->
+      <div class="title-bar">
+        <a href="settings.html" class="settings-icon-button" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="13" cy="5" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="10" x2="18" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="7" cy="10" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="15" x2="18" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="15" cy="15" r="2.3" fill="currentColor"/>
+          </svg>
+        </a>
+        <h1 class="map-page-title">Map</h1>
+        <div class="title-bar-right">
+          <p class="back-link back-link-inline"><a href="index.html">&larr; Back to Cloude</a></p>
+        </div>
+      </div>
+    </header>
+
+    <!-- Controls sit ABOVE the map, not beside or below it: there is more
+         width to spend up here, a thumb reaching the bottom of the screen
+         doesn't cover them, and a side rail would eat into the map itself.
+
+         "Forecast for here" is a plain persistent button rather than a
+         prompt that appears after you stop dragging. A prompt would fire
+         every time you paused to look at something, which is exactly the
+         interrupting behaviour this app deliberately avoids.
+
+         Zoom buttons were originally removed in favour of double-tap
+         alone, then brought back after iOS's own double-tap zoom kept
+         firing through it, making the app's own gesture unreliable — a
+         button can't be intercepted by an OS gesture at all. The
+         double-tap gesture itself has SINCE been removed entirely, not
+         just supplemented (see the panning section of map.js): it was
+         colliding with taps on saved-place markers, where a marker tap
+         followed shortly by an ordinary tap elsewhere could read as a
+         double-tap and zoom unexpectedly. Buttons are now the only way
+         to zoom. Room for them was made by dropping the distance
+         readout from "Forecast for here" (the crosshair already shows
+         where "here" is).
+
+         An on-map arrow pointing toward Home when it was off-screen was
+         tried and removed again — the arrow point clamps to the canvas
+         EDGE along the right angle, which has nothing to do with real
+         geography, so it could land anywhere: over open water, in a
+         town Home has nothing to do with, wherever the angle happened
+         to hit the border. Confirmed on a real device as actively
+         misleading (it looked like Home sat in the Severn estuary) for
+         a feature that was only ever a nice-to-have.
+
+         Home and Go-to briefly lived in their own row in the header,
+         mirroring the front page's title-bar — moved back down here
+         once "Add to forecast" (see map.js) stopped needing its own
+         button, which freed enough width on this single row for all
+         five controls to fit without the header needing a second row
+         at all. -->
+    <div class="map-controls">
+      <button id="mapAdopt" type="button" class="map-adopt map-adopt-compact">Forecast for here</button>
+      <button id="mapZoomIn" type="button" class="map-nav-button map-zoom-button" aria-label="Zoom in">+</button>
+      <button id="mapZoomOut" type="button" class="map-nav-button map-zoom-button" aria-label="Zoom out">&minus;</button>
+      <button id="mapGoTo" type="button" class="map-icon-button" aria-label="Go to a saved place" aria-haspopup="true" aria-expanded="false">
+        <!-- Same downward-pointing triangle as the saved-place markers
+             on the map itself (see map.js), so the button visually
+             reads as "open the list of those triangles" rather than as
+             an unrelated new symbol. -->
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 3 L14 3 L8 13 Z" fill="currentColor"/>
+        </svg>
+      </button>
+      <button id="mapHome" type="button" class="map-icon-button" aria-label="Home">
+        <svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
+          <path d="M9 2 L16 8 L14 8 L14 16 L4 16 L4 8 L2 8 Z" fill="currentColor"/>
+        </svg>
+      </button>
+      <div id="mapGoToMenu" class="map-goto-menu" hidden></div>
+
+      <!-- Replaces a native confirm() for the "also save this place?"
+           question — a native dialog's buttons are OS-controlled and
+           can't be relabelled from the page at all, and its default
+           wording ("Cancel") read as "cancel adopting the forecast",
+           when Cancel here was only ever meant to mean "don't ALSO
+           save it" — adopting itself was never in question either way.
+           Plain Yes/No removes that ambiguity outright. -->
+      <div id="mapSaveConfirmBackdrop" class="map-confirm-backdrop" hidden></div>
+      <div id="mapSaveConfirm" class="map-confirm" role="alertdialog" aria-modal="true" aria-labelledby="mapSaveConfirmText" hidden>
+        <p id="mapSaveConfirmText">Also save this as a place?</p>
+        <div class="map-confirm-actions">
+          <button id="mapSaveConfirmNo" type="button" class="map-confirm-no">No</button>
+          <button id="mapSaveConfirmYes" type="button" class="map-confirm-yes">Yes</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="map-stage">
+      <canvas id="mapCanvas"></canvas>
+      <!-- Drawn in the DOM rather than on the canvas so it never has to be
+           redrawn during a pan — the centre never moves relative to the
+           viewport, only the world underneath it does. -->
+      <div class="map-crosshair" aria-hidden="true"></div>
+      <div id="mapScale" class="map-scale"></div>
+    </div>
+
+    <!-- Independent toggles, not a single-layer picker — see the note by
+         MAP_LAYER_DEFAULTS in map.js for why they can all be on together
+         (and what that costs visually when they are). Cloud added
+         alongside the original four — a single translucent grey wash
+         (see map.js's own Cloud layer note on why it's one wash, not
+         three) combining the three real bands rather than a wash per
+         band. -->
+    <!-- Independent toggles, not a single-layer picker — see the note by
+         MAP_LAYER_DEFAULTS in map.js for why they can all be on together
+         (and what that costs visually when they are). Cloud added
+         alongside the original four — see map.js's own Cloud layer note
+         for why it's one translucent wash rather than a wash per band. -->
+    <div class="map-layer-toggles">
+      <label class="check"><input type="checkbox" id="mapLayer_rain"><span>Rain</span></label>
+      <label class="check"><input type="checkbox" id="mapLayer_wind"><span>Wind</span></label>
+      <label class="check"><input type="checkbox" id="mapLayer_temperature"><span>Temperature</span></label>
+      <label class="check"><input type="checkbox" id="mapLayer_pressure"><span>Pressure</span></label>
+      <label class="check"><input type="checkbox" id="mapLayer_cloud"><span>Cloud</span></label>
+    </div>
+
+    <!-- One row per active colour-wash layer, built by renderMapLegends()
+         in map.js — reads the exact same threshold/ramp arrays the
+         layers themselves paint with, so this can never drift out of
+         sync with what's actually on screen. -->
+    <div id="mapLegends" aria-live="polite"></div>
+
+    <p id="mapStatus" class="actual-status status-error-only"></p>
+
+    <!-- Terrain has no toggle (it's always-on decoration, not a data
+         layer — see map.js), so it had no way at all to tell you
+         something had gone wrong fetching it: failures were console-only,
+         invisible on a phone/tablet with no way to open dev tools. This
+         surfaces exactly what map.js's own weather-grid status already
+         does (a plain named reason, not a generic "something went
+         wrong"), purely so a silent decoration failure is actually
+         diagnosable from the device itself. -->
+    <p id="mapTerrainStatus" class="actual-status status-error-only"></p>
+
+    <section class="controls">
+      <div class="rollback">
+        <!-- Same shape as the front page's own .hour-slider-title now
+             (see index.html) — the icon button sits inline between the
+             two existing labels rather than in its own row below, and
+             is the same shared .hour-play-icon markup/class so the two
+             pages can never visually drift apart again. Was a plain
+             full-size text "Play"/"Pause" button on its own row; moved
+             here specifically because it was asked to match the front
+             page, not because anything about the old placement was
+             broken on its own. -->
+        <div class="rollback-title">
+          <strong>Hour</strong>
+          <button id="mapHourPlay" type="button" class="hour-play-icon" aria-label="Play">
+            <svg class="hour-play-icon-play" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1 0 L10 5 L1 10 Z" fill="currentColor"/>
+            </svg>
+            <svg class="hour-play-icon-pause" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="display:none">
+              <rect x="0" y="0" width="3" height="10" fill="currentColor"/>
+              <rect x="6" y="0" width="3" height="10" fill="currentColor"/>
+            </svg>
+          </button>
+          <span id="mapHourLabel">Now</span>
+        </div>
+        <input id="mapHour" type="range" min="0" max="47" step="1" value="0">
+        <div class="range-labels">
+          <span>Now</span>
+          <span>+24h</span>
+          <span>+48h</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Reduced to Settings alone — Compare/Solar/Help all live behind it
+         now, and "← Back to Cloude" above already covers the one other
+         place people actually jump to from here. A four-link row cost
+         more vertical space than it earned on a page whose whole point is
+         the map itself; see the deeper #mapCanvas aspect-ratio in
+         style.css, freed up by the same trim. -->
+  </main>
+
+  <script src="app.js"></script>
+  <script src="tide.js"></script>
+  <script src="map.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    }
+  </script>
+</body>
+</html>
