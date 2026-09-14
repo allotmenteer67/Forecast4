@@ -2209,6 +2209,40 @@ async function runLoadLocationData(force = false) {
     // there's simply no listener and this is a no-op.
     document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat, lon } }));
 
+    // Mark the display settled and cache the snapshot HERE — the moment
+    // the data itself is complete — rather than only at the very bottom
+    // of this function, after all the bookkeeping below has finished.
+    //
+    // This was a real and badly-timed gap. Everything below is
+    // bookkeeping, and some of it (the one-off backfill for a genuinely
+    // new area) is many more network round trips that can run for a long
+    // time on a real connection. Until it finished, currentDisplayIsComplete
+    // stayed false and no snapshot was written — so a place that had
+    // visibly finished loading on screen still had nothing cached for it.
+    // Switching to it (swipe, chip, saved-place tap) therefore found no
+    // snapshot, took the cold path, blanked the headline, and re-fetched
+    // everything from scratch: measured at 6-10s even against a fast
+    // local mock, and far worse on a phone. From the outside that reads
+    // as "the chip name changed and nothing else did".
+    //
+    // The superseded branch a few lines above ALREADY caches at exactly
+    // this point, for exactly this reason ("this fetch genuinely
+    // completed for requestedFor"). The same is just as true when the
+    // request was not superseded — so this makes the two paths agree
+    // rather than leaving the normal, successful case as the only one
+    // that waits.
+    //
+    // The identical block at the bottom of this function is deliberately
+    // left in place: it re-renders and re-caches once the bookkeeping has
+    // genuinely finished, refreshing the snapshot's timestamp. This is a
+    // strictly earlier addition, not a move.
+    currentDisplayIsComplete = true;
+    renderActualStatus();
+    renderRealSourceStatus();
+    renderHeadline();
+    renderTable();
+    cacheCurrentLocationSnapshot();
+
     // Everything from here on is bookkeeping (learning FFV, and the
     // one-off backfill for a genuinely new area) rather than data the
     // page needs to show. If any of it throws, the fetches above still
