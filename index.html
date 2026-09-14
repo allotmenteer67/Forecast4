@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <script>
+    // Applies a saved colour theme before the page paints, so navigating
+    // between pages doesn't flash back to Mint for a frame before app.js
+    // catches up (same trick a standard dark-mode toggle uses). Duplicated
+    // in each HTML file's <head> since this is a plain multi-page static
+    // site with no shared <head> to place it in once.
+    (function () {
+      try {
+        var theme = localStorage.getItem("forecast-compare:theme");
+        if (theme && theme !== "mint") document.documentElement.dataset.theme = theme;
+      } catch {}
+    })();
+  </script>
+  <!-- viewport-fit=cover lets the page draw into the notch/status-bar
+       strip instead of iOS reserving it and leaving it blank — that blank
+       strip was the stubborn gap above "Cloude". Drawing there makes the
+       page responsible for keeping content clear of it, which is what the
+       env(safe-area-inset-top) padding in style.css's .app rule does.
+       map.html already had this; the front page didn't. -->
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#2f6f4f">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cloude">
+  <title>Cloude</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app app-home">
+    <header>
+      <div class="title-bar">
+        <a href="settings.html" class="settings-icon-button" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="13" cy="5" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="10" x2="18" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="7" cy="10" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="15" x2="18" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="15" cy="15" r="2.3" fill="currentColor"/>
+          </svg>
+        </a>
+        <h1>Cloude</h1>
+        <div class="title-bar-right">
+          <button id="placeChip" class="place-chip" type="button" aria-haspopup="true" aria-expanded="false">
+            <span id="placeChipLabel">TA6</span>
+            <span class="place-chip-caret" aria-hidden="true">&#9662;</span>
+          </button>
+        </div>
+        <div id="placeMenu" class="place-menu" hidden>
+          <div id="placeMenuList"></div>
+          <a class="place-menu-manage" href="settings.html">Manage places</a>
+        </div>
+      </div>
+    </header>
+
+    <!-- Static preview, not a mini pannable map — tap opens map.html for
+         real interaction. Centred on wherever the front page is
+         currently showing. See mapstrip3.js.
+
+         Rebuilt from scratch — two previous versions (a <canvas>, then
+         an <svg>) both went permanently blank after certain page
+         transitions, for a reason an extended, evidence-led debugging
+         session was never able to pin down (every standard diagnostic —
+         thrown errors, page-lifecycle events, even plain alert() —
+         stopped producing any signal at all partway through, on a
+         brand new repo, ruling out caching/deployment as the cause).
+         Starting genuinely clean rather than layering another fix on
+         top of two already-mysterious failures. -->
+    <a href="map.html" class="map-strip" aria-label="Open the map">
+      <div id="mapStripRoot" class="map-strip-root">Loading map…</div>
+    </a>
+
+    <section class="headline">
+      <p id="headlineDate" class="headline-date"><span id="headlineDateText"></span><button id="headlineRefreshButton" class="card-refresh-button" type="button" aria-label="Refresh weather"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.9,2.88 A5.2,5.2 0 1 1 2.8,8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M2.8,5.4 L0.5,8.3 L5.1,8.3 Z" fill="currentColor"/></svg></button><span id="headlineDatePlace" class="headline-date-place"></span></p>
+      <div id="headlineStatusBlock" class="headline-status-block" hidden>
+        <p id="headlineStatus" class="headline-status-text"></p>
+        <button id="headlineRetry" type="button" class="headline-retry-button">Retry</button>
+      </div>
+      <div id="headlineGrid" class="headline-grid"></div>
+      <div class="hour-slider">
+        <div class="hour-slider-title">
+          <span>Today</span>
+          <!-- Sits between the two existing labels rather than on a row
+               of its own — the ask was Play without spending another
+               row on it, and this row already had room going spare
+               between "Today" and the time readout. Icon rather than
+               the map page's text "Play"/"Pause" button: there's far
+               less width to work with here than a whole control row. -->
+          <button id="hourPlayButton" type="button" class="hour-play-icon" aria-label="Play">
+            <svg class="hour-play-icon-play" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1 0 L10 5 L1 10 Z" fill="currentColor"/>
+            </svg>
+            <svg class="hour-play-icon-pause" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="display:none">
+              <rect x="0" y="0" width="3" height="10" fill="currentColor"/>
+              <rect x="6" y="0" width="3" height="10" fill="currentColor"/>
+            </svg>
+          </button>
+          <span id="hourLabel">+48h</span>
+        </div>
+        <input id="hourSlider" type="range" min="0" max="48" step="1" value="0">
+      </div>
+    </section>
+
+    <!-- Tide and fishing sit side by side rather than stacked. They always
+         share a location — swiping the pair re-renders both for the same
+         place — so one row of two reads as a single subject, and it saves
+         roughly the height of one card, which is what makes room for the
+         map strip that will eventually sit above the headline.
+
+         Each card keeps its own background colour: that colour is how you
+         tell them apart at a glance, and merging them into one card lost
+         that distinction.
+
+         If only one is enabled in Settings, the other gets the hidden
+         attribute and the survivor takes the full width automatically —
+         see .tide-fishing-pair in style.css.
+
+         The whole pair is the swipe target (see tide-ui.js) — swiping
+         either card cycles to the next saved tide location and re-renders
+         both, tapping either card opens its own sheet as before. This
+         used to be tide-only, with a row of small place-dot icons below
+         the pair as the only way to switch location from the fishing
+         side; both the tide-only restriction and the dots are gone now
+         that the pair itself is one swipe target. -->
+    <div id="tideFishingPair" class="tide-fishing-pair">
+      <section class="tide-card">
+        <button id="tideRow" class="tide-row" type="button" hidden></button>
+      </section>
+
+      <section class="fishing-card">
+        <button id="fishingRefreshButton" class="card-refresh-button fishing-refresh-button" type="button" aria-label="Refresh fishing forecast"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.9,2.88 A5.2,5.2 0 1 1 2.8,8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M2.8,5.4 L0.5,8.3 L5.1,8.3 Z" fill="currentColor"/></svg></button>
+        <button id="fishingRow" class="tide-row" type="button" hidden></button>
+      </section>
+    </div>
+
+    <section class="controls">
+      <div class="rollback">
+        <div class="rollback-range-line">
+          <span id="rollbackFromDate"></span>
+          <span>Today</span>
+          <span id="rollbackToDate"></span>
+        </div>
+        <input id="rollback" type="range" min="-7" max="7" step="1" value="0">
+      </div>
+    </section>
+  </main>
+
+  <div class="sheet-backdrop" id="sheetBackdrop"></div>
+  <section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+    <button class="sheet-close" id="sheetClose" type="button" aria-label="Close">&times;</button>
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2 class="sheet-title" id="sheetTitle">Rain</h2>
+      <span class="sheet-range" id="sheetRange"></span>
+    </div>
+    <div class="sheet-readout" id="sheetReadout">
+      <span class="sheet-readout-time" id="readoutTime">Now</span>
+      <span class="sheet-readout-cycle" id="readoutCycle" hidden></span>
+      <span class="sheet-readout-value" id="readoutValue"></span>
+    </div>
+    <div id="sheetBody"></div>
+    <p class="sheet-footnote" id="sheetFootnote"></p>
+  </section>
+
+  <script src="app.js"></script>
+  <script src="mapstrip3.js"></script>
+  <script src="tide.js"></script>
+  <script src="tide-ui.js"></script>
+  <script src="fishing.js"></script>
+  <script src="fishing-ui.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    }
+  </script>
+</body>
+</html>
