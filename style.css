@@ -1,0 +1,3198 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1f2a24;
+  background: #f4f6f1;
+  --accent: #2f6f4f;
+  --accent-dark: #234f39;
+  --accent-light: #e4efe6;
+  --accent-muted: #4c6a58;
+  --headline-bg: #dcebe1;
+  --amber: #b5651d;
+  --amber-light: #fbeee0;
+}
+
+/* ---- Colour themes ----
+   Mint (above) is the default with no data-theme attribute needed — kept
+   as :root's own plain values rather than a sixth override block, so the
+   most common case matches the fewest selectors. Each other theme
+   overrides the same five variables the whole app already draws from
+   (--accent/--accent-dark/--accent-light/--accent-muted/--headline-bg)
+   plus the page background, so switching is a single attribute toggle on
+   <html> (see applyTheme() in app.js) rather than needing per-component
+   overrides. --accent-muted covers secondary text/UI (headline labels,
+   the hour slider, graph readout time) that used to be hardcoded to
+   Mint's own sage green regardless of theme — the actual cause of labels
+   and the hour slider staying green-tinted under every other theme.
+   Every --accent-dark/--accent-muted value here was picked to sit dark
+   enough against its own --accent-light/--headline-bg for text contrast,
+   the same way Mint's originals already did — not derived from a
+   formula, just checked by eye against this app's actual light
+   backgrounds. Neutral chrome (page borders, input borders, the grey
+   body background tone) deliberately stays the same across every theme
+   rather than being retinted too — keeping that neutral is what makes
+   the accent colour still read as the accent, rather than every grey
+   line in the app fighting for attention alongside it. */
+:root[data-theme="gold"] {
+  background: #faf6e6;
+  --accent: #c9a227;
+  --accent-dark: #6b5310;
+  --accent-light: #f8edc4;
+  --accent-muted: #8a6d1f;
+  --headline-bg: #f3e3a0;
+}
+
+:root[data-theme="sand"] {
+  background: #f8f4ee;
+  --accent: #a97142;
+  --accent-dark: #6e4a26;
+  --accent-light: #f3e8d8;
+  --accent-muted: #8a6a4a;
+  --headline-bg: #ecdcc0;
+}
+
+:root[data-theme="red"] {
+  background: #faf4f3;
+  --accent: #b0463f;
+  --accent-dark: #7a2c26;
+  --accent-light: #f6e0de;
+  --accent-muted: #9a5a53;
+  --headline-bg: #f0d2cf;
+}
+
+:root[data-theme="blue"] {
+  background: #f2f6fa;
+  --accent: #3d6d95;
+  --accent-dark: #254a66;
+  --accent-light: #dfe9f2;
+  --accent-muted: #55788f;
+  --headline-bg: #cfe0ee;
+}
+
+:root[data-theme="teal"] {
+  background: #eef7f6;
+  --accent: #2b7a78;
+  --accent-dark: #164e4c;
+  --accent-light: #dbeceb;
+  --accent-muted: #3f6f6d;
+  --headline-bg: #bfe0de;
+}
+
+:root[data-theme="olive"] {
+  background: #f6f7ec;
+  --accent: #6f7a3a;
+  --accent-dark: #454e1f;
+  --accent-light: #eaedd6;
+  --accent-muted: #6d7a4a;
+  --headline-bg: #dde3b3;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* Phone widths only. The desktop/iPad padding is left alone — the
+   tightening exists to get the front page above the fold on a phone,
+   which is not a problem the wider layouts have. Top is tighter still
+   than the other three sides — see .title-bar below for why phones
+   don't need the same top clearance iPad does. */
+@media (max-width: 700px) {
+  /* The top value carries env(safe-area-inset-top) because index.html
+     now sets viewport-fit=cover. Without cover, iOS reserves the notch/
+     status-bar strip itself and leaves it blank — that blank strip WAS
+     the stubborn gap above "Cloude". With cover, the page is allowed to
+     draw into that area and becomes responsible for keeping content
+     clear of it, which is what the inset does.
+
+     env() resolves to 0 anywhere there is no inset (older iOS, Android,
+     desktop, and any browser tab that isn't running full-bleed).
+     Was "6px + inset" — confirmed on a real notched phone as still more
+     gap than wanted above "Cloude". 2px is just enough that text doesn't
+     sit flush against the status bar; the inset itself already does the
+     real clearance work. */
+  .app { padding: calc(2px + env(safe-area-inset-top)) 12px 12px; }
+}
+
+/* Installed-PWA-on-a-phone only. The rule above is correct wherever
+   env(safe-area-inset-top) actually reports a real inset — but in
+   standalone mode iOS does not reliably expose one, and when it resolves
+   to 0 the calc() collapses to a 2px top padding while viewport-fit=cover
+   is still letting the page draw right up under the status bar. That
+   combination is exactly the reported symptom: "Cloude", the settings
+   icon and the place chip all sitting on top of the clock and the
+   battery icon. Confirmed on-device after a full cache clear and
+   relaunch, so it isn't a stale-cache artifact.
+
+   max() keeps the correct value whenever iOS does report one (a notched
+   phone reporting 47-59px still gets 47-59px, not this floor), and only
+   supplies the floor when the inset is missing or too small to clear the
+   status bar on its own. 44px is the standard iOS status-bar height in
+   CSS pixels — enough to clear it on a notched device, and harmless on a
+   non-notched one where the bar is shorter.
+
+   Scoped to display-mode: standalone so a normal Safari tab, where the
+   browser's own chrome already provides this clearance and env() behaves
+   differently, is left completely untouched. */
+@media (max-width: 700px) and (display-mode: standalone) {
+  .app { padding-top: max(calc(2px + env(safe-area-inset-top)), 44px); }
+}
+
+header {
+  /* Was 18px. The gap under the title was pure dead space on the front
+     page — the single easiest saving, and it buys most of the map strip
+     on its own. */
+  margin-bottom: 9px;
+}
+
+h1 {
+  margin: 0 0 5px;
+  font-size: 30px;
+  color: var(--accent-dark);
+}
+
+/* Map's title now lives inside .title-bar alongside the settings icon
+   and "Back to Cloude" (see map.html) — .title-bar h1 already centres
+   it, so this class carries no rule of its own any more. Kept as a
+   hook (rather than deleted from the markup) in case this page's title
+   ever needs page-specific styling again without touching the shared
+   .title-bar h1 rule every other page's title also relies on. */
+.map-page-title {
+}
+
+/* Overrides the standalone .back-link block (used at the top of
+   compare/settings/help/solar, right-aligned above its own separate
+   title) for map.html specifically, where the same link now sits
+   inside .title-bar-right on the same line as the icon and title
+   instead — no bottom margin to preserve, no right-align of its own
+   needed since .title-bar-right already handles that. */
+.back-link-inline {
+  margin: 0;
+  white-space: nowrap;
+}
+
+/* Home and Go-to now live in the control row below (.map-controls),
+   not a separate header row — that briefly existed, mirroring the
+   front page's own title-bar, but only made sense while it was
+   sharing space with "Add to forecast"'s own button. Once that button
+   merged into "Forecast for here" (see map.js), the control row had
+   enough room for these two anyway, and one row of controls beat
+   splitting them across two for no reason. */
+.map-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Was 36px — the zoom buttons next to these are 44px, and side by
+     side that was a real, visible size mismatch (confirmed on a real
+     device), not just a difference in icon style. Matched exactly now. */
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid #dfe7e1;
+  background: white;
+  color: var(--accent-dark);
+  touch-action: manipulation;
+  /* Without this, a tight row (now five controls, not four) could
+     shrink these below their set size under flex's default shrink
+     behaviour — the same underlying class of issue the SVG-inside-
+     the-button fix just below this deals with, but for the button's
+     own box rather than its icon. A squashed-oval button would be a
+     smaller, subtler version of that same bug. */
+  flex-shrink: 0;
+}
+
+/* Without this, the icon rendered as a sliver a couple of pixels wide
+   instead of the intended shape — confirmed on a real device (one
+   icon showed as a solid over-filled blob, the other as barely a dot)
+   and reproduced in a plain screenshot. Browsers don't reliably treat
+   an inline <svg> as a "replaced element" the way an <img> is for flex
+   sizing purposes, so as a flex item it can shrink well below its own
+   width/height attributes even with plenty of room in the button —
+   flex-shrink: 0 stops that outright, and the explicit width/height
+   here in real CSS (rather than relying on the SVG's own HTML
+   attributes, which is what this looked like it should already do)
+   removes any ambiguity about what size "not shrunk" actually means. */
+.map-icon-button svg {
+  flex-shrink: 0;
+  /* Was 16px, matched to the old 36px button. Bumped alongside that
+     size change so the icon keeps roughly the same proportion of the
+     circle it sits in — the zoom buttons' own +/- glyphs are large
+     relative to their circle, and a small icon left behind in a
+     bigger button would have read as timid by comparison rather than
+     actually matching. */
+  width: 20px;
+  height: 20px;
+}
+
+.map-icon-button:disabled {
+  opacity: 0.4;
+}
+
+/* Anchored under the Go-to button, right-aligned the same way the front
+   page's own .place-menu hangs under its chip. Absolutely positioned
+   against .map-controls (position: relative on that row) rather than
+   the button itself, so it lines up with the right edge of the whole
+   control row. */
+.map-goto-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  background: white;
+  border: 1px solid #dfe7e1;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(31, 42, 36, .18);
+  padding: 6px;
+  min-width: 180px;
+  max-width: 260px;
+}
+
+.map-goto-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.map-goto-item:hover {
+  background: #f2f6f2;
+}
+
+.map-goto-empty {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--accent-muted);
+  max-width: 220px;
+}
+
+/* A small centred prompt, not a full page takeover — this is one
+   short yes/no question, not content worth the weight of the app's
+   .sheet pattern (which map.html doesn't even have the markup for).
+   Fixed positioning rather than anchored to a button, unlike
+   .map-goto-menu above: a confirmation is about the ACTION just taken
+   ("Forecast for here"), not about a specific control on screen, so
+   centring on the viewport reads better than hanging off one button
+   among five. */
+.map-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(31, 42, 36, .35);
+  z-index: 10;
+}
+
+.map-confirm {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 11;
+  background: white;
+  border-radius: 14px;
+  padding: 20px;
+  width: min(300px, calc(100vw - 48px));
+  box-shadow: 0 8px 28px rgba(31, 42, 36, .28);
+  text-align: center;
+}
+
+.map-confirm p {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.map-confirm-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.map-confirm-actions button {
+  flex: 1 1 0;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 0;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+/* Plain, not accent-coloured — this is the "skip this extra step"
+   option, not a destructive or negative one (adopting the forecast
+   happens regardless of this choice), so it doesn't need warning
+   styling, just less visual weight than Yes. */
+.map-confirm-no {
+  background: #eef2ef;
+  color: var(--accent-dark);
+}
+
+.map-confirm-yes {
+  background: var(--accent-dark);
+  color: white;
+}
+
+header p {
+  margin: 0;
+  color: #5b6b60;
+}
+
+.controls,
+.comparison {
+  background: white;
+  border-radius: 14px;
+  /* Was 15px all round. Tightened on this card specifically (see
+     .rollback-title below too) — the slider's own 44px touch target is
+     NOT part of this reduction and stays exactly as it is; that was a
+     real accessibility fix for a genuine "hard to grab" complaint, not
+     decoration to trim back. */
+  padding: 10px 15px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 2px rgba(31, 42, 36, .05), 0 10px 24px -16px rgba(31, 42, 36, .18);
+  border: 1px solid #e7ede6;
+}
+
+/* Scoped to the front page's own Date card, not .controls generally —
+   Compare and Settings reuse the same class for unrelated fieldsets/
+   sections that were never part of the "still have to scroll past the
+   Date slider" complaint, and tightening their padding too was never
+   asked for. .app-home only wraps index.html's <main>, so this can't
+   leak onto those other pages. */
+.app-home .controls {
+  padding: 7px 15px;
+}
+
+/* Front page only — .app stays plain block flow on every other page,
+   since flex items stop collapsing margins with each other and this
+   session's whole spacing pass (12px card rhythm, the 2px dot-row
+   tightening above) was tuned assuming normal block layout. Scoped to
+   .app-home specifically rather than changing .app itself so nothing
+   about Compare/Settings/Solar/Help/Map's own layouts is touched.
+   min-height ensures the map strip has real leftover space to grow
+   into on a short page, rather than this only mattering on a page tall
+   enough to already be scrolling. */
+.app-home {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  /* min-height alone is a FLOOR, never a ceiling — so when the page's
+     natural content (header + headline card with every cell switched on
+     + tide/fishing + the date bar) added up to more than one screen,
+     this container simply grew past 100svh and the page scrolled. Flex
+     shrinking never engaged at all: flex-shrink only redistributes
+     space when children are being squeezed INTO a constrained
+     container, and there was no constraint to squeeze against. That is
+     why .map-strip's `flex: 1 1 auto` looked like it worked in one
+     direction only — it grew into spare space correctly (few cells
+     enabled), but refused to give space back (many cells enabled),
+     which reads on-device as "the strip won't shrink to fit everything
+     on screen".
+     max-height supplies the missing ceiling. Now the two together pin
+     this to exactly one screen, children other than the strip hold
+     their natural size (see the flex: 0 0 auto rule below), and the
+     strip absorbs the difference in BOTH directions, down to its own
+     min-height floor. If the rest of the page genuinely can't fit even
+     with the strip at its floor, the page scrolls as before — this
+     only removes the case where it scrolled while the strip sat there
+     keeping space it was supposed to be able to give up. */
+  max-height: 100svh;
+}
+
+/* Flex items default to flex-shrink:1 — without this, EVERY direct
+   child of .app-home (the header, the headline card, tide/fishing, all
+   of it) would be able to shrink under pressure, not just the map
+   strip. This keeps everything else at its natural size regardless of
+   available space; only .map-strip's own flex:1 1 auto (below) is
+   meant to grow or shrink. */
+.app-home > *:not(.map-strip) {
+  flex: 0 0 auto;
+}
+
+/* A static preview, same card language as .headline below it (rounded
+   corners, the same shadow) so it reads as part of the same page
+   rather than a bolted-on widget — but shorter and a plain link rather
+   than a card full of controls, since tapping it is the only thing it
+   does. Grows to fill whatever vertical space the rest of the page
+   ISN'T using (see .app-home above) — turning off Tide/Fishing or a
+   few headline cells in Settings used to just leave that freed space
+   empty at the bottom of the screen; now the map takes it instead of
+   staying a fixed size regardless of what's around it. min-height is a
+   floor, not a fixed size, for when the rest of the page already fills
+   the screen on its own. */
+.map-strip {
+  /* Needed for the bottom-right time pill (map-strip.js reuses
+     .map-scale wholesale — see that file), which is positioned
+     absolute against this element. Doesn't affect anything else here:
+     this element was already the sole flex container between the
+     canvas and the page, just never previously needed a positioning
+     context of its own. */
+  position: relative;
+  /* Was display: block. A percentage height on a normal-flow child
+     (the canvas's own height:100% below) needs its parent to have a
+     height CSS itself established as definite — a flex-grown height
+     like this element's own 1 1 auto doesn't reliably count for that,
+     even though the computed pixel height is completely real. That
+     mismatch was confirmed directly: a real device showed this card
+     visibly taller than the map drawn inside it whenever Tide/Fishing
+     or a headline cell was switched off (freeing space this element
+     grows into), and measuring both elements at once showed the
+     canvas rendering shorter than its own parent despite an
+     already-working ResizeObserver correctly re-measuring it — the
+     observer was never the problem; the CSS relationship it was
+     re-measuring against was. Making this element a flex container
+     itself sidesteps the whole percentage-height mechanism: the canvas
+     below gets its size from flex distribution (flex: 1 1 auto)
+     instead, which doesn't have this limitation. */
+  display: flex;
+  flex: 1 1 auto;
+  /* Was 130px. With .app-home now supplying a real ceiling (see its
+     max-height note above) this floor is reachable for the first time,
+     and on a smaller phone with every headline cell plus tide, fishing
+     and the date bar enabled, 130px was still too tall a floor to let
+     all of it fit. 96px is about the least that keeps the strip
+     recognisable as a map (coastline plus a place label or two) rather
+     than a decorative sliver — below that it stops earning its space. */
+  min-height: 96px;
+  border-radius: 14px;
+  overflow: hidden;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
+  /* Swipe-to-switch-saved-place (see app.js) has no interactive drag
+     control anywhere inside this element, unlike .headline just below —
+     safe to restrict horizontal gestures to the pointer handling
+     entirely, same as tide/fishing's own swipeable wrapper. */
+  touch-action: pan-y;
+}
+
+.map-strip-root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  flex: 1 1 auto;
+  /* Flex items default to min-height: auto (their content's own
+     size), not 0 — this removes any ambiguity about it being allowed
+     to shrink to fully match whatever the flex algorithm decides. */
+  min-height: 0;
+  color: var(--accent-dark, #4a4844);
+  font-size: 13px;
+}
+
+.headline {
+  background: var(--headline-bg);
+  border-radius: 14px;
+  /* Vertical padding tightened from 14px to 11px (horizontal untouched)
+     as part of reclaiming a few more pixels on the front page — this
+     card's own padding was adding to the same "still have to scroll to
+     see the bottom of the Date slider" gap as the .hour-slider and
+     .rollback-title trims below. */
+  padding: 11px 15px;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
+}
+
+.headline-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  /* Row gap was 10px, same as the column gap's near-neighbour 16px was
+     doing double duty as both "space between two side-by-side figures"
+     and "space between one row and the next" — two different jobs that
+     don't need the same amount. Tightened the row gap on its own,
+     column gap untouched (that's genuine breathing room between two
+     numbers, not slack). */
+  gap: 7px 16px;
+  /* Deliberately on THIS element, not .headline itself — .headline also
+     contains #hourSlider, a native range input that needs its own
+     unrestricted horizontal drag, and touch-action cascades down to
+     descendants (a child can only narrow an ancestor's value further,
+     never widen it back out). .headline-grid is a SIBLING of
+     .hour-slider, not an ancestor of it, so restricting horizontal
+     gestures here for the swipe-to-switch-place handling (see app.js)
+     can't reach the slider at all. */
+  touch-action: pan-y;
+}
+
+.headline-loading {
+  grid-column: 1 / -1;
+  margin: 8px 0;
+  color: var(--accent-dark);
+  font-size: 14px;
+  font-style: italic;
+}
+
+.headline-cell {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  padding: 6px;
+  margin: -6px;
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color .15s ease;
+}
+
+/* A single full-width row rather than one of the 2-column headline
+   cells — tide doesn't fit that grid (it's one continuous reading, not
+   a per-condition figure), so it sits underneath the grid instead,
+   spanning the whole card. Shares the tap/hover feel of a headline
+   cell (rounded, subtle hover) since it opens the same kind of sheet. */
+/* The pair. Tide and fishing sit side by side because they always share
+   a location (swiping tide re-renders fishing for the same place), so
+   showing them as one row of two reads as one subject rather than two
+   identical-looking bars.
+
+   Both children are flex: 1 1 auto, so the row fills edge to edge with a
+   single gap and any spare width is SHARED rather than pooling in one
+   card. That matters: an earlier version gave all the slack to tide,
+   which then spread its figures to its own edges and manufactured a
+   large blank in the middle while fishing's place name was truncating.
+
+   If only one of the two is enabled in Settings, the other is display:
+   none (via the hidden attribute) and the survivor takes the full width
+   with no rule change needed. */
+.tide-fishing-pair {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  /* Was 2px — tuned tight specifically against the place-dots row that
+     used to sit directly beneath this (see the removed #tideDots rule).
+     Now that swiping the pair itself replaces the dots entirely (see
+     tide-ui.js), this is back to an ordinary gap before the next
+     section, matching the 12px already used between the two cards
+     inside it. */
+  margin-bottom: 12px;
+  /* The pair itself is now the swipe target (see tide-ui.js) rather
+     than just the tide card alone — pan-y here, for the same reason it
+     used to sit on .tide-row-swipeable: lets an up/down scroll pass
+     through untouched while a horizontal swipe is read by the pointer
+     handlers instead of being eaten by the browser's own gesture
+     handling. */
+  touch-action: pan-y;
+}
+
+.tide-card {
+  background: #e3f0f8;
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: 0 1px 3px rgba(31, 42, 36, .10), 0 12px 26px -14px rgba(31, 42, 36, .30);
+  border: 1px solid rgba(31, 42, 36, .09);
+}
+
+.tide-fishing-pair > .tide-card,
+.tide-fishing-pair > .fishing-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.tide-card[data-color="teal"] { background: #dcefec; }
+.tide-card[data-color="mint"] { background: #e1f0e4; }
+.tide-card[data-color="sand"] { background: #f5ead9; }
+.tide-card[data-color="lavender"] { background: #eae6f5; }
+.tide-card[data-color="white"] { background: #ffffff; }
+
+.fishing-card {
+  background: #eef6ea;
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: 0 1px 3px rgba(31, 42, 36, .10), 0 12px 26px -14px rgba(31, 42, 36, .30);
+  border: 1px solid rgba(31, 42, 36, .09);
+  /* Needed so .fishing-refresh-button's absolute positioning below is
+     relative to this card, not whatever other positioned ancestor
+     happens to be nearest. */
+  position: relative;
+}
+.fishing-card[data-color="blue"] { background: #e3f0f8; }
+.fishing-card[data-color="teal"] { background: #dcefec; }
+.fishing-card[data-color="sand"] { background: #f5ead9; }
+.fishing-card[data-color="lavender"] { background: #eae6f5; }
+.fishing-card[data-color="white"] { background: #ffffff; }
+
+/* fishingRow itself is a <button> filling the rest of the card (tap
+   anywhere on it to open the sheet) — a nested <button> for refresh
+   inside it isn't valid HTML (a button can't contain another
+   interactive control), so this sits as a sibling instead, positioned
+   on top of fishingRow's own corner so a tap there reaches this button
+   first rather than passing through to the row underneath it. */
+.fishing-refresh-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+}
+
+.fishing-row-value {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fishing-band {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.fishing-band-poor { background: #f6dad4; color: #9c3b2c; }
+.fishing-band-fair { background: #faedc7; color: #8a6d1f; }
+.fishing-band-good { background: #dcefe0; color: #2f6f4f; }
+.fishing-band-excellent { background: #cdeadb; color: #1f5c3d; }
+
+.fishing-factor-group {
+  margin-top: 10px;
+}
+.fishing-factor-group:first-child {
+  margin-top: 0;
+}
+.fishing-group-label {
+  display: block;
+  color: #6b7d70;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.fishing-factor-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--accent-dark);
+  padding: 3px 0;
+}
+.fishing-factor-row.fishing-factor-folklore {
+  color: var(--accent-muted);
+}
+
+/* Was a single wrapping row of label + value. Now a two-line stack: a
+   header line (title left, place name right) above the figures, so both
+   lines run edge to edge and the card reads as a small panel rather than
+   a bar. */
+.tide-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  padding: 2px;
+  border: 0;
+  background: none;
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color .15s ease;
+}
+
+/* tideRow and fishingRow both used to leave touch-action at its
+   unrestricted default, with only tideRow doing its own pointer-
+   capture swipe detection — see the comment that used to sit here.
+   Swipe detection has since moved up to the whole .tide-fishing-pair
+   wrapper (see tide-ui.js), which is where touch-action: pan-y now
+   lives instead; neither row needs its own restriction any more, and
+   both go back to the plain native click handling every other
+   headline cell already uses. */
+
+.tide-row:hover,
+.tide-row:active {
+  background: var(--accent-light);
+}
+
+/* Kept for the Loading / Not available states, which are still a single
+   plain line rather than the two-line layout below. */
+.tide-row-label {
+  color: var(--accent-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: normal;
+}
+
+.tide-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tide-row-title {
+  color: var(--accent-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Deliberately small. The place name is confirmation, not
+   identification — the card colour already says which card you are
+   looking at — and at half width it is the widest thing competing with
+   the tide figures. Shrinking it here is what buys the figures their
+   size back. This font-size is the lever if the balance looks wrong.
+
+   It ellipsises rather than wrapping, and because it is the only
+   shrinkable thing in the row, the figures are the last to give way. */
+.tide-row-place {
+  color: var(--accent-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.tide-row-value {
+  color: var(--accent-dark);
+  font-size: 14px;
+}
+
+.tide-row-events {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.tide-event {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent-dark);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The front-page row no longer prints heights (see tide-ui.js) — they
+   overflowed the card at half width and are one tap away in the sheet.
+   This rule stays because the sheet still renders heights inside a
+   .tide-event, and it is the only thing sizing them there. */
+.tide-event small {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.tide-event-type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.headline-cell:hover,
+.headline-cell:active {
+  background: rgba(255, 255, 255, .5);
+}
+
+/* Frost risk — a plain colour tint, deliberately no icon or text (see
+   frostRiskTonight): a quiet visual cue rather than another warning to
+   get fatigued by. */
+.headline-cell-frost {
+  background: #e3f0fa;
+}
+
+.headline-cell-frost:hover,
+.headline-cell-frost:active {
+  background: #d3e6f5;
+}
+
+.headline-label {
+  color: var(--accent-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.headline-label::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 2px solid var(--accent-muted);
+  border-bottom: 2px solid var(--accent-muted);
+  transform: rotate(-45deg);
+  margin-top: -2px;
+}
+
+.headline-value-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap; /* if the arrow+compass genuinely can't fit alongside
+                       the value even after the fixes below, they drop to
+                       their own line rather than the value's own number
+                       ever splitting mid-way through — see .headline-value
+                       white-space below */
+  gap: 6px;
+  min-height: 28px; /* matches .headline-value's own line height, so the
+                        row's height never depends on whether the wind
+                        arrow happens to be present */
+}
+
+.headline-value {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  color: var(--accent-dark);
+  /* 28px -> 22px. This is the change most likely to read as cheapening
+     rather than refining, since the bolder headline figure was a
+     deliberate outcome of the polish pass. If it looks thin in use,
+     24px is the halfway step — this one line is the whole lever. */
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; /* a two-part value like "19/32" must never break
+                           between the two numbers — if there's no room,
+                           the row above wraps the arrow instead */
+}
+
+/* "Collecting data" while a real-but-brand-new condition (currently
+   just Sunshine — see sunshineHeadlineStillCollecting in app.js)
+   hasn't earned enough real history to show yet. Overrides most of
+   .headline-value above rather than adding a whole separate element:
+   this text is several times longer than any genuine value this cell
+   ever holds ("19/32", "25 / 14"), so the bold 22px/nowrap treatment
+   built for a short number would either overflow the cell or force the
+   grid wider — muted, smaller, and allowed to wrap instead, since this
+   is a status message, not a data point worth the same visual weight. */
+.headline-value-collecting {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-muted);
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.headline-date {
+  margin: 0 0 12px;
+  color: var(--accent-dark);
+  font-weight: 700;
+  font-size: 14px;
+  /* A two-part row — the date/window text on the left (unchanged from
+     before), the current place name pinned to the right (see app.js's
+     currentPlaceLabel(), shared with the header's own place chip so the
+     two can never show a different name for the same place).
+     align-items was `baseline`, which lines up text nicely but drags a
+     circular icon button noticeably off-centre against that text (a
+     circle has no baseline to align to, so it was landing low/lopsided
+     next to "Today and Tomorrow"). `center` keeps the two text spans
+     reading correctly next to each other (they're both plain text, so
+     baseline and center look identical there) while actually centring
+     the refresh button vertically in the row. */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#headlineDateText {
+  /* Never shrinks or truncates — it's always one of a handful of short,
+     known strings ("Today", "Today and Tomorrow", a formatted date),
+     unlike the place name beside it which can be arbitrarily long. */
+  flex: 0 0 auto;
+}
+
+.headline-date-place {
+  font-weight: 600;
+  color: var(--accent-muted);
+  /* The place name is the one that gives way under a long name + a
+     narrow phone — ellipsis rather than wrapping onto a second line or
+     squeezing the date text on the other side. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* Shared "small circular icon button" treatment — same solid accent
+   fill + white icon as .hour-play-icon, reused here rather than
+   duplicated, so weather's and fishing's refresh buttons and the Play
+   button can never visually drift apart. var(--accent) rather than any
+   fixed colour deliberately: every theme's own accent is already dark
+   enough to read clearly against that theme's own pale card
+   backgrounds (confirmed against the Gold theme specifically, which is
+   the one case worth checking — its accent is a muted dark gold that
+   still reads as a distinct filled circle on the paler cream card, not
+   a fixed "gold" that would have blended into a gold-toned card). */
+.card-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Was 20px with no overflow:hidden and no explicit svg size — the
+     inner <svg> has no intrinsic width/height of its own (only a
+     viewBox), so without a CSS size to constrain it, browsers fall
+     back to wildly inconsistent sizing and the refresh-arrow shape
+     gets lost entirely, reading as a plain filled dot. Sized up
+     slightly to a friendlier tap target and given overflow:hidden so
+     the icon (now explicitly sized below, and via width/height
+     attributes on the svg itself) is guaranteed to actually sit inside
+     the circle rather than relying on the browser to guess right. */
+  width: 24px;
+  height: 24px;
+  overflow: hidden;
+  flex-shrink: 0;
+  /* Same min-height/padding override .hour-play-icon needs — see that
+     rule's own comment for why the global button reset otherwise wins. */
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 0;
+  background: var(--accent);
+  color: white;
+  touch-action: manipulation;
+}
+
+.card-refresh-button svg {
+  /* Explicit size, backed up by the same width/height attributes on
+     the svg tags in index.html — belt and braces so the arrow reads
+     clearly at a glance instead of shrinking to an indistinct blob. */
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.card-refresh-button:disabled {
+  opacity: 0.5;
+}
+
+#headlineRefreshButton {
+  /* Pushes itself AND the place name after it (which no longer carries
+     its own margin-left: auto — see that rule above) to the right edge
+     together, so the icon sits immediately before the place name
+     rather than at a fixed distance from the date text on the left. */
+  margin-left: auto;
+}
+
+.headline-cell-dimmed .headline-value,
+.headline-cell-dimmed .headline-label {
+  opacity: 0.5;
+}
+
+/* The moon icon is a real SVG now (see moonPhaseSvg), not the old emoji
+   character this rule was originally written for — font-size no longer
+   does anything to it directly. Kept only to fix its size explicitly
+   rather than leaving it to whatever the SVG markup happens to specify,
+   since .headline-value is now a flex container that centers it either
+   way (see above) — this is what actually stops the moon/number/dash
+   swap from changing the cell's height and visibly shifting the layout.
+   */
+.headline-moon svg {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+
+/* Same fixed sizing as .headline-moon above, same reasoning — the sky
+   icon (see sheetCloudIcon in app.js, appended here via the headline
+   cell's own "cloud" branch) is a real SVG with its own internal
+   viewBox, not text, so this is what actually keeps the cell's height
+   stable as it swaps against a plain number or the moon on other
+   cells/hours. */
+.headline-cloud-icon svg {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+
+.wind-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--accent-dark);
+  transform-origin: 50% 50%;
+}
+
+.wind-arrow svg {
+  display: block;
+}
+
+.headline-gust {
+  display: block;
+  margin-top: 2px;
+  color: var(--accent-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pressure-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--accent-dark);
+}
+
+.pressure-arrow svg {
+  display: block;
+}
+
+.hour-slider {
+  /* Was margin-top 8px, padding-top 12px. Further tightened as part of
+     reclaiming a few more pixels of front-page height — the actual
+     44px range-input touch target below is deliberately NOT part of
+     this (see the note by .controls/.comparison above: that height is
+     a real accessibility fix, not decoration), only the breathing room
+     above the border and the track itself. */
+  margin-top: 4px;
+  padding-top: 7px;
+  /* Was 1px — reported as too faint to register as a real divider
+     between the headline grid (Dew Point being its last cell) and the
+     Today/Hour slider below it. 2px keeps the same colour, just bolder.
+     Padding-top left alone rather than trimmed to compensate, so the
+     thicker line doesn't eat into the breathing room above the slider
+     track that was deliberately tightened already (see the note just
+     above this rule). */
+  border-top: 2px solid rgba(76, 106, 88, 0.25);
+}
+
+.hour-slider-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-muted);
+  /* Was 4px — trimmed alongside .hour-slider's own padding above. */
+  margin-bottom: 2px;
+}
+
+/* Sits in the middle of the existing "Today" / time-readout row rather
+   than on a row of its own — deliberately small to fit that row without
+   growing its height, which is a real trade-off worth stating plainly:
+   at 20px this is below Apple's own recommended 44px tap target. A
+   full-size target would have meant either a taller row (reintroducing
+   height this exact card was trimmed of earlier) or its own dedicated
+   row (the thing this was explicitly asked to avoid) — 20px inside the
+   existing row was the compromise that kept both. */
+.hour-play-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  /* Every <button> on the page gets a global reset (min-height: 44px,
+     padding: 0 16px, background: var(--accent) — see the plain
+     "button {}" rule) sized for real full-width buttons elsewhere in
+     the app. Confirmed on-device via a genuine measurement, not
+     assumed: this button's OWN rule set width/height but never
+     explicitly overrode min-height or padding, so those two kept
+     coming from the global rule regardless — min-height alone was
+     forcing the whole row to 44px tall, silently undoing the entire
+     point of fitting this into the existing row without growing it.
+     Both need overriding here explicitly; redeclaring width/height
+     alone doesn't touch a separate min-height/padding declaration. */
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 0;
+  /* Was a pale rgba(76,106,88,0.15) wash with a muted icon colour —
+     easy to miss next to the plain text either side of it, especially
+     at 20px. A solid accent fill (the same colour every other button
+     in the app already uses) with a white icon on top reads as an
+     actual button rather than a faint decoration, at the same size.
+     Now shared by the map page's own Play button too (see map.html),
+     so this one change covers both. */
+  background: var(--accent);
+  color: white;
+  touch-action: manipulation;
+}
+
+/* Same fix as the map page's header icons (.map-icon-button svg) —
+   without this, an inline <svg> as a flex item can shrink below its
+   own width/height attributes even with room to spare, since browsers
+   don't reliably treat it as a "replaced element" for flex sizing.
+   Applied here up front rather than waiting to rediscover the same bug
+   a second time. */
+.hour-play-icon svg {
+  flex-shrink: 0;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  /* Was 32px. The visible track is still thin, but the wider hit area
+     was still landing short of a reliable drag target on iPad — see
+     the enlarged thumb below, which is what actually grows the tappable
+     region, this just gives it room to sit centred. */
+  height: 44px;
+  background: transparent;
+  touch-action: none;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--fill, 50%), #d3ddd6 var(--fill, 50%), #d3ddd6 100%);
+  border-radius: 2px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  /* Was 20px. Apple's own minimum recommended touch target is 44px;
+     this doesn't go quite that far (it would visually dwarf the thin
+     track) but it's a meaningful step up from a target people were
+     visibly missing. */
+  width: 26px;
+  height: 26px;
+  margin-top: -11px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 3px rgba(31, 42, 36, .3);
+  transition: transform .1s ease;
+}
+
+input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: #d3ddd6;
+  border-radius: 2px;
+}
+
+input[type="range"]::-moz-range-progress {
+  height: 4px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 3px rgba(31, 42, 36, .3);
+  transition: transform .1s ease;
+}
+
+input[type="range"]:active::-moz-range-thumb {
+  transform: scale(1.15);
+}
+
+.hour-slider input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, var(--accent-muted) 0%, var(--accent-muted) var(--fill, 0%), #d3ddd6 var(--fill, 0%), #d3ddd6 100%);
+}
+
+.hour-slider input[type="range"]::-webkit-slider-thumb,
+.hour-slider input[type="range"]::-moz-range-thumb {
+  border-color: var(--accent-muted);
+}
+
+.hour-slider input[type="range"]::-moz-range-progress {
+  background: var(--accent-muted);
+}
+
+.controls {
+  display: grid;
+  gap: 18px;
+}
+
+.condition-box {
+  border: 1px solid #dfe7e1;
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+}
+
+.rollback:not(:first-child) {
+  margin-top: 16px;
+}
+
+label,
+fieldset,
+.rollback {
+  font-weight: 600;
+}
+
+.location-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.location-actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.location-action-switch,
+.location-action-save {
+  flex: 1;
+}
+
+.location-action-save {
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.location-action-save:hover {
+  filter: brightness(0.96);
+}
+
+.geo-button {
+  margin-top: 8px;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+  width: 100%;
+}
+
+.geo-button:hover {
+  filter: brightness(0.96);
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input[type="text"],
+input[type="number"],
+textarea,
+#postcode,
+select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #c3d0c6;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: white;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 16px;
+  cursor: pointer;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  transition: background-color .15s ease, transform .08s ease;
+  /* Applied globally rather than button-by-button, after tracing the
+     map page's and front page's Play buttons both "sticking" solid
+     after a tap until something else was tapped — turned out to be
+     iOS's own default tap-highlight overlay, which paints a solid tint
+     over the whole button and doesn't reliably clear on its own. This
+     is the exact same root cause already found and fixed once for the
+     (since-removed) place-dot buttons specifically; it
+     was never generalised to the shared button rule, so every OTHER
+     plain <button> in the app — both Play buttons included — was still
+     exposed to it. On the map page's text button, the overlay sitting
+     on top of "Pause" while highlighted is what made the label
+     disappear. No plain <button> anywhere in this app wants the
+     platform default here, so this is the one shared place to fix it
+     rather than patching each button that happens to get noticed. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+button:active {
+  transform: scale(0.97);
+}
+
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+/* A little extra clearance at the top of every legend — the same
+   iPadOS windowed/Split View window-control overlap documented on
+   .title-bar below can land over whichever legend happens to scroll to
+   the very top of the viewport, not just the page's own title, so this
+   protection needs to be everywhere a legend can appear rather than
+   just the one spot it was first noticed. */
+legend {
+  padding: 0;
+  margin-bottom: 8px;
+  padding-top: 6px;
+}
+
+.checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.check input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+/* Per-condition units — compact rows in a 2-column grid rather than a
+   bordered fieldset per condition, so the list doesn't turn into a long
+   scroll as more conditions gain a unit choice. */
+#conditionUnits {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+
+.unit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.unit-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unit-row-toggle {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.unit-pill {
+  position: relative;
+  cursor: pointer;
+}
+
+.unit-pill input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.unit-pill span {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #dfe7e1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-muted);
+  white-space: nowrap;
+}
+
+.unit-pill input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.rollback-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  /* Was 8px, then 4px — trimmed once more as part of reclaiming a few
+     more pixels of front-page height. Still a label for the control
+     below it, not a heading, so it can afford to sit close. */
+  margin-bottom: 2px;
+  font-size: 14px;
+}
+
+/* The front page's Date slider only — map.html's own Hour rollback keeps
+   .rollback-title + .range-labels above/below its slider unchanged (see
+   both rules either side of this one). This one replaces BOTH of those
+   for the Date slider specifically: one line, three fixed anchors (real
+   date 7 days back, "Today", real date 7 days ahead) rather than a
+   dynamic title above plus a worded caption below — see index.html's own
+   comment on .rollback for the reasoning. Same visual weight as
+   .range-labels (same colour, same size) since this is replacing that
+   exact role, just consolidated onto one line instead of two. */
+.rollback-range-line {
+  display: flex;
+  justify-content: space-between;
+  color: #6b7d70;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.range-labels {
+  display: flex;
+  justify-content: space-between;
+  color: #6b7d70;
+  font-size: 12px;
+  /* Same compensation as .hour-slider above: the taller range input
+     added 6px of invisible padding below its own visible track, which
+     otherwise shows up here as the gap between the track and these
+     labels growing by that same 6px. Pulls it back to how it looked
+     before the touch-target fix. */
+  margin-top: -6px;
+}
+
+.rollback p,
+.note {
+  margin: 7px 0 0;
+  color: #6b7d70;
+  font-size: 13px;
+}
+
+.target-date {
+  font-weight: 700;
+  color: var(--accent-dark);
+  font-size: 14px;
+  margin: 10px 0 0;
+}
+
+.table-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.table-title h2 {
+  margin: 0;
+  color: var(--accent-dark);
+}
+
+#locationLabel {
+  color: #6b7d70;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
+}
+
+table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  /* Actual min-width is set per-render in app.js, scaled to however many
+     forecaster columns are selected — this is just a sane floor before
+     JS runs. */
+  min-width: 350px;
+}
+
+th.day-head,
+td.day {
+  width: 70px;
+  /* Pinned while the rest of the table scrolls sideways, so you never
+     lose track of which row is which on a narrow screen. Needs an
+     opaque background (set per state below) so scrolled-under cells
+     don't show through. The scroll-edge shadow lives on the App column
+     instead (see below), since that's now the right-hand edge of the
+     combined fixed group. */
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+
+th.day-head {
+  background: var(--accent-light);
+}
+
+td.day {
+  background: white;
+}
+
+tbody tr:nth-child(even) td.day {
+  background: #fafbf9;
+}
+
+.row-final td.day {
+  background: #f2f7f0;
+}
+
+/* The app's own merged figure — fixed directly alongside Day out (left
+   offset = Day's own width) so together they form one pinned block; each
+   forecaster's Raw/Corrected columns can then be checked against this
+   at a glance without losing track of which row, regardless of how far
+   right you've scrolled. Given a distinct blue tint (rather than Day's
+   green) plus its own left border, so the two pinned columns still read
+   as two separate things sitting side by side, not one merged block. */
+th.app-head,
+td.app {
+  width: 64px;
+  text-align: center;
+  position: sticky;
+  left: 70px;
+  z-index: 2;
+  border-left: 2px solid #bcd4e6;
+  box-shadow: 2px 0 4px rgba(31, 42, 36, 0.08);
+}
+
+th.app-head {
+  background: #dce9f2;
+  color: #2c5a7a;
+  font-weight: 700;
+}
+
+td.app {
+  background: #f3f8fb;
+  font-weight: 700;
+  color: #2c5a7a;
+}
+
+tbody tr:nth-child(even) td.app {
+  background: #e9f1f7;
+}
+
+.row-final td.app {
+  background: #d9e9f2;
+}
+
+th.sub-corrected,
+th.sub-raw,
+td.col-corrected,
+td.col-raw {
+  width: 96px;
+  padding-left: 9px;
+  padding-right: 9px;
+}
+
+th,
+td {
+  padding: 11px 13px;
+  text-align: left;
+  border-bottom: 1px solid #e8eee9;
+  white-space: nowrap;
+}
+
+th {
+  background: var(--accent-light);
+  font-size: 13px;
+  color: var(--accent-dark);
+}
+
+th small {
+  display: block;
+  margin-top: 2px;
+  color: #6b7d70;
+  font-weight: 400;
+}
+
+th.sub-corrected,
+th.sub-raw {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7d70;
+  background: #f2f7f0;
+}
+
+th.th-source,
+td.col-corrected,
+td.col-raw {
+  box-shadow: none;
+}
+
+th.th-source {
+  box-shadow: inset 1px 0 0 #8fb59d, inset -1px 0 0 #8fb59d;
+}
+
+th.sub-corrected,
+td.col-corrected {
+  box-shadow: inset 1px 0 0 #8fb59d;
+}
+
+th.sub-raw,
+td.col-raw {
+  box-shadow: inset -1px 0 0 #8fb59d;
+}
+
+/* Alternating tint per forecaster (every other pair of columns), so each
+   group reads clearly even before the border registers. */
+.forecaster-tint td.col-corrected,
+.forecaster-tint th.sub-corrected {
+  background: #eef5ec;
+}
+
+.forecaster-tint td.col-raw,
+.forecaster-tint th.sub-raw {
+  background: #e8f1e5;
+}
+
+td.col-corrected {
+  font-weight: 700;
+  color: var(--accent-dark);
+  background: #f6faf5;
+}
+
+td.col-raw {
+  color: #445048;
+}
+
+/* Shown in place of Raw/Corrected for a forecaster still under
+   ELIGIBILITY_MIN_DAYS of its own history — spans both sub-columns
+   (colSpan 2) since there's nothing meaningful to split between them
+   yet. Deliberately muted and centered so it reads as a status message,
+   not a missing/broken value. */
+td.col-collecting {
+  text-align: center;
+  font-size: 12px;
+  font-style: italic;
+  color: #8a9b8f;
+  background: #f4f7f3;
+  box-shadow: inset 1px 0 0 #8fb59d, inset -1px 0 0 #8fb59d;
+}
+
+.forecaster-tint td.col-collecting {
+  background: #eef2ec;
+}
+
+#accuracyBody td.col-collecting {
+  text-align: left;
+  font-style: italic;
+  color: #8a9b8f;
+}
+
+/* The App (merged) row — matching the blue used for the App column on
+   the main table, so it's visually obvious this row is "the app itself"
+   rather than one of the selectable forecasters listed below it. */
+.accuracy-app-row td {
+  background: #dce9f2;
+  color: #2c5a7a;
+  font-weight: 700;
+  border-bottom: 2px solid #bcd4e6;
+}
+
+.whatif .checks,
+.whatif .note {
+  margin-bottom: 10px;
+}
+
+footer a,
+.back-link a {
+  color: var(--accent-dark);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+footer a:hover,
+.back-link a:hover {
+  text-decoration: underline;
+}
+
+.back-link {
+  margin: 0 0 10px;
+  font-size: 13px;
+  text-align: right;
+}
+
+.help-section h2 {
+  font-size: 15px;
+  color: var(--accent-dark);
+  margin: 18px 0 6px;
+}
+
+.help-section h2:first-child {
+  margin-top: 0;
+}
+
+.help-section p {
+  margin: 0 0 4px;
+  color: #445048;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+tbody tr:nth-child(even) {
+  background: #fafbf9;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.day {
+  font-weight: 700;
+}
+
+.day small {
+  display: block;
+  margin-top: 2px;
+  color: #6b7d70;
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.row-final td {
+  background: #f2f7f0;
+}
+
+.actual-line {
+  margin: 10px 0 0;
+  padding: 10px 13px;
+  background: var(--accent-light);
+  border-radius: 8px;
+  font-weight: 700;
+  color: var(--accent-dark);
+  font-size: 14px;
+}
+
+.delta {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.delta-close {
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.delta-off {
+  background: var(--amber-light);
+  color: var(--amber);
+}
+
+.ffv-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.actual-status {
+  margin: 8px 0 0;
+  color: #6b7d70;
+  font-size: 12px;
+}
+
+.actual-status.is-error {
+  color: var(--amber);
+}
+
+/* Front-page "couldn't load weather" block — a plain <button> is inline
+   sized (fits its text) rather than full-width like most buttons in this
+   app, since it sits right next to its own message rather than as a
+   standalone action in a list. */
+.headline-status-block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  background: #fdf3e3;
+  border: 1px solid #ecd8ab;
+  border-radius: 10px;
+}
+
+/* The [hidden] attribute and this block's own "display: flex" above
+   carry the same CSS specificity — without this rule, they're a genuine
+   tie, and the page's own styling wins that tie over the browser's
+   built-in [hidden] rule. The practical result: toggling .hidden in JS
+   silently did nothing, and this box could never actually disappear
+   once shown, even with the correct text cleared. This rule is more
+   specific than either on its own, so [hidden] reliably wins now. */
+.headline-status-block[hidden] {
+  display: none;
+}
+
+/* Same specificity-tie fix as headline-status-block above — .tide-row's
+   own "display: flex" was beating the browser's built-in [hidden] rule,
+   so tideRow.hidden = true in JS did nothing: the row stayed rendered
+   as an empty flex box, still taking up its margin/padding/border-top
+   space between Dew Point and the Today slider even with tide switched
+   off or no tide location saved. */
+.tide-row[hidden] {
+  display: none;
+}
+
+/* Front-page escalation banner — a calm, informational green rather than
+   the amber "something's wrong" tone of the weather-load error above,
+   since this is an FYI worth a glance, not a problem needing action. */
+.underperform-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  background: var(--accent-light);
+  border: 1px solid #bcdcc7;
+  border-radius: 10px;
+}
+
+.underperform-banner[hidden] {
+  display: none;
+}
+
+.underperform-banner p {
+  margin: 0;
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.underperform-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.underperform-banner-actions a {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+
+.underperform-banner-actions button {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  background: white;
+  color: var(--accent-dark);
+  border: 1px solid #bcdcc7;
+}
+
+/* Compare-page notice — same calm tone, sits inside the Accuracy
+   details block right above the table it's referring to. */
+.underperform-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: var(--accent-light);
+  border: 1px solid #bcdcc7;
+  border-radius: 10px;
+}
+
+.underperform-notice[hidden] {
+  display: none;
+}
+
+.underperform-notice p {
+  margin: 0;
+  color: var(--accent-dark);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.underperform-notice button {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  background: white;
+  color: var(--accent-dark);
+  border: 1px solid #bcdcc7;
+}
+
+.headline-status-text {
+  margin: 0;
+  color: #7a5c1e;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.headline-retry-button {
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 0 16px;
+  font-size: 14px;
+  background: var(--amber);
+}
+
+.headline-retry-button:hover {
+  filter: brightness(0.92);
+}
+
+.backfill {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #6b7d70;
+}
+
+.accuracy {
+  margin-top: 14px;
+  font-size: 13px;
+  color: #6b7d70;
+}
+
+.accuracy summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.accuracy p {
+  margin: 8px 0;
+}
+
+.accuracy-mode {
+  display: block;
+  margin: 8px 0 10px;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.accuracy-mode select {
+  width: auto;
+  min-height: 36px;
+  margin-left: 6px;
+  display: inline-block;
+}
+
+#accuracyTable {
+  min-width: 420px;
+}
+
+.backfill summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.backfill p {
+  margin: 8px 0;
+}
+
+.backfill button {
+  min-height: 40px;
+  font-size: 13px;
+}
+
+footer {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  color: #6b7d70;
+  font-size: 12px;
+  padding: 5px;
+}
+
+/* ---- Header place chip (front page) ---- */
+
+/* Rewritten from a CSS Grid + `display: contents` approach. That
+   version placed .settings-icon-button and .place-chip as grid items of
+   .title-bar by collapsing their .title-bar-right wrapper with
+   `display: contents`, so their explicit grid-column/justify-self could
+   apply directly. It never actually worked on-device — confirmed on a
+   real phone the icon stayed grouped with the chip on the right instead
+   of moving to the left corner. `display: contents` on a wrapper around
+   focusable/interactive children (a link, a button) is a known rough
+   edge in WebKit; rather than chase why, this switches to a plain flex
+   row with `order`, which has no such history. The icon is now a direct
+   child of .title-bar in the HTML (a sibling of <h1>, before it) instead
+   of living inside .title-bar-right — no wrapper to collapse, so there
+   is nothing for that bug to attach to. */
+.title-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+/* iPad only, not phones — when this runs as a windowed/Split View app,
+   iPadOS draws its own window controls (the macOS-style traffic-light
+   pill) right over the top-left corner of the page, which otherwise
+   lands directly on the title. Phones have no such overlay and were
+   paying this same 6px for no reason, sitting on top of the status bar/
+   notch clearance the OS already reserves on its own — a real, visible
+   gap above "Cloude" with nothing there to protect against. */
+@media (min-width: 701px) {
+  .title-bar {
+    padding-top: 6px;
+  }
+}
+
+/* Default (iPad/desktop) order: title first, then the icon and chip
+   together on the right — icon before chip, matching how they read
+   left-to-right. `order` rather than source position is what controls
+   this, so the phone media query below can simply reassign it rather
+   than needing a second markup arrangement. */
+.settings-icon-button {
+  order: 2;
+}
+.title-bar h1 {
+  order: 1;
+}
+.title-bar-right {
+  order: 3;
+}
+
+/* Phones only: Settings moves to the LEFT corner, place chip stays
+   right. The left corner is off-limits on iPad (window chrome sits
+   there — see the note above), but phones have no such overlay, and
+   putting the two controls in opposite corners relieves the crowding
+   that came from having a 44px icon and a variable-width place name
+   sharing one side. */
+@media (max-width: 700px) {
+  .settings-icon-button {
+    order: 1;
+  }
+  .title-bar h1 {
+    order: 2;
+  }
+  .title-bar-right {
+    order: 3;
+  }
+}
+
+.title-bar h1 {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
+/* .place-menu is absolutely positioned, so it sits outside this flex
+   flow entirely and still anchors to the chip's corner regardless of
+   where the chip itself lands in source/order terms. */
+
+.title-bar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 1 auto;
+  /* Flex items default to a content-based minimum width too, same
+     underlying issue as .place-chip below — without this, the wrapper
+     itself could refuse to shrink below its content's natural size,
+     which would defeat that fix at the next level up. */
+  min-width: 0;
+  max-width: 60%;
+}
+
+.settings-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--accent-dark);
+  flex: 0 0 auto;
+}
+
+.settings-icon-button:hover {
+  background: var(--accent-light);
+}
+
+.place-chip {
+  /* Was 0 0 auto (can't shrink at all). With a fixed-size icon now
+     sitting next to it in the same row, a long place name needs
+     somewhere to give — this lets the chip shrink below its natural
+     width so max-width/ellipsis on the label actually get a chance to
+     kick in, rather than the pair overflowing past the icon instead. */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.place-chip {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: white;
+  color: var(--accent-dark);
+  border: 1px solid #c3d0c6;
+  font-weight: 700;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 40vw;
+}
+
+#placeChipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.place-chip:hover {
+  background: var(--accent-light);
+}
+
+.place-chip-caret {
+  font-size: 11px;
+  color: #6b7d70;
+}
+
+/* .place-dots / #tideDots / .place-dot / .place-dot-button removed —
+   the small dot icons they styled are gone now that swiping the whole
+   tide+fishing pair (see tide-ui.js) replaces them as the way to
+   switch between saved tide locations from the front page. */
+
+.place-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  background: white;
+  border: 1px solid #dfe7e1;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(31, 42, 36, .18);
+  padding: 6px;
+  min-width: 160px;
+}
+
+.place-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  color: #1f2a24;
+  font-weight: 600;
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 6px;
+}
+
+.place-menu-item:hover {
+  background: var(--accent-light);
+}
+
+.place-menu-item.is-current {
+  color: var(--accent-dark);
+  background: var(--accent-light);
+}
+
+.place-menu-empty {
+  margin: 4px 10px;
+  color: #6b7d70;
+  font-size: 13px;
+}
+
+.place-menu-manage {
+  display: block;
+  margin-top: 4px;
+  padding: 8px 10px 4px;
+  border-top: 1px solid #eef2ee;
+  font-size: 12px;
+}
+
+/* ---- Saved places list (Settings) ---- */
+
+.places-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.place-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.place-row-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.place-row-name-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.place-row-label {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  min-height: auto;
+  border: 1px solid #dfe7e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.place-row.is-current .place-row-label {
+  border-color: var(--accent);
+}
+
+.place-row-postcode {
+  flex: 0 0 auto;
+  color: #6b7d70;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.place-row-sub {
+  display: block;
+  color: #6b7d70;
+  font-size: 11px;
+  margin-top: 3px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Sits under the place name/postcode when a place is already in the
+   shared favourites — legible on its own, without relying on noticing
+   the ★ button's fill colour (confirmed in testing that the button
+   alone wasn't obvious enough at a glance). */
+.place-row-favourite-badge {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+
+.place-row-switch {
+  flex: 0 0 auto;
+  width: 76px;
+  text-align: center;
+  font-size: 13px;
+  padding: 0 6px;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.place-row.is-current .place-row-switch {
+  background: var(--accent);
+  color: white;
+}
+
+.place-row-switch:disabled {
+  cursor: default;
+}
+
+.place-row-remove {
+  width: 44px;
+  padding: 0;
+  background: var(--amber-light);
+  color: var(--amber);
+}
+
+.place-row-remove:hover {
+  background: #f3d9bd;
+}
+
+/* The ☆/★ shared-favourite toggle (see postFavourite() in app.js) —
+   sized and centred like .place-row-remove rather than the wider
+   .place-row-switch, since it's a single glyph, not a word. Uses the
+   theme's own accent so a filled ★ reads as "this is in" the same way
+   .card-refresh-button's filled circle does, rather than introducing a
+   third colour into this row. */
+.place-row-favourite {
+  width: 40px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.place-row-favourite.is-favourited {
+  background: var(--accent);
+  color: white;
+}
+
+.place-row-favourite:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.place-row-marktype {
+  margin-top: 8px;
+}
+
+.place-row-admiralty {
+  margin-top: 6px;
+}
+
+.place-row-admiralty-notes {
+  margin-top: 4px;
+}
+.place-row-admiralty-note {
+  display: block;
+  color: var(--amber);
+  margin-top: 2px;
+}
+
+.place-row-admiralty-check {
+  margin-top: 4px;
+  font-size: 12px;
+  min-height: 32px;
+  padding: 0 12px;
+  background: var(--accent-dark);
+  color: white;
+}
+
+.place-row-admiralty-check:hover {
+  filter: brightness(1.1);
+}
+
+.place-row-admiralty-status {
+  margin-top: 3px;
+}
+
+/* Progress text ("Checking…") stays muted — it used to go amber like a
+   warning purely because the old rule coloured ANY non-empty status,
+   which made a working check look like something had gone wrong. Only a
+   real failure is amber now, and it's bold so a long message reads as a
+   result rather than more small print. */
+.place-row-admiralty-status.is-success {
+  color: var(--accent-dark);
+}
+
+.place-row-admiralty-status.is-error {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+/* ---- Bottom nav (replaces the old footer links on every page) ---- */
+
+.bottom-nav {
+  display: flex;
+  justify-content: center;
+  /* Wraps since Map made it five items, which no longer fit on one
+     phone-width row. Two rows of pills is fine here — the nav sits
+     below the fold by design, and squeezing five pills onto one line
+     would mean padding tight enough to hurt them as tap targets. */
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.bottom-nav a {
+  min-height: 44px;
+  /* 18px -> 15px: buys back enough width for five pills to sit on two
+     comfortable rows rather than three ragged ones. Still well clear of
+     the 44px minimum tap height. */
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: white;
+  border: 1px solid #dfe7e1;
+  color: var(--accent-dark);
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color .15s ease;
+}
+
+.bottom-nav a:hover {
+  background: var(--accent-light);
+  text-decoration: none;
+}
+
+@media (max-width: 600px) {
+  .app {
+    padding: 12px;
+  }
+
+  h1 {
+    font-size: 26px;
+  }
+
+  .controls,
+  .comparison {
+    padding: 16px;
+  }
+}
+
+/* ---- Hourly graph sheet ---- */
+
+.sheet-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(20, 30, 24, 0.35);
+  opacity: 0; pointer-events: none;
+  /* visibility alongside opacity so a closed backdrop is genuinely out
+     of the compositing tree rather than merely transparent. An
+     opacity:0 fixed overlay still covering the whole viewport is
+     exactly the kind of thing iOS can keep counting when it decides
+     what colour sits under the status bar (see
+     forceIOSStatusBarRelayout in app.js for the confirmed sampling
+     behaviour) — this removes any question of it lingering. Delayed by
+     the transition duration so the fade-out is still visible; on open
+     it applies immediately. */
+  visibility: hidden;
+  transition: opacity .22s ease, visibility 0s linear .22s;
+  z-index: 10;
+}
+.sheet-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  transition: opacity .22s ease;
+}
+
+.sheet {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  max-width: 1100px; margin: 0 auto;
+  background: #fbfcfa;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -8px 30px rgba(20,30,24,.22);
+  transform: translateY(100%);
+  visibility: hidden;
+  transition: transform .28s cubic-bezier(.32,.72,0,1), visibility 0s linear .28s;
+  z-index: 11;
+  padding: 10px 20px calc(20px + env(safe-area-inset-bottom));
+  /* Was a flat 78vh. That's a fixed 22% peek of whatever's behind the
+     sheet regardless of how much the sheet actually has to show —
+     confirmed on-device with the fishing detail sheet (chart plus two
+     full factor lists): content taller than 78vh forced an internal
+     scroll to see the bottom, while still leaving a large, mostly-
+     wasted strip of the page visible above it. This still leaves a
+     peek (so it reads as a sheet, not a full-screen takeover) but the
+     peek is now a fixed height rather than a fixed proportion, so a
+     tall sheet gets to use nearly the whole screen instead of always
+     giving up the same 22% no matter how much it needs. dvh rather than
+     vh: vh is fixed to the layout viewport, which on iOS Safari doesn't
+     account for the browser chrome showing/hiding — dvh tracks the
+     actual visible height, which matters more here since it directly
+     sets how much content is reachable without scrolling. */
+  max-height: calc(100dvh - env(safe-area-inset-top) - 48px);
+  overflow-y: auto;
+}
+.sheet[hidden] { display: block; } /* transform handles hiding, so it can transition; hidden just removes from a11y tree via JS toggle instead */
+.sheet.is-open {
+  transform: translateY(0);
+  visibility: visible;
+  transition: transform .28s cubic-bezier(.32,.72,0,1);
+}
+
+.sheet-handle {
+  width: 36px; height: 4px;
+  background: #d3ddd6;
+  border-radius: 999px;
+  margin: 4px auto 14px;
+}
+
+.sheet-header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 4px;
+}
+.sheet-title { font-size: 20px; font-weight: 700; color: var(--accent-dark); margin: 0; }
+.sheet-range { font-size: 13px; color: #6b7d70; }
+
+.sheet-close {
+  position: absolute; top: 14px; right: 16px;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: var(--accent-light);
+  border: 0; color: var(--accent-dark);
+  font-size: 16px; line-height: 1;
+  cursor: pointer;
+  min-height: 0;
+  padding: 0;
+}
+
+.sheet-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--accent-light);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.sheet-readout[hidden] { display: none; }
+.sheet-readout-time { font-size: 16px; font-weight: 600; color: var(--accent-muted); }
+.sheet-readout-cycle { font-size: 13px; font-weight: 600; color: var(--accent-muted); letter-spacing: 0.02em; }
+.sheet-readout-value { font-size: 16px; font-weight: 700; color: var(--accent-dark); }
+.sheet-readout-value.is-compact { font-size: 13px; }
+
+.graph-wrap { margin-top: 18px; }
+
+.graph-legend {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--accent-muted);
+}
+
+.graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.graph-legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.graph-svg { width: 100%; height: auto; display: block; overflow: visible; }
+
+/* Tide's graph is intentionally wider than the screen (see
+   TIDE_GRAPH_PX_PER_HOUR in tide-ui.js) so multi-day highs/lows have
+   room to breathe — this wrapper is what actually scrolls to reveal
+   it, and the width:auto below stops the general .graph-svg rule above
+   from squashing it back down to fit, which is what silently made the
+   "scrollable" wrapper never need to scroll in the first place. */
+.tide-graph-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.tide-graph-wrap .graph-axis-value {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tide-graph-wrap .graph-axis-label {
+  font-size: 12px;
+}
+.tide-graph-wrap .tide-graph-svg,
+.tide-graph-wrap .fishing-graph-svg {
+  width: auto;
+  max-width: none;
+}
+.graph-axis-label { font-size: 10px; fill: #6b7d70; }
+.graph-value-label { font-size: 10px; fill: var(--accent-dark); font-weight: 700; }
+.graph-gridline { stroke: #e4e9e4; stroke-width: 1; }
+.graph-axis-value { font-size: 10px; fill: #8a988e; }
+.graph-tick { stroke: #c7d2c9; stroke-width: 1; }
+.wind-dir-halo { fill: #fbfcfa; stroke: #d3ddd6; stroke-width: 1; }
+
+.scrub-line { stroke: var(--accent-dark); stroke-width: 1.5; pointer-events: none; }
+.scrub-dot { fill: var(--accent-dark); stroke: white; stroke-width: 1.5; pointer-events: none; }
+/* Was var(--accent-dark) — the theme accent — which contrasted well
+   enough against the blue score line on its own, but stopped working
+   once the violet best-window shading was added underneath. Three
+   elements now share that chart, and on the greener themes the accent
+   sat close enough to the score line to need a second look.
+
+   Ochre is a fixed hex on purpose, breaking the theme-aware rule that
+   applied when there were only two things to tell apart. It is the one
+   warm hue not already spoken for here: blue is the score, violet is
+   the window shading, grey is structure. Being outside the theme also
+   means it stays equally distinct across all seven of them, rather than
+   being comfortable in some and marginal in others.
+
+   Opacity is set on the element (0.35) rather than here, since the
+   overlay is meant to be read for timing, not value. */
+.fishing-tide-overlay { stroke: #b0762c; }
+
+@media (prefers-color-scheme: dark) {
+  .fishing-tide-overlay { stroke: #e0a84e; }
+}
+.graph-touch-area { fill: transparent; touch-action: pan-y; }
+
+/* Tide's own tap-to-read-off touch area — deliberately NOT
+   touch-action: pan-y like graph-touch-area above. That's correct for
+   the other (fixed-width, non-scrolling) sheet graphs, which use it to
+   block horizontal touch so JS can own a drag-based scrubber instead.
+   Tide's chart is wider than the screen and relies on native horizontal
+   scroll (see .tide-graph-wrap), and only ever responds to a tap/click
+   rather than a drag — so touch-action stays at its default (auto),
+   letting both vertical page scroll and the wrapper's horizontal scroll
+   pass through untouched. */
+.tide-touch-area { fill: transparent; }
+
+.sun-strip { display: flex; margin-top: 14px; gap: 2px; overflow-x: auto; }
+.sun-cell { flex: 1; min-width: 26px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.sun-icon { width: 26px; height: 26px; flex-shrink: 0; }
+.sun-hour-label { font-size: 9px; color: #6b7d70; white-space: nowrap; }
+
+.sheet-footnote { margin: 16px 2px 0; font-size: 12px; color: #6b7d70; line-height: 1.5; }
+.sheet-empty { margin: 24px 4px; color: #6b7d70; font-size: 14px; text-align: center; }
+
+.admiralty-events-summary {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #e7ede6;
+}
+.admiralty-events-heading {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+.admiralty-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.admiralty-event-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--accent-dark);
+}
+.admiralty-event-row strong {
+  margin-left: auto;
+}
+
+/* ---- Accuracy over time (Compare) ---- */
+.accuracy-trend { margin-top: 16px; }
+.accuracy-trend-heading {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+.accuracy-trend-graph { margin-top: 0; }
+.accuracy-trend-caption { margin-top: 6px; }
+
+/* ---- Backup & restore (Settings) ---- */
+.backup-textarea {
+  width: 100%;
+  min-height: 90px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #c3d0c6;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+  background: white;
+}
+.backup-import-label {
+  display: block;
+  margin-top: 14px;
+}
+.backup-import-button { margin-top: 8px; }
+
+/* ---- Place-name disambiguation picker (Settings) ---- */
+.place-ambiguity-picker {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #c3d0c6;
+  border-radius: 10px;
+  background: var(--accent-light);
+}
+.place-ambiguity-heading {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+.place-ambiguity-option {
+  display: block;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border: 1px solid #c3d0c6;
+  border-radius: 8px;
+  background: white;
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+.place-ambiguity-option:last-child { margin-bottom: 0; }
+
+/* A single small nudge, not a full picker — deliberately lighter-weight
+   than .place-ambiguity-picker above it, since accepting or ignoring
+   this costs nothing (no wrong choice to make, unlike disambiguating a
+   place name) and it shouldn't compete visually with the status line
+   it sits next to. */
+.add-to-other-prompt {
+  margin-top: 6px;
+}
+
+.add-to-other-button {
+  padding: 6px 12px;
+  border: 1px solid #c3d0c6;
+  border-radius: 999px;
+  background: white;
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---- Appearance: colour theme swatches (Settings) ----
+   Each swatch shows its OWN theme's accent colour regardless of
+   whichever theme is currently active — so these can't just read
+   var(--accent), which only ever reflects the live theme. Kept as its
+   own small hardcoded list here rather than computed from JS, since a
+   colour swatch is fundamentally a style concern. */
+.theme-swatches { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.theme-swatch {
+  width: 32px;
+  min-height: 32px;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  padding: 0;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.theme-swatch:hover { transform: translateY(-1px); }
+.theme-swatch.is-selected {
+  border-color: transparent;
+  box-shadow: 0 0 0 2px white, 0 0 0 4px rgba(31, 42, 36, .82);
+}
+.theme-swatch[data-theme="mint"] { background: #2f6f4f; }
+.theme-swatch[data-theme="gold"] { background: #c9a227; }
+.theme-swatch[data-theme="sand"] { background: #a97142; }
+.theme-swatch[data-theme="red"] { background: #b0463f; }
+.theme-swatch[data-theme="blue"] { background: #3d6d95; }
+.theme-swatch[data-theme="teal"] { background: #2b7a78; }
+.theme-swatch[data-theme="olive"] { background: #6f7a3a; }
+
+.theme-swatch[data-tide-color="blue"] { background: #a9cfe8; }
+.theme-swatch[data-tide-color="teal"] { background: #8fc3bd; }
+.theme-swatch[data-tide-color="mint"] { background: #9bcaa4; }
+.theme-swatch[data-tide-color="sand"] { background: #e0bd8c; }
+.theme-swatch[data-tide-color="lavender"] { background: #c3b8e0; }
+.theme-swatch[data-tide-color="white"] { background: #ffffff; border-color: #dfe7e1; }
+
+.theme-swatch[data-fishing-color="mint"] { background: #9bcaa4; }
+.theme-swatch[data-fishing-color="blue"] { background: #a9cfe8; }
+.theme-swatch[data-fishing-color="teal"] { background: #8fc3bd; }
+.theme-swatch[data-fishing-color="sand"] { background: #e0bd8c; }
+.theme-swatch[data-fishing-color="lavender"] { background: #c3b8e0; }
+.theme-swatch[data-fishing-color="white"] { background: #ffffff; border-color: #dfe7e1; }
+
+/* ---------------------------------------------------------------
+   Map page (map.html)
+   --------------------------------------------------------------- */
+
+/* Controls above the map, not beside or below: there is more width to
+   spend up here, a thumb reaching the bottom of the screen doesn't
+   cover them, and a side rail would eat into the map itself. */
+.map-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  /* So .map-goto-menu below anchors to this row rather than the next
+     positioned ancestor up (the whole page) — needed since Home/Go-to
+     moved down here from the header, which used to be what carried
+     this. */
+  position: relative;
+}
+
+/* Pill-shaped and sized to match the bottom nav's own buttons, rather
+   than inheriting the app's default full-size button. These sit above
+   the map as a compact row of three, so the chunky default made them
+   look like the main event when they are chrome around the map. */
+.map-adopt,
+.map-nav-button {
+  min-height: 38px;
+  padding: 0 15px;
+  border-radius: 999px;
+  border: 1px solid #dfe7e1;
+  background: white;
+  color: var(--accent-dark);
+  font-weight: 600;
+  font-size: 14px;
+  /* Belt-and-braces alongside this page's own maximum-scale=1 viewport
+     meta (see map.html) — that's the actual fix for iOS's page zoom
+     firing on ordinary use, but a quick double-tap landing on one of
+     these buttons rather than the canvas is exactly the kind of
+     near-miss that was originally reported (back when the map still
+     had its own double-tap-to-zoom gesture — since removed, but iOS's
+     own zoom can still fire here regardless of that gesture's fate).
+     This also removes the ~300ms tap delay browsers otherwise add
+     while they wait to see if a second tap is coming, which is a
+     small, free responsiveness win on top of the actual fix. */
+  touch-action: manipulation;
+}
+
+.map-adopt {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* The one button here that does something irreversible-ish — it
+     changes which location the whole app is showing — so it is the only
+     one that reads as a primary action. */
+  background: var(--accent-dark);
+  color: white;
+  border-color: transparent;
+}
+
+/* Was the widest thing in the row by a good margin, partly because it
+   used to carry a distance readout too ("Forecast for here (378 km
+   out)") — dropped, the crosshair already shows where "here" is.
+   Smaller text and tighter padding here reflect that this button no
+   longer needs to read as the row's dominant element, now that the row
+   also has to fit two zoom buttons and the Home/Go-to icons alongside
+   it. */
+.map-adopt-compact {
+  font-size: 13px;
+  padding: 0 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-nav-button {
+  flex: 0 0 auto;
+  /* Belt-and-braces alongside the blur()-on-tap in map.js — removes
+     iOS's own tap-highlight flash (a separate thing from the stuck
+     focus/active look the blur() call targets) so nothing about the
+     tap gesture leaves a visible trace on these buttons afterwards. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+.map-nav-button:disabled {
+  opacity: 0.4;
+}
+
+/* Square-ish rather than the pill shape the text buttons use — a "+"
+   is one narrow character, so the shared horizontal padding alone
+   would have made these two the smallest tap targets in the row
+   despite being the ones pressed most often. Fixed equal width and a
+   larger glyph keeps them thumb-sized and keeps the pair visually
+   matched to each other. */
+.map-zoom-button {
+  width: 44px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.map-stage {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(31, 42, 36, .10), 0 12px 26px -14px rgba(31, 42, 36, .30);
+}
+
+#mapCanvas {
+  display: block;
+  width: 100%;
+  /* Deeper than a front-page strip on purpose — a wide, short map shows
+     plenty to the west and almost nothing north or south, which fails
+     exactly when the weather is doing something other than the
+     prevailing westerly. This was 4:3 until the bottom nav dropped to a
+     single Settings link; the space that freed up went straight into
+     the map itself rather than just tightening the page, since "a lot
+     of blank screen" was the more direct complaint. */
+  aspect-ratio: 1 / 1;
+  /* Required for single-finger drag — without it the browser scrolls
+     the page instead of panning the map. It is also the reason drag
+     exists only on this page: a scroll-blocking canvas inside a
+     scrolling column feels broken. */
+  touch-action: none;
+}
+
+/* In the DOM rather than painted on the canvas, so it never needs
+   redrawing during a pan — the centre doesn't move relative to the
+   viewport, only the world underneath it does. */
+.map-crosshair {
+  position: absolute;
+  left: 50%;
+  /* Was top: 58%, a deliberate bias so more of the view showed the
+     direction weather approaches from than the direction already
+     past — see makeView()'s own note in map.js (MAP_CROSSHAIR_BAR_ADJUST)
+     for why that traded away in favour of this. The 17px here is exactly
+     that constant, and the two MUST stay the same value: this is what
+     the crosshair looks like it's pointing at; that constant is where
+     the map's own content is actually drawn to line up with it. calc()
+     rather than a plain percentage because the offset needed is a fixed
+     pixel amount (half the bottom time/conditions pill's own
+     footprint), not something that scales with the canvas's size. */
+  top: calc(50% - 17px);
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  pointer-events: none;
+  /* A light halo behind the dark lines, via drop-shadow rather than a
+     background/outline (those don't follow a shape made of two
+     gradients the way a filter does). Confirmed on a real device: over
+     a mid-to-dark rain band the crosshair was nearly invisible — a
+     dark, semi-transparent mark on a dark blue fill has almost no
+     contrast. The halo is deliberately light/neutral rather than
+     theme-coloured, so it works the same way regardless of which
+     colour is underneath (rain, terrain, open sea, any palette). */
+  /* Two identical drop-shadows rather than one: each pass adds another
+     semi-transparent white glow underneath, and stacking them gets
+     closer to a solid, fully opaque halo than either pass alone would —
+     needed against the darkest rain bands specifically, where a single
+     softer glow was still not quite enough contrast in testing. */
+  filter:
+    drop-shadow(0 0 1.5px rgba(255,255,255,.9))
+    drop-shadow(0 0 1.5px rgba(255,255,255,.9));
+  background:
+    linear-gradient(currentColor, currentColor) center / 100% 1px no-repeat,
+    linear-gradient(currentColor, currentColor) center / 1px 100% no-repeat;
+  /* Was rgba(31, 42, 36, .55) — semi-transparent. That was the real
+     problem, more than the halo itself: against the darkest rain band
+     specifically, a 55%-opaque dark mark plus a white halo still nets
+     out too close to the background colour to read at all. Confirmed
+     by rendering both side by side — full opacity here, same halo
+     underneath, was the fix; the halo alone wasn't. Checked against a
+     light background too (open sea) so this isn't trading one failure
+     for another: a fully opaque dark cross reads clearly there as
+     well, and the halo is simply invisible-on-white, which is correct
+     — it isn't needed there. */
+  color: rgb(31, 42, 36);
+}
+
+.map-scale {
+  position: absolute;
+  /* Was left:8px/right:8px spanning the whole card — reported back as
+     looking like "a whole bar" across the map rather than a small
+     readout. Only right:8px now, same as the front page strip's own
+     small pill (.map-strip-scale) — an absolutely positioned box with
+     just one side set shrink-wraps to its own content and grows
+     leftward as needed, rather than stretching to fill. max-width is
+     only a cap for a genuinely long line (several active layers'
+     readouts at once on a narrow phone), not the pill's normal size.
+
+     Moved from bottom:8px to top:8px — the pill no longer carries the
+     zoom-distance figure (dropped entirely from the text itself, see
+     updateMapChrome in map.js), so there's no reason left for it to
+     specifically anchor near the zoom buttons, and the top corner sits
+     clear of both the crosshair and the layer toggles/legends below
+     the map. */
+  right: 8px;
+  top: 8px;
+  max-width: calc(100% - 16px);
+  white-space: normal;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .82);
+  color: var(--accent-dark);
+}
+
+/* The strip's own version of the pill above — deliberately NOT
+   .map-scale itself (that one is full-width by design now, carrying a
+   longer per-layer readout the strip never has — see its own comment
+   just above). Sized to its content instead of spanning the card, and
+   hidden by default (see map-strip.js, which only shows it once the
+   shared Hour slider has moved away from "Now" — permanently visible
+   read as a bar sitting across the map rather than useful information,
+   most of the time showing nothing more than the current real time). */
+.map-strip-scale {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .82);
+  color: var(--accent-dark);
+  display: none;
+}
+
+.map-strip-scale.is-visible {
+  display: block;
+}
+
+/* Sits directly under the map, between it and the layer toggles — close
+   enough to read as "this explains what's above" rather than a
+   disconnected key floating elsewhere on the page. */
+.map-layer-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 10px 0 4px;
+  font-size: 13px;
+  /* Same reasoning as .map-adopt/.map-nav-button above — these labels
+     sit close enough to the map to catch a mistimed tap. */
+  touch-action: manipulation;
+}
+
+.map-legend-row {
+  margin: 4px 0;
+}
+
+.map-legend-caption {
+  display: block;
+  font-size: 11px;
+  color: var(--accent-muted);
+  margin-bottom: 2px;
+}
+
+.map-legend-note {
+  font-size: 11px;
+  color: var(--accent-muted);
+  font-style: italic;
+}
+
+/* Temperature's legend — a continuous bar rather than the discrete
+   swatches the other legends use, since the layer itself paints a
+   smooth gradient now (see MAP_TEMP_COLOR_STOPS) rather than bands. */
+.map-legend-gradient {
+  height: 10px;
+  border-radius: 5px;
+  margin: 2px 0;
+}
+
+.map-legend-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--accent-muted);
+}
+
+.map-legend {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.map-legend-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1 1 0;
+  gap: 3px;
+}
+
+.map-legend-swatch {
+  display: block;
+  width: 100%;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.map-legend-label {
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--accent-muted);
+}
+
+/* Best-window shading on the fishing graph.
+   Violet deliberately, and NOT one of the optimistic greens.
+
+   The four score bands already own green, amber and red, so any warm or
+   green highlight here would read as a score — a gold column would look
+   like "Fair", which is exactly the wrong message for the best window of
+   the day. A hue from outside the scoring scale entirely can't be
+   misread as a value, so it reads as annotation instead.
+
+   Opacity is low on purpose: this sits behind the score curve, the band
+   gridlines, the day boundaries and the tide overlay, and should look
+   like the background lifting rather than another thing drawn on top. */
+.fishing-window-band {
+  fill: #6b4fa8;
+  opacity: 0.12;
+}
+
+@media (prefers-color-scheme: dark) {
+  .fishing-window-band {
+    fill: #b9a3e6;
+    opacity: 0.16;
+  }
+}
+
+/* Sheet tinting.
+
+   Opening a tide or fishing graph should feel like that card expanding
+   rather than arriving somewhere else, so the sheet takes the card's own
+   selected colour. Set from tide-ui.js / fishing-ui.js on open, and
+   cleared by app.js when a weather sheet opens — the sheet element is
+   shared between all of them.
+
+   These are lighter than the card tints they correspond to. A colour
+   that reads as a gentle wash across a two-line card becomes heavy over
+   a full-height sheet, and the graphs inside were drawn against a
+   near-white background: their gridlines and axis labels are already
+   low-contrast by design, and a strong tint behind them costs more
+   legibility than the colour is worth. */
+.sheet[data-color="blue"] { background: #f2f8fc; }
+.sheet[data-color="teal"] { background: #f1f8f7; }
+.sheet[data-color="mint"] { background: #f2f8f3; }
+.sheet[data-color="sand"] { background: #faf5ec; }
+.sheet[data-color="lavender"] { background: #f6f4fb; }
+.sheet[data-color="white"] { background: #ffffff; }
+
+/* Settings / Solar / Help tab bar.
+   Injected by app.js into the header of those three pages only — see
+   OCCASIONAL_PAGES there. Styled as a segmented control rather than as
+   more nav pills, so it reads as "three views of one place" instead of
+   three unrelated destinations. */
+.page-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 4px;
+  padding: 3px;
+  background: rgba(31, 42, 36, .06);
+  border-radius: 999px;
+}
+
+.page-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 38px;
+  /* Four tabs on a phone leaves roughly 80px each. Longer labels
+     ellipsis rather than forcing the bar to wrap or scroll. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-dark);
+  text-decoration: none;
+}
+
+.page-tab:hover {
+  text-decoration: none;
+}
+
+.page-tab.is-current {
+  background: white;
+  box-shadow: 0 1px 2px rgba(31, 42, 36, .12);
+}

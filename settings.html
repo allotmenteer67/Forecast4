@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <script>
+    // Applies a saved colour theme before the page paints — see index.html
+    // for the full explanation; duplicated identically in every page's head.
+    (function () {
+      try {
+        var theme = localStorage.getItem("forecast-compare:theme");
+        if (theme && theme !== "mint") document.documentElement.dataset.theme = theme;
+      } catch {}
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#2f6f4f">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cloude">
+  <title>Settings — Cloude</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
+      <h1>Settings</h1>
+      <p>Location, places, units, and which forecasters appear on Compare.</p>
+    </header>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Saved places</legend>
+        <div id="placesList" class="places-list"></div>
+
+        <label>
+          Go somewhere
+          <div class="location-row">
+            <input id="postcode" value="TA6" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false">
+          </div>
+        </label>
+        <p class="note">A postcode or a plain place name both work — e.g. "TA6" or "York".</p>
+        <div id="placeAmbiguityPicker" class="place-ambiguity-picker" hidden></div>
+        <div class="location-actions">
+          <button id="updateLocation" class="location-action-switch">Switch</button>
+          <button id="addCurrentPlace" class="location-action-save">Save</button>
+        </div>
+        <p id="addPlaceStatus" class="actual-status status-error-only"></p>
+
+        <button id="useMyLocation" type="button" class="geo-button">Use my location</button>
+        <p id="geoStatus" class="actual-status status-error-only"></p>
+
+        <p class="note">Switch looks at that place now, without saving it. Save adds it to the list above — without changing what's currently shown — so you can rename it or switch to it any time. Switching to a saved place reuses whatever forecast history it already has, instead of starting fresh.</p>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Tides</legend>
+        <p class="note">A separate list from your weather places — a tide spot doesn't have to be the same as where you check the weather. Each one is matched to its nearest real tide gauge.</p>
+        <div id="tideLocationsList" class="places-list"></div>
+
+        <label>
+          Add a location
+          <div class="location-row">
+            <input id="tideLocationInput" type="text" placeholder="Postcode or place name" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false">
+          </div>
+        </label>
+        <div id="tideLocationAmbiguityPicker" class="place-ambiguity-picker" hidden></div>
+        <div class="location-actions">
+          <button id="addTideLocationButton" type="button">Add</button>
+        </div>
+        <p id="tideLocationStatus" class="actual-status status-error-only"></p>
+        <div id="tideAddToWeatherPrompt" class="add-to-other-prompt" hidden></div>
+
+        <p class="note">Card colour</p>
+        <div id="tideCardColorSwatches" class="theme-swatches"></div>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Fishing</legend>
+        <p class="note">Shares its location with Tide above. The front-page row and its graph show a rule-of-thumb Poor/Fair/Good/Excellent estimate, not measured science — see Help for exactly how it's worked out.</p>
+        <div id="fishingMarkTypeList" class="places-list"></div>
+        <p class="note">Card colour</p>
+        <div id="fishingCardColorSwatches" class="theme-swatches"></div>
+        <label class="check">
+          <input type="checkbox" id="fishingShowRawToggle">
+          <span>Show raw factors on the fishing graph</span>
+        </label>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Appearance</legend>
+        <div id="themeSwatches" class="theme-swatches"></div>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Backup &amp; restore</legend>
+        <p class="note">Everything Cloude knows — FFV history, saved places, settings, and tide data (locations, TFV, your Admiralty key and proxy URL, learned corrections) — lives only on this device. Copy a backup here before switching phones or clearing site data, or to hand your learned history to someone else in the same postcode area.</p>
+        <button id="exportButton" type="button">Copy backup to clipboard</button>
+        <p id="exportStatus" class="actual-status status-error-only"></p>
+        <textarea id="exportOutput" class="backup-textarea" readonly hidden></textarea>
+
+        <label class="backup-import-label">
+          Restore from a backup
+          <textarea id="importInput" class="backup-textarea" placeholder="Paste backup text here"></textarea>
+        </label>
+        <button id="importButton" type="button" class="backup-import-button">Restore this backup</button>
+        <p id="importStatus" class="actual-status status-error-only"></p>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Front page cells</legend>
+        <p class="note">Rain, Temperature, and Wind always show. Pick which of these also appear.</p>
+        <div id="headlineToggles" class="checks"></div>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <legend class="section-legend">Units</legend>
+      <div id="conditionUnits"></div>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Hourly slider range</legend>
+        <div class="checks">
+          <label class="check">
+            <input type="radio" name="hourRange" id="hourRange48" value="48">
+            <span>48 hours ahead</span>
+          </label>
+          <label class="check">
+            <input type="radio" name="hourRange" id="hourRange24" value="24">
+            <span>24 hours ahead</span>
+          </label>
+        </div>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Available forecasters</legend>
+        <div id="forecasters" class="checks"></div>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Admiralty accuracy (optional)</legend>
+        <p class="note">A saved tide location often sits some real distance from its nearest gauge above — Teignmouth, for example, is matched to Plymouth, over 50km away, and can genuinely run 35-40 minutes and the best part of a metre different at high tide. A free Admiralty Discovery API key lets each location learn its own real correction against Admiralty's own data for that exact spot, rather than relying on the nearest gauge unmodified. Get a free key at admiraltyapi.portal.azure-api.net (Products → UK Tidal API → Discovery tier).</p>
+        <p class="note">Admiralty's API can't be called directly from a browser (their own docs confirm this — no CORS support on their side), so this also needs a small relay in between. See admiralty-proxy-worker.js in the project files — it deploys free on Cloudflare Workers in a few minutes and doesn't store or need to know anyone's key.</p>
+        <label>
+          API key
+          <div class="location-row">
+            <input id="discoveryApiKeyInput" type="text" placeholder="Paste your Discovery subscription key" maxlength="80" autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+        </label>
+        <label>
+          Discovery proxy URL
+          <div class="location-row">
+            <input id="discoveryProxyUrlInput" type="text" placeholder="https://your-worker.your-subdomain.workers.dev" maxlength="120" autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+        </label>
+        <div class="location-actions">
+          <button id="saveDiscoveryKeyButton" type="button">Save</button>
+        </div>
+        <p id="discoveryKeyStatus" class="actual-status status-error-only"></p>
+      </fieldset>
+    </section>
+
+    <nav class="bottom-nav">
+      <a href="index.html">Cloude</a>
+      <a href="compare.html">Compare</a>
+      <a href="solar.html">Solar</a>
+      <a href="help.html">Help</a>
+    </nav>
+  </main>
+
+  <script src="app.js"></script>
+  <script src="tide.js"></script>
+  <script src="tide-ui.js"></script>
+  <script src="fishing.js"></script>
+  <script src="fishing-ui.js"></script>
+  <script src="settings.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    }
+  </script>
+</body>
+</html>
