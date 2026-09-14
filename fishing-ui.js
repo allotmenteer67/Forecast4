@@ -1,0 +1,634 @@
+// Fishing UI — DOM and rendering for the fishing conditions card.
+// Deliberately reuses tide's own saved-location list and "current"
+// selection (loadTideLocations/loadCurrentTideLocationId in tide.js)
+// rather than keeping a separate list — a fishing mark and a tide spot
+// are so often the same place that maintaining two lists in sync would
+// just be two copies of the same thing drifting apart. Switching the
+// current location via tide's own dots switches fishing's display too.
+
+const fishingRow = document.getElementById("fishingRow");
+
+// ---- Fishing card colour ----
+// Mirrors tide's own card colour picker exactly (see TIDE_CARD_COLORS
+// in tide-ui.js) — its own storage key and swatch list, since the two
+// cards are visually separate and someone might reasonably want them
+// distinguishable at a glance.
+const FISHING_CARD_COLOR_KEY = "cloude-fishing:cardColor";
+const FISHING_CARD_COLORS = [
+  { id: "mint", name: "Mint" },
+  { id: "blue", name: "Light blue" },
+  { id: "teal", name: "Teal" },
+  { id: "sand", name: "Sand" },
+  { id: "lavender", name: "Lavender" },
+  { id: "white", name: "Plain white" }
+];
+
+function loadFishingCardColor() {
+  try {
+    return localStorage.getItem(FISHING_CARD_COLOR_KEY) || "mint";
+  } catch {
+    return "mint";
+  }
+}
+
+function saveFishingCardColor(id) {
+  try {
+    localStorage.setItem(FISHING_CARD_COLOR_KEY, id);
+  } catch {
+    // Storage unavailable — choice just won't persist between visits.
+  }
+}
+
+function applyFishingCardColor(id) {
+  const fishingCard = document.querySelector(".fishing-card");
+  if (fishingCard) fishingCard.dataset.color = id; // no-op on pages with no fishing card, e.g. Settings
+}
+
+applyFishingCardColor(loadFishingCardColor());
+
+let fishingRenderToken = 0;
+
+function setFishingCardVisible(visible) {
+  const card = document.querySelector(".fishing-card");
+  if (card) card.hidden = !visible;
+}
+
+async function renderFishingRow(force = false) {
+  if (!fishingRow) return;
+  const toggles = loadHeadlineToggles();
+  if (!toggles.fishing) {
+    fishingRow.hidden = true;
+    setFishingCardVisible(false);
+    return;
+  }
+
+  const location = currentTideLocation(); // shared with tide — see file header
+  if (!location) {
+    fishingRow.hidden = true;
+    setFishingCardVisible(false);
+    return;
+  }
+  fishingRow.hidden = false;
+  setFishingCardVisible(true);
+
+  const myToken = ++fishingRenderToken;
+  // Same split as tide (see tide-ui.js) — title fixed left, place name
+  // shrinkable on the right. Fishing shares tide's location, so this is
+  // deliberately the same string in both cards; the duplication is the
+  // price of each card being readable on its own.
+  const headHtml =
+    `<div class="tide-row-head">` +
+      `<span class="tide-row-title">Fishing</span>` +
+      `<span class="tide-row-place">${shortPlaceLabel(location.label)}${tideDateQualifier()}</span>` +
+    `</div>`;
+  const labelHtml = `FISHING — ${location.label}${tideDateQualifier()}`;
+  fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Loading…</span>`;
+
+  let built;
+  let buildError = null;
+  try {
+    built = await getOrBuildTideFit(location.station);
+  } catch (err) {
+    built = null;
+    buildError = err && err.message; // TEMPORARY diagnostic — see tide.js's buildAndCacheTideFit
+  }
+  if (myToken !== fishingRenderToken) return;
+  if (!built) {
+    fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available${buildError ? ": " + buildError : " right now"}</span>`;
+    return;
+  }
+
+  const markType = fishingMarkType(location);
+  let forecast;
+  let forecastError = null;
+  try {
+    forecast = await fetchFishingForecast(location.station.lat, location.station.lon, markType, force);
+  } catch (err) {
+    forecast = null;
+    forecastError = err && err.message; // TEMPORARY diagnostic
+  }
+  if (myToken !== fishingRenderToken) return;
+  if (!forecast) {
+    fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available${forecastError ? ": " + forecastError : " right now"}</span>`;
+    return;
+  }
+
+  const weatherTimesEpoch = forecast.weather.hourly.time.map(t => Date.parse(t));
+  const marineTimesEpoch = forecast.marine ? forecast.marine.hourly.time.map(t => Date.parse(t)) : null;
+  const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
+
+  // The front-page card shows the CURRENT band only, deliberately.
+  //
+  // It used to also show the best upcoming 2-hour window, which pushed
+  // the card to three lines while tide sits at two — visibly uneven
+  // beside it now the pair shares a row, and height is the most
+  // expensive thing on that page. The window is one tap away in the
+  // sheet, where there is room to show it properly.
+  //
+  // This also removes real work: finding that window meant sampling
+  // every 15 minutes across the next 24 hours, 97 points, on every
+  // render of the row — including every swipe between saved locations.
+  // Only the current moment is needed now.
+  const nowPoint = computeFishingAt({
+    fit: built.fit, epochIso: built.epochIso, hours: nowHours,
+    weatherHourly: forecast.weather.hourly, weatherTimesEpoch,
+    marineHourly: forecast.marine ? forecast.marine.hourly : null, marineTimesEpoch,
+    isEstuary: markType === "estuary"
+  });
+
+  const valueHtml =
+    `<span class="fishing-band fishing-band-${nowPoint.band.toLowerCase()}">${nowPoint.band} now</span>`;
+
+  fishingRow.innerHTML = `${headHtml}<div class="fishing-row-value">${valueHtml}</div>`;
+}
+
+// ---- Sheet: scrolling score curve + optional raw factors ----
+
+let openFishingSheetToken = 0;
+
+async function openFishingSheet() {
+  if (!sheet) return;
+  const location = currentTideLocation();
+  if (!location) return;
+  const myToken = ++openFishingSheetToken;
+
+  sheetTitle.textContent = `Fishing — ${location.label}`;
+  sheetRange.textContent = tideDateQualifier().replace(/^ · /, "");
+  sheetReadout.hidden = true;
+  // readoutCycle (Tide's spring/neap phase) is a shared readout child —
+  // hide it defensively here too, since Fishing's own tap-readout later
+  // un-hides the shared parent without knowing this child exists.
+  if (readoutCycle) readoutCycle.hidden = true;
+  sheetBody.innerHTML = "";
+  sheetFootnote.textContent = "";
+
+  sheet.hidden = false;
+  requestAnimationFrame(() => {
+    sheetBackdrop.classList.add("is-open");
+    // Same as tide's sheet — carries the fishing card's own colour
+    // through, so the expanded view stays visibly the fishing one.
+    sheet.dataset.color = loadFishingCardColor();
+    sheet.classList.add("is-open");
+  });
+
+  const loading = document.createElement("p");
+  loading.className = "sheet-empty";
+  loading.textContent = "Loading fishing conditions…";
+  // Same reasoning as tide's own openTideSheet — a min-height on this
+  // brief loading state keeps the sheet's peek gap roughly consistent
+  // whether it's mid-fetch or finished, rather than the single-line
+  // loading text leaving a much bigger gap than the real content will.
+  // Fishing has two sequential fetches (tide fit, then the forecast),
+  // so this state genuinely runs longer than tide's own on average.
+  sheetBody.style.minHeight = "260px";
+  sheetBody.appendChild(loading);
+
+  let built, forecast;
+  try {
+    built = await getOrBuildTideFit(location.station);
+    const markType = fishingMarkType(location);
+    forecast = built ? await fetchFishingForecast(location.station.lat, location.station.lon, markType) : null;
+  } catch {
+    built = null;
+    forecast = null;
+  }
+  if (myToken !== openFishingSheetToken) return;
+  sheetBody.innerHTML = "";
+  if (!built || !forecast) {
+    const empty = document.createElement("p");
+    empty.className = "sheet-empty";
+    empty.textContent = "Fishing conditions aren't available right now.";
+    sheetBody.appendChild(empty);
+    return; // min-height stays — this is just as short as the loading state was
+  }
+  sheetBody.style.minHeight = ""; // real chart content is about to exceed it anyway
+
+  const markType = fishingMarkType(location);
+  const weatherTimesEpoch = forecast.weather.hourly.time.map(t => Date.parse(t));
+  const marineTimesEpoch = forecast.marine ? forecast.marine.hourly.time.map(t => Date.parse(t)) : null;
+  const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
+
+  // The curve can only run as far as the shortest-lived input allows —
+  // wind/pressure/marine forecasts run 7 days, but capped a little
+  // short of that so the last stretch of the curve isn't sitting right
+  // at the forecast's own edge, where Open-Meteo's hourly data can thin
+  // out or turn stale-feeling.
+  const maxForecastHours = Math.min(
+    (weatherTimesEpoch[weatherTimesEpoch.length - 1] - Date.parse(built.epochIso)) / 3600000 - 6,
+    marineTimesEpoch ? (marineTimesEpoch[marineTimesEpoch.length - 1] - Date.parse(built.epochIso)) / 3600000 - 6 : Infinity
+  );
+  const endHours = Math.min(nowHours + 5 * 24, maxForecastHours);
+  const startHours = Math.max(nowHours - 24, (weatherTimesEpoch[0] - Date.parse(built.epochIso)) / 3600000);
+
+  const points = [];
+  for (let h = startHours; h <= endHours; h += 0.5) {
+    points.push(computeFishingAt({
+      fit: built.fit, epochIso: built.epochIso, hours: h,
+      weatherHourly: forecast.weather.hourly, weatherTimesEpoch,
+      marineHourly: forecast.marine ? forecast.marine.hourly : null, marineTimesEpoch,
+      isEstuary: markType === "estuary"
+    }));
+  }
+
+  sheetBody.appendChild(renderFishingCurve(points, built.epochIso, nowHours, startHours, endHours, location, built.fit));
+
+  if (loadFishingShowRaw()) {
+    const nowPoint = points.find(p => p.hours >= nowHours) || points[0];
+    sheetBody.appendChild(renderFishingRawFactors(nowPoint, markType));
+  }
+
+  sheetFootnote.textContent =
+    (loadFishingShowWindows()
+      ? "Shaded columns mark each day's best two-hour window. "
+      : "") +
+    "Fishing conditions are a rule-of-thumb estimate, not measured science — see Help for exactly how each factor is worked out and weighted.";
+}
+
+// The scrolling score curve — visually matches tide's own wide,
+// horizontally-scrolling chart (same TIDE_GRAPH_PX_PER_HOUR density,
+// same day-boundary gridlines), but the y-axis is the four score bands
+// rather than a height in metres.
+//
+// Also draws the location's own corrected tide height as a faint
+// background line, purely for TIMING — auto-scaled to its own min/max
+// within the visible window (same idea as Temperature/Dew Point
+// overlaying each other), with no y-axis of its own and no claim that
+// a given height corresponds to a given score band. The tide contributor
+// to the fishing score is really tide MOVEMENT (rate of change, which
+// peaks mid-tide and drops to ~0 at both slack high and slack low), not
+// height — so a height curve here answers "is a low-tide-only mark
+// accessible when the score is good", which is what was actually asked
+// for, without implying a low/high-to-score relationship that isn't how
+// the score works.
+function renderFishingCurve(points, epochIso, nowHours, startHours, endHours, location, tideFit) {
+  const totalHours = endHours - startHours;
+  const padL = 66, padR = 16, padT = 16, padB = 34;
+  const plotW = Math.max(280, totalHours * TIDE_GRAPH_PX_PER_HOUR);
+  const plotH = 210;
+  const width = plotW + padL + padR;
+  const height = plotH + padT + padB;
+
+  const xFor = h => padL + ((h - startHours) / totalHours) * plotW;
+  const yForBand = rank => padT + plotH - (rank / (FISHING_BAND_ORDER.length - 1)) * plotH;
+  const yForScore = score => padT + plotH - score * plotH; // continuous, for a smooth line rather than a stepped one
+
+  const svg = sheetSvgEl("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    width: String(width),
+    height: String(height),
+    class: "graph-svg fishing-graph-svg"
+  });
+
+  // Best-window bands, drawn FIRST so everything else sits on top of
+  // them. They read as the background lifting slightly rather than as
+  // another line competing with the score curve, the four band
+  // gridlines, the day boundaries and the tide overlay — the graph was
+  // already carrying a lot before this was added.
+  //
+  // Deliberately unlabelled. At 10px per hour a two-hour window is only
+  // about 20px wide, which is too narrow for a time range without
+  // either shrinking the text to nothing or letting it overflow into
+  // its neighbours. Tapping the graph already gives an exact readout,
+  // and the footnote says what the shading means.
+  if (loadFishingShowWindows()) {
+    findDailyFishingWindows(points, epochIso, 2).forEach(w => {
+      const x1 = xFor(Math.max(w.startHours, startHours));
+      const x2 = xFor(Math.min(w.endHours, endHours));
+      if (x2 <= x1) return;
+      svg.appendChild(sheetSvgEl("rect", {
+        x: x1, y: padT, width: Math.max(2, x2 - x1), height: plotH,
+        class: "fishing-window-band"
+      }));
+    });
+  }
+
+  FISHING_BAND_ORDER.forEach((band, rank) => {
+    const y = yForBand(rank);
+    svg.appendChild(sheetSvgEl("line", { x1: padL, x2: width - padR, y1: y, y2: y, class: "graph-gridline" }));
+    const label = svg.appendChild(sheetSvgEl("text", { x: padL - 6, y: y + 3, class: "graph-axis-label", "text-anchor": "end" }));
+    label.textContent = band;
+  });
+
+  let lastDay = null;
+  for (let h = startHours; h <= endHours; h += 1) {
+    const when = new Date(Date.parse(epochIso) + h * 3600000);
+    const dayKey = when.toDateString();
+    if (dayKey !== lastDay) {
+      lastDay = dayKey;
+      const x = xFor(h);
+      svg.appendChild(sheetSvgEl("line", { x1: x, x2: x, y1: padT, y2: padT + plotH, class: "graph-gridline", "stroke-dasharray": "2 3" }));
+      const label = svg.appendChild(sheetSvgEl("text", { x: x + 4, y: padT + plotH + 20, class: "graph-axis-label", "text-anchor": "start" }));
+      label.textContent = when.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+    }
+  }
+
+  const nowX = xFor(nowHours);
+  svg.appendChild(sheetSvgEl("line", { x1: nowX, x2: nowX, y1: padT, y2: padT + plotH, class: "graph-gridline", "stroke-dasharray": "3 3" }));
+
+  // Tide overlay — drawn BEFORE the score line so the score sits
+  // visually on top. Uses the exact same correction path as tide's own
+  // sheet (getOrBuildTideFit + loadTideFudge + applyLocationCorrection),
+  // so a location with a learned Admiralty correction shows the same
+  // corrected shape here as it does on its own tide card — not the raw
+  // nearest-gauge curve underneath it.
+  if (location) {
+    try {
+      const fit = tideFit;
+      if (!fit) throw new Error("no tide fit available");
+      const fudge = loadTideFudge(location.station.id);
+      const tidePts = [];
+      const step = totalHours / 200;
+      for (let h = startHours; h <= endHours; h += step) {
+        const r = applyLocationCorrection(location, fit, h, applyTideFudge(predictTideLevel(fit, h), fudge));
+        tidePts.push({ hours: r.hours, level: r.level });
+      }
+      const levels = tidePts.map(p => p.level);
+      const minLevel = Math.min(...levels), maxLevel = Math.max(...levels);
+      const levelSpan = maxLevel - minLevel || 1;
+      // Auto-scaled across the FULL plot height, same as the score line —
+      // deliberately reversed back from a previous fix that confined this
+      // to a bottom 40% band. That earlier change was solving a different
+      // complaint (the tide line looking like a second data series on
+      // equal footing with the score). The current ask is the opposite:
+      // lining up fishing condition against tide state at a glance needs
+      // both curves sharing the same vertical space, not separated into
+      // stacked bands. If "reads as a competing series" comes up again,
+      // that's a styling problem (opacity/colour/line-weight) to solve
+      // without re-separating the two into different height bands, since
+      // that directly breaks the superimposed reading this is now for.
+      const yForTide = level => padT + plotH - ((level - minLevel) / levelSpan) * plotH;
+      const tidePath = "M" + tidePts.map(p => `${xFor(p.hours)},${yForTide(p.level)}`).join(" L");
+      svg.appendChild(sheetSvgEl("path", {
+        d: tidePath, fill: "none", "stroke-width": 2.4,
+        "stroke-linecap": "round", "stroke-linejoin": "round", opacity: "0.35",
+        class: "fishing-tide-overlay"
+      }));
+    } catch {
+      // Missing tide fit for this location shouldn't block the fishing
+      // chart itself from rendering — just skip the overlay silently.
+    }
+  }
+
+  const path = "M" + points.map(p => `${xFor(p.hours)},${yForScore(p.score)}`).join(" L");
+  svg.appendChild(sheetSvgEl("path", { d: path, fill: "none", stroke: "#3d6d95", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+
+  // Tap anywhere to read off that moment's band + factors — same tap
+  // (not drag) approach as tide's curve, for the same reason: this
+  // chart is wide enough to need native horizontal scroll, and a
+  // drag-based scrubber would fight that gesture.
+  const touchArea = sheetSvgEl("rect", { x: 0, y: 0, width, height, class: "tide-touch-area" });
+  svg.appendChild(touchArea);
+  const crosshair = sheetSvgEl("line", { x1: 0, x2: 0, y1: padT, y2: padT + plotH, class: "scrub-line" });
+  const dot = sheetSvgEl("circle", { r: 4.5, class: "scrub-dot" });
+  svg.appendChild(crosshair);
+  svg.appendChild(dot);
+
+  function nearestPoint(hours) {
+    let best = points[0], bestGap = Infinity;
+    points.forEach(p => {
+      const gap = Math.abs(p.hours - hours);
+      if (gap < bestGap) { bestGap = gap; best = p; }
+    });
+    return best;
+  }
+
+  function showReadoutAt(hours) {
+    const clamped = Math.max(startHours, Math.min(endHours, hours));
+    const point = nearestPoint(clamped);
+    const x = xFor(point.hours);
+    const y = yForScore(point.score);
+    crosshair.setAttribute("x1", x);
+    crosshair.setAttribute("x2", x);
+    dot.setAttribute("cx", x);
+    dot.setAttribute("cy", y);
+    const when = new Date(Date.parse(epochIso) + point.hours * 3600000);
+    readoutTime.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    readoutValue.textContent = point.band;
+    sheetReadout.hidden = false;
+
+    if (loadFishingShowRaw()) {
+      const existing = sheetBody.querySelector(".fishing-raw-factors");
+      if (existing) existing.replaceWith(renderFishingRawFactors(point, currentTideLocation() ? fishingMarkType(currentTideLocation()) : "coastal"));
+    }
+  }
+
+  touchArea.addEventListener("click", e => {
+    const rect = svg.getBoundingClientRect();
+    const localX = ((e.clientX - rect.left) / rect.width) * width;
+    const ratio = (localX - padL) / plotW;
+    showReadoutAt(startHours + ratio * totalHours);
+  });
+
+  showReadoutAt(nowHours);
+
+  const wrap = document.createElement("div");
+  wrap.className = "graph-wrap tide-graph-wrap";
+  wrap.appendChild(svg);
+  return wrap;
+}
+
+// Plain list of the individual factors behind whichever point the curve
+// is currently showing — kept visually distinct between the
+// real-evidence factors (wind, wave/swell) and the folklore-adjacent
+// ones (tidal range/"moon phase" strength, pressure trend), per the
+// decision that a blended score shouldn't paper over how much weight
+// each kind of evidence actually deserves.
+function renderFishingRawFactors(point, markType) {
+  const wrap = document.createElement("div");
+  wrap.className = "fishing-raw-factors admiralty-events-summary"; // reuses the same "separate block below the graph" styling as tide's Admiralty summary
+
+  const heading = document.createElement("h3");
+  heading.className = "admiralty-events-heading";
+  heading.textContent = "Raw factors";
+  wrap.appendChild(heading);
+
+  function row(label, valueText, group) {
+    const r = document.createElement("div");
+    r.className = "fishing-factor-row fishing-factor-" + group;
+    r.innerHTML = `<span>${label}</span><strong>${valueText}</strong>`;
+    return r;
+  }
+
+  const evidence = document.createElement("div");
+  evidence.className = "fishing-factor-group";
+  const evidenceLabel = document.createElement("small");
+  evidenceLabel.className = "fishing-group-label";
+  evidenceLabel.textContent = "Measured";
+  evidence.appendChild(evidenceLabel);
+  evidence.appendChild(row("Wind", typeof point.windMph === "number" ? `${Math.round(point.windMph)}mph` : "–", "evidence"));
+  if (markType === "coastal") {
+    evidence.appendChild(row("Wave height", typeof point.waveHeightM === "number" ? `${point.waveHeightM.toFixed(1)}m` : "–", "evidence"));
+    evidence.appendChild(row("Swell period", typeof point.swellPeriodS === "number" ? `${point.swellPeriodS.toFixed(0)}s` : "–", "evidence"));
+    evidence.appendChild(row("Sea temperature", typeof point.seaTempC === "number" ? `${point.seaTempC.toFixed(1)}°C` : "–", "evidence"));
+  }
+  function factorLabel(value) {
+    return typeof value === "number" ? fishingBandForScore(value) : "–";
+  }
+
+  evidence.appendChild(row("Tide movement", factorLabel(point.factors.tideMovement), "evidence"));
+  wrap.appendChild(evidence);
+
+  const folklore = document.createElement("div");
+  folklore.className = "fishing-factor-group";
+  const folkloreLabel = document.createElement("small");
+  folkloreLabel.className = "fishing-group-label";
+  folkloreLabel.textContent = "Traditional (softer evidence)";
+  folklore.appendChild(folkloreLabel);
+  folklore.appendChild(row("Tidal range (springs/neaps)", factorLabel(point.factors.tidalRange), "folklore"));
+  folklore.appendChild(row("Pressure trend", factorLabel(point.factors.pressureTrend), "folklore"));
+  wrap.appendChild(folklore);
+
+  return wrap;
+}
+
+// ---- Settings page: fishing mark type (Coastal/Estuary) per location ----
+// Lives in its own Fishing-section list rather than inside tide's own
+// location rows — it's a fishing-specific concern about a shared
+// location, not something that belongs in tide's own list.
+const fishingMarkTypeList = document.getElementById("fishingMarkTypeList");
+
+function renderFishingMarkTypeList() {
+  if (!fishingMarkTypeList) return;
+  fishingMarkTypeList.innerHTML = "";
+  const locations = loadTideLocations();
+  const currentId = loadCurrentTideLocationId();
+
+  if (!locations.length) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "No saved locations yet — add one under Tides above.";
+    fishingMarkTypeList.appendChild(empty);
+    return;
+  }
+
+  locations.forEach(loc => {
+    const row = document.createElement("div");
+    row.className = "unit-row";
+
+    const name = document.createElement("span");
+    name.className = "unit-row-name";
+    name.textContent = loc.label;
+    row.appendChild(name);
+
+    const toggle = document.createElement("div");
+    toggle.className = "unit-row-toggle";
+    [
+      { value: "coastal", text: "Coastal" },
+      { value: "estuary", text: "Estuary" }
+    ].forEach(opt => {
+      const pillLabel = document.createElement("label");
+      pillLabel.className = "unit-pill";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `markType-${loc.id}`;
+      input.value = opt.value;
+      input.checked = fishingMarkType(loc) === opt.value;
+      input.addEventListener("change", () => {
+        loc.markType = opt.value;
+        saveTideLocations(locations);
+        if (loc.id === currentId) renderFishingRow();
+      });
+      const text = document.createElement("span");
+      text.textContent = opt.text;
+      pillLabel.append(input, text);
+      toggle.appendChild(pillLabel);
+    });
+    row.appendChild(toggle);
+    fishingMarkTypeList.appendChild(row);
+  });
+}
+
+renderFishingMarkTypeList();
+
+// ---- Settings page: fishing card colour ----
+const fishingCardColorSwatches = document.getElementById("fishingCardColorSwatches");
+if (fishingCardColorSwatches) {
+  const current = loadFishingCardColor();
+  FISHING_CARD_COLORS.forEach(color => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "theme-swatch" + (color.id === current ? " is-selected" : "");
+    button.dataset.fishingColor = color.id;
+    button.setAttribute("aria-pressed", color.id === current ? "true" : "false");
+    button.setAttribute("aria-label", color.name);
+    button.title = color.name;
+    button.addEventListener("click", () => {
+      saveFishingCardColor(color.id);
+      applyFishingCardColor(color.id);
+      [...fishingCardColorSwatches.children].forEach(el => {
+        const selected = el === button;
+        el.classList.toggle("is-selected", selected);
+        el.setAttribute("aria-pressed", selected ? "true" : "false");
+      });
+    });
+    fishingCardColorSwatches.appendChild(button);
+  });
+}
+
+// ---- Settings page: show/hide raw factors ----
+const fishingShowRawToggle = document.getElementById("fishingShowRawToggle");
+if (fishingShowRawToggle) {
+  fishingShowRawToggle.checked = loadFishingShowRaw();
+  fishingShowRawToggle.addEventListener("change", () => {
+    saveFishingShowRaw(fishingShowRawToggle.checked);
+  });
+
+  // ---- Settings page: show/hide best-window shading ----
+  //
+  // Built here rather than added to settings.html, so this toggle and
+  // the feature it controls live in the same file — settings.html has
+  // no other knowledge of fishing's graph options, and a checkbox
+  // marooned there would be easy to leave orphaned if the shading were
+  // ever removed. It clones the existing label's markup so it matches
+  // whatever that one looks like, rather than restating the classes.
+  const showRawLabel = fishingShowRawToggle.closest("label");
+  if (showRawLabel && showRawLabel.parentNode) {
+    const windowsLabel = document.createElement("label");
+    windowsLabel.className = showRawLabel.className;
+    const windowsInput = document.createElement("input");
+    windowsInput.type = "checkbox";
+    windowsInput.id = "fishingShowWindowsToggle";
+    windowsInput.checked = loadFishingShowWindows();
+    windowsInput.addEventListener("change", () => {
+      saveFishingShowWindows(windowsInput.checked);
+    });
+    const windowsText = document.createElement("span");
+    windowsText.textContent = "Shade each day's best window on the fishing graph";
+    windowsLabel.append(windowsInput, windowsText);
+    showRawLabel.parentNode.insertBefore(windowsLabel, showRawLabel.nextSibling);
+  }
+}
+
+if (fishingRow) {
+  fishingRow.addEventListener("click", () => {
+    // tideFishingSwiped is set by the swipe handling on the whole
+    // tide+fishing pair (see tide-ui.js, loaded before this file) — a
+    // swipe that started on THIS card still generates a click on it
+    // afterwards, which needs swallowing the same way tide's own row
+    // already does, or a swipe would also pop this sheet open.
+    if (tideFishingSwiped) { tideFishingSwiped = false; return; }
+    openFishingSheet();
+  });
+}
+
+const fishingRefreshButton = document.getElementById("fishingRefreshButton");
+if (fishingRefreshButton) {
+  fishingRefreshButton.addEventListener("click", async e => {
+    // stopPropagation as a defensive measure, not because a specific
+    // bug was confirmed here — the pair's own swipe tracking (see
+    // tide-ui.js) listens for pointerdown/move/up directly on the
+    // wrapper, not click, so a plain tap on this button shouldn't be
+    // misread as a swipe attempt either way (no threshold gets
+    // crossed). Kept anyway in case anything above this ever adds its
+    // own click listener later.
+    e.stopPropagation();
+    fishingRefreshButton.disabled = true;
+    try {
+      await renderFishingRow(true);
+    } finally {
+      fishingRefreshButton.disabled = false;
+    }
+  });
+}
+
+renderFishingRow();
