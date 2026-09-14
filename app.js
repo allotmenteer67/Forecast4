@@ -2013,19 +2013,25 @@ function loadLocationData(force = false) {
       // execution, so every listener — mapstrip3.js's included — is
       // guaranteed to already be in place by the time this actually
       // fires.
+      // Both the event dispatch AND the tide render below are deferred
+      // into the same zero-delay timeout, for the same reason: on a
+      // fresh page load (not just an in-page switch) this whole branch
+      // runs synchronously as part of app.js's own top-level script
+      // execution — which happens BEFORE the browser has reached
+      // mapstrip3.js's <script> tag (so it hasn't registered its
+      // listener yet) AND before tide-ui.js's <script> tag (so
+      // renderTideRow doesn't exist as a function yet either — calling
+      // it immediately here silently did nothing, every single time,
+      // since `typeof renderTideRow` was "undefined" at this exact
+      // point in the page's load sequence). A zero-delay timeout runs
+      // only once every script tag on the page has finished its own
+      // initial synchronous execution, so both the map strip's listener
+      // and tide-ui.js's function are guaranteed to exist by the time
+      // this actually fires.
       setTimeout(() => {
         document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat: state.lat, lon: state.lon } }));
+        if (typeof renderTideRow === "function") renderTideRow();
       }, 0);
-      // Tide has no listener for that event at all — runLoadLocationData
-      // (the slow path below) calls renderTideRow() directly instead,
-      // right after lat/lon are known. This fast path skipped that call
-      // entirely, so on a page load/return that hits this exact branch,
-      // tideRow was left exactly as the static HTML defines it (hidden)
-      // — nothing had ever run to un-hide it. Calling it here too closes
-      // that gap; it cascades into renderFishingRow() on its own, and
-      // reads from state/its own cache rather than fetching anything, so
-      // this is cheap and instant, not a new network request.
-      if (typeof renderTideRow === "function") renderTideRow();
       return Promise.resolve();
     }
   }

@@ -637,6 +637,22 @@ header p {
   z-index: 1;
 }
 
+/* The refresh button floats on top of the card rather than sitting
+   inline in the flex row (see .fishing-refresh-button's own comment
+   for why it has to be a sibling, not a child, of fishingRow) — so
+   nothing in normal document flow knows to leave room for it. Without
+   this, .tide-row-place's own right-aligned text (justify-content:
+   space-between on .tide-row-head) ran straight out to the card's
+   normal right edge and sat directly underneath the button instead of
+   beside it. This just reserves enough right-hand space on the head
+   row specifically inside the fishing card for the button to sit in
+   clear of the text, so .tide-row-place's existing ellipsis truncates
+   a little earlier instead of disappearing under the icon. The tide
+   card's own head row is untouched — it has no refresh button. */
+.fishing-card .tide-row-head {
+  padding-right: 28px;
+}
+
 .fishing-row-value {
   display: flex;
   gap: 8px;
