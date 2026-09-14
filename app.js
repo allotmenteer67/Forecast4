@@ -1838,6 +1838,41 @@ function renderHistoryStatus() {
   }
 }
 
+// Replays a history-shaped file — { areaCode, days: { <date>: { actual,
+// models: { <sourceId>: { <day 1-7>: {...} } } } } }, the exact shape
+// both data/history.json (collect-weather.mjs, one area, daily) and
+// data/backfill/<areaCode>.json (backfill-weather.mjs, many areas,
+// monthly) already share — into (mean, actual) FFV samples. Shared by
+// loadCommittedHistory below and backfillRealSourceHistory's
+// precomputed-file path further down, so there's one implementation of
+// "how a collected file becomes FFV samples", not two that could drift
+// apart the way fetchHourlyForecast's blend logic once nearly did (see
+// applyHourlyBlend's own comment).
+function applyHistoryFileToFFV(data, store, eligStore) {
+  let samplesAdded = 0;
+  Object.keys(data.days || {}).forEach(date => {
+    const dayEntry = data.days[date];
+    if (!dayEntry.actual) return;
+
+    realSourceIds().forEach(sourceId => {
+      if (!dayEntry.models?.[sourceId]) return;
+
+      REAL_DATA_CONDITIONS.forEach(conditionName => {
+        const actual = dayEntry.actual[conditionName];
+        if (actual === null || actual === undefined) return;
+
+        for (let day = 1; day <= 7; day++) {
+          const mean = meanFromHistoryDay(dayEntry, sourceId, day, conditionName);
+          if (!mean) continue;
+          recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, date);
+          samplesAdded += 1;
+        }
+      });
+    });
+  });
+  return samplesAdded;
+}
+
 async function loadCommittedHistory() {
   if (!state.areaCode) return;
 
@@ -1868,7 +1903,7 @@ async function loadCommittedHistory() {
       return;
     }
 
-    const dates = Object.keys(data.days || {});
+    const dayCount = Object.keys(data.days || {}).length;
 
     const store = loadFFVStore(state.areaCode);
     const eligStore = loadEligibilityStore(state.areaCode);
@@ -1882,30 +1917,12 @@ async function loadCommittedHistory() {
       });
     });
 
-    dates.forEach(date => {
-      const dayEntry = data.days[date];
-      if (!dayEntry.actual) return;
-
-      realSourceIds().forEach(sourceId => {
-        if (!dayEntry.models?.[sourceId]) return;
-
-        REAL_DATA_CONDITIONS.forEach(conditionName => {
-          const actual = dayEntry.actual[conditionName];
-          if (actual === null || actual === undefined) return;
-
-          for (let day = 1; day <= 7; day++) {
-            const mean = meanFromHistoryDay(dayEntry, sourceId, day, conditionName);
-            if (!mean) continue;
-            recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, date);
-          }
-        });
-      });
-    });
+    applyHistoryFileToFFV(data, store, eligStore);
 
     saveFFVStore(state.areaCode, store);
     saveEligibilityStore(state.areaCode, eligStore);
     state.history.status = "ready";
-    state.history.dayCount = dates.length;
+    state.history.dayCount = dayCount;
   } catch (err) {
     state.history.status = "error";
     state.history.error = err.message || "Could not load collected history";
@@ -5344,6 +5361,38 @@ async function backfillRealSourceHistory() {
 
   state.backfill = { status: "loading", error: null, samplesAdded: 0 };
   renderBackfillStatus();
+
+  // Check for a precomputed year of real-source history for this exact
+  // area first — collected monthly by a GitHub Action (see
+  // scripts/backfill-weather.mjs) for the app's own known saved places
+  // and favourites, in the exact same shape data/history.json already
+  // uses (see applyHistoryFileToFFV). A hit turns this from "run the
+  // full live year-long fetch, one source at a time, on the phone" into
+  // "download one small file" — the same speed-up the daily history
+  // collection already gives the single FORECAST_AREA_CODE area, just
+  // extended to every precached area. A genuinely new area (never added
+  // to data/precache-config.json) has no file here and falls straight
+  // through to the live fetch below, completely unchanged.
+  try {
+    const res = await fetchWithTimeout(`./data/backfill/${state.areaCode}.json`, { cache: "no-store" }, 15000);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.areaCode === state.areaCode && data.days && Object.keys(data.days).length) {
+        const store = loadFFVStore(state.areaCode);
+        const eligStore = loadEligibilityStore(state.areaCode);
+        const samplesAdded = applyHistoryFileToFFV(data, store, eligStore);
+        saveFFVStore(state.areaCode, store);
+        saveEligibilityStore(state.areaCode, eligStore);
+        state.backfill = { status: "done", error: null, samplesAdded, failedSourceIds: [] };
+        renderBackfillStatus();
+        renderTable();
+        return;
+      }
+    }
+  } catch {
+    // No precomputed file for this area, or it failed to load/parse —
+    // fall through to the live fetch below exactly as before.
+  }
 
   try {
     const end = todayAtMidnight();
