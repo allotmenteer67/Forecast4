@@ -501,6 +501,11 @@ header p {
   padding: 11px 15px;
   margin-bottom: 12px;
   box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
+  /* Needed so #headlineRefreshButton's absolute positioning below is
+     relative to this card, not whatever other positioned ancestor
+     happens to be nearest — same reasoning as .fishing-card's own
+     position: relative. */
+  position: relative;
 }
 
 .headline-grid {
@@ -934,6 +939,14 @@ header p {
   display: flex;
   align-items: center;
   gap: 10px;
+  /* #headlineRefreshButton now floats on top of the card (see its own
+     rule) rather than sitting inline in this row, so nothing in normal
+     flow knows to leave room for it any more — without this,
+     #headlineDatePlace's text ran straight out to the row's normal
+     right edge and under the button instead of stopping beside it.
+     Same fix, same reasoning, as .fishing-card .tide-row-head's own
+     padding-right. */
+  padding-right: 28px;
 }
 
 #headlineDateText {
@@ -1008,11 +1021,16 @@ header p {
 }
 
 #headlineRefreshButton {
-  /* Pushes itself AND the place name after it (which no longer carries
-     its own margin-left: auto — see that rule above) to the right edge
-     together, so the icon sits immediately before the place name
-     rather than at a fixed distance from the date text on the left. */
-  margin-left: auto;
+  /* Matches .fishing-refresh-button's own positioning exactly (see that
+     rule's comment) — floats in the card's top-right corner instead of
+     sitting inline in .headline-date's flex row. #headlineDatePlace no
+     longer needs to be pushed alongside it (that was the old
+     margin-left: auto's job); .headline-date's own padding-right now
+     reserves the matching clearance instead. */
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
 }
 
 .headline-cell-dimmed .headline-value,
@@ -2057,86 +2075,76 @@ footer {
    of moving to the left corner. `display: contents` on a wrapper around
    focusable/interactive children (a link, a button) is a known rough
    edge in WebKit; rather than chase why, this switches to a plain flex
-   row with `order`, which has no such history. The icon is now a direct
-   child of .title-bar in the HTML (a sibling of <h1>, before it) instead
-   of living inside .title-bar-right — no wrapper to collapse, so there
-   is nothing for that bug to attach to. */
+   row. The icon is now a direct child of .title-bar in the HTML (a
+   sibling of <h1>, before it) instead of living inside .title-bar-right
+   — no wrapper to collapse, so there is nothing for that bug to attach
+   to. (A later redesign — title left, icon right, chip centred — moved
+   the row away from needing `order` for phone/iPad differences at all;
+   see .title-bar's own comment below.) */
+/* Redesigned layout: title fixed at the LEFT, settings icon fixed at
+   the RIGHT, and the place chip (or map.html's "Back to Cloude")
+   dead-centred across the whole bar — same on phone and iPad alike.
+   No per-breakpoint reordering needed any more: the old phone/iPad
+   split existed only because the icon used to need to dodge iPad's
+   window-control pill in the top-left corner on one breakpoint but not
+   the other. Now that the icon never sits in that corner on ANY
+   breakpoint (it's always on the right), that whole problem — and the
+   `order` scheme built to solve it — no longer applies. */
 .title-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   position: relative;
+  justify-content: space-between;
 }
 
 /* iPad only, not phones — when this runs as a windowed/Split View app,
    iPadOS draws its own window controls (the macOS-style traffic-light
-   pill) right over the top-left corner of the page, which otherwise
-   lands directly on the title. Phones have no such overlay and were
-   paying this same 6px for no reason, sitting on top of the status bar/
-   notch clearance the OS already reserves on its own — a real, visible
-   gap above "Cloude" with nothing there to protect against. */
+   pill) right over the top-left corner of the page. Still relevant
+   regardless of which element sits in that corner (title text now,
+   previously the icon): this pushes the whole row down clear of it.
+   Phones have no such overlay and were paying this same 6px for no
+   reason, sitting on top of the status bar/notch clearance the OS
+   already reserves on its own. */
 @media (min-width: 701px) {
   .title-bar {
     padding-top: 6px;
   }
 }
 
-/* Default (iPad/desktop) order: title first, then the icon and chip
-   together on the right — icon before chip, matching how they read
-   left-to-right. `order` rather than source position is what controls
-   this, so the phone media query below can simply reassign it rather
-   than needing a second markup arrangement. */
-.settings-icon-button {
-  order: 2;
-}
-.title-bar h1 {
-  order: 1;
-}
-.title-bar-right {
-  order: 3;
-}
-
-/* Phones only: Settings moves to the LEFT corner, place chip stays
-   right. The left corner is off-limits on iPad (window chrome sits
-   there — see the note above), but phones have no such overlay, and
-   putting the two controls in opposite corners relieves the crowding
-   that came from having a 44px icon and a variable-width place name
-   sharing one side. */
-@media (max-width: 700px) {
-  .settings-icon-button {
-    order: 1;
-  }
-  .title-bar h1 {
-    order: 2;
-  }
-  .title-bar-right {
-    order: 3;
-  }
-}
-
 .title-bar h1 {
   margin: 0;
-  flex: 1 1 auto;
-  min-width: 0;
-  text-align: center;
 }
 
 /* .place-menu is absolutely positioned, so it sits outside this flex
    flow entirely and still anchors to the chip's corner regardless of
-   where the chip itself lands in source/order terms. */
+   where the chip itself lands. */
 
+/* Absolutely positioned edge-to-edge across the full bar, same
+   technique .title-bar h1 used when IT needed to be centre-fixed
+   (see the git history/handover for that reasoning) — now it's this
+   element's turn, since the redesign moves the place name to the
+   centre and the title out to a plain, fixed left position that no
+   longer needs any special centring trick of its own.
+   pointer-events: none on the wrapper (restored to auto on its actual
+   child below) so it doesn't block taps on the title or icon in the
+   narrow strip either side where it visually overlaps them. Its own
+   child (.place-chip, or map.html's .back-link) still carries its own
+   max-width/ellipsis handling for long place names, so this wrapper
+   doesn't need a width constraint of its own any more — it's not
+   competing with siblings for flex space now that it's out of flow. */
 .title-bar-right {
+  position: absolute;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 8px;
-  flex: 0 1 auto;
-  /* Flex items default to a content-based minimum width too, same
-     underlying issue as .place-chip below — without this, the wrapper
-     itself could refuse to shrink below its content's natural size,
-     which would defeat that fix at the next level up. */
-  min-width: 0;
-  max-width: 60%;
+  pointer-events: none;
+}
+.title-bar-right > * {
+  pointer-events: auto;
 }
 
 .settings-icon-button {
