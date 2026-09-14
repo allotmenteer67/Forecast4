@@ -216,16 +216,36 @@ function mapPalette() {
 // step would have meant a dozen-plus swatches, unworkable as a legend
 // on a phone. A continuous scale changes colour at every degree and
 // only needs a handful of tick labels to explain itself.
+//
+// Redesigned on request — the original scale jumped straight from
+// light blue to amber at 20°C, so anything in the high teens/low
+// twenties (most of a normal UK spring/summer day) already read as
+// visually "hot" even though a measured pixel check confirmed the
+// colours themselves were correct against the key; the map simply
+// looked warmer than it was, because a wide saturated amber/orange
+// field reads hotter to the eye than the same colour as a thin swatch
+// does. A genuinely mild UK temperature has nothing green to land on
+// in a straight cold-to-hot ramp, so it added one: a green stop for
+// the pleasant, unremarkable middle of the scale (16°C) that the old
+// palette skipped entirely, pushing the point where the map actually
+// starts reading as "warm" up to a gold stop at 22°C — matching "over
+// 20°C is a bit warm" without the low twenties already looking orange
+// — and orange itself moved from 27°C to 28°C to keep the hot end from
+// getting compressed by the new stop below it. The purple/blue cold
+// end and the 34°C heatwave red are untouched — nothing about the cold
+// side prompted this.
 const MAP_TEMP_MIN_C = -10;
 const MAP_TEMP_MAX_C = 34;
 const MAP_TEMP_COLOR_STOPS = [
   { t: -10, rgb: [90, 40, 140] },  // deep purple — proper winter cold
   { t: 0, rgb: [43, 108, 176] },   // blue — freezing
-  { t: 12, rgb: [99, 179, 237] },  // light blue — cool
-  { t: 20, rgb: [246, 173, 85] },  // amber — warm
-  { t: 27, rgb: [237, 137, 54] },  // orange — hot
+  { t: 8, rgb: [99, 179, 237] },   // light blue — cool
+  { t: 16, rgb: [76, 153, 90] },   // green — mild, pleasant, unremarkable
+  { t: 22, rgb: [235, 190, 80] },  // gold — starting to feel warm
+  { t: 28, rgb: [230, 120, 50] },  // orange — properly hot
   { t: 34, rgb: [197, 48, 48] }    // red — heatwave
 ];
+
 
 // The layer itself paints each cell at less than full opacity (see its
 // draw() below) so terrain/land still shows through underneath —
