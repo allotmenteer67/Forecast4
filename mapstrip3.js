@@ -373,7 +373,7 @@ async function renderMapStripInner(centre, grid) {
   }
 }
 
-const MAP_STRIP_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
+const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapstrip:grid";
 const MAP_STRIP_GRID_CACHE_MS = 15 * 60 * 1000;
 
@@ -434,7 +434,7 @@ async function fetchMapStripGrid(centre) {
     forecast_days: String(MAP_STRIP_FORECAST_DAYS),
     timezone: "auto"
   });
-  const res = await fetchOpenMeteo(`${MAP_STRIP_WEATHER_URL}?${params.toString()}`, {}, 20000);
+  const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, 20000);
   if (!res.ok) throw new Error(`Map strip fetch failed: ${res.status}`);
   const data = await res.json();
   const points = Array.isArray(data) ? data : [data];
@@ -570,14 +570,28 @@ if (mapStripRoot && "ResizeObserver" in window) {
   });
 }
 
-// Confirmed genuinely firing on-device during stage 1 (plain text
-// changes proved it) — now reconnected to the real drawing logic
-// instead of just a status message.
+// Was 1200ms — a figure confirmed genuinely firing on-device during
+// stage 1, when this only ever changed plain status text (see the
+// file's top-of-file history). That frequency was never reconsidered
+// once this got "reconnected to the real drawing logic" below, which
+// is a genuinely heavy full redraw: regenerating SVG paths from every
+// loaded dataset from scratch, including waterways.json (8+MB of
+// river/canal geometry for the whole dataset, not just what's in
+// view). Doing that ~50 times a minute, indefinitely, for as long as
+// the front page stayed open, is real sustained CPU/allocation
+// pressure — confirmed as the likely cause of a genuine WebKit crash-
+// and-reload loop on a phone (less memory headroom than an iPad,
+// matching this being phone-only), not just a slow frame here and
+// there. Nothing this redraws — coastline, terrain, waterways, the
+// rain grid, even tide's own marker position — meaningfully changes
+// on anything like a 1-2 second cadence, so a much longer interval
+// loses nothing users would actually notice while cutting the total
+// redraw cost by roughly 50x.
 setInterval(() => {
   if (document.visibilityState === "visible" && mapStripRoot && mapStripLastCentre) {
     renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   }
-}, 1200);
+}, 60000);
 window.addEventListener("pageshow", () => {
   if (mapStripRoot && mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
 });
