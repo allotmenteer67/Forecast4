@@ -230,6 +230,33 @@ async function openFishingSheet() {
     }));
   }
 
+  // startHours can legitimately end up AFTER endHours, which leaves the
+  // loop above producing nothing at all. It happens whenever the marine
+  // forecast covers a meaningfully shorter window than the weather one:
+  // endHours is capped by the SHORTEST input (maxForecastHours, which
+  // includes marine for a coastal mark), while startHours is anchored to
+  // the weather forecast's own start — so a coastal spot whose marine
+  // data runs out earlier than its wind/pressure data inverts the two.
+  // Real cause, not hypothetical: Open-Meteo's marine coverage is
+  // patchier than its land coverage and can return a shorter series for
+  // a mark near the edge of it.
+  //
+  // Previously this fell straight through to renderFishingCurve with an
+  // empty array, which built a path of literally "M" (invalid SVG, two
+  // console errors) and then threw outright on the first tap of the
+  // chart — nearestPoint() returns points[0], i.e. undefined, and
+  // showReadoutAt immediately reads .hours off it. The sheet was left
+  // half-drawn with no indication anything was wrong. Saying so plainly
+  // is both honest and far more useful than a broken chart.
+  if (!points.length) {
+    const empty = document.createElement("p");
+    empty.className = "sheet-empty";
+    empty.textContent = "Not enough overlapping forecast data to chart this mark right now — this usually means the marine forecast for this spot covers a shorter window than the weather forecast. Try again later, or switch this mark to estuary in Settings if it isn't genuinely open coast.";
+    sheetBody.appendChild(empty);
+    sheetFootnote.textContent = "";
+    return;
+  }
+
   sheetBody.appendChild(renderFishingCurve(points, built.epochIso, nowHours, startHours, endHours, location, built.fit));
 
   if (loadFishingShowRaw()) {

@@ -1967,6 +1967,36 @@ let loadLocationGeneration = 0;
 // starts a second fetch or gives up on the first one.
 const LOAD_SLOW_WARNING_MS = 45000;
 
+// Runs fn only once EVERY classic <script> on the page has executed.
+//
+// This exists because setTimeout(fn, 0) does NOT guarantee that, which
+// is a genuinely easy thing to get wrong: a zero-delay timer queued
+// while app.js is still executing can be run by the browser BETWEEN two
+// following <script> tags, since the parser is free to yield there. In
+// index.html, app.js is first and tide-ui.js is fourth — so a timer
+// queued from app.js frequently fired while renderTideRow simply did
+// not exist yet. The `typeof renderTideRow === "function"` guard at the
+// call site then skipped it silently, with no error anywhere, and the
+// tide card stayed hidden exactly as its static HTML defines it. That
+// was reproducible on every page load after the first (the cache
+// fast-path below is only taken when a recent snapshot exists), which
+// is precisely the "tide vanishes after visiting Settings or the map"
+// report.
+//
+// DOMContentLoaded is the event that actually means what was wanted
+// here: it fires after the parser has finished and every classic script
+// has run, so anything defined by any of them is guaranteed present.
+// If the document has already finished parsing by the time this is
+// called (any later, user-triggered switch), there is nothing to wait
+// for and a plain timer is correct.
+function whenAllScriptsReady(fn) {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", fn, { once: true });
+  } else {
+    setTimeout(fn, 0);
+  }
+}
+
 function loadLocationData(force = false) {
   // Skip the fetch ENTIRELY when a still-fresh cached snapshot already
   // covers this exact postcode — resetForLocationChange() (always called
@@ -2028,10 +2058,10 @@ function loadLocationData(force = false) {
       // initial synchronous execution, so both the map strip's listener
       // and tide-ui.js's function are guaranteed to exist by the time
       // this actually fires.
-      setTimeout(() => {
+      whenAllScriptsReady(() => {
         document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat: state.lat, lon: state.lon } }));
         if (typeof renderTideRow === "function") renderTideRow();
-      }, 0);
+      });
       return Promise.resolve();
     }
   }
@@ -5927,11 +5957,23 @@ function attachSavedPlaceSwipe(el, excludeSelector) {
     pointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
-    try {
-      el.setPointerCapture(e.pointerId);
-    } catch {
-      // still works via normal event delivery without capture
-    }
+    // NO setPointerCapture here — same load-bearing omission, and same
+    // reason, as tide-ui.js's own pair swipe (see the long note there).
+    // Capturing on pointerdown, before a swipe-vs-tap decision has been
+    // made, retargets the whole rest of the gesture — the final `click`
+    // included — onto THIS element. Since this is attached to ancestors
+    // (.headline, which wraps every headline cell, and .map-strip), that
+    // meant a plain tap on a headline cell fired its click on .headline
+    // instead of on the cell, so the cell's own click listener never ran
+    // and its hourly graph sheet never opened. Verified in a real
+    // browser: all eight headline cells reported an empty sheet title
+    // and zero sheet content on tap with capture in place, and opened
+    // correctly the moment it was removed.
+    //
+    // Capture was never needed for the swipe: touch pointers get
+    // implicit capture on their own target, and since this element is an
+    // ancestor of whatever gets tapped, pointermove events bubble up to
+    // these handlers regardless.
   });
 
   el.addEventListener("pointermove", e => {

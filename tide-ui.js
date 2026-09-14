@@ -262,11 +262,27 @@ if (tideFishingPair) {
     pointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
-    try {
-      tideFishingPair.setPointerCapture(e.pointerId);
-    } catch {
-      // still works via normal event delivery without capture
-    }
+    // NO setPointerCapture here — deliberately, and this is load-bearing.
+    // It used to call tideFishingPair.setPointerCapture(e.pointerId) at
+    // this point, on pointerdown, i.e. BEFORE it is known whether the
+    // gesture is a swipe or a plain tap. Pointer capture retargets every
+    // subsequent event in that gesture — including the final `click` —
+    // to the capturing element. So a plain tap on the tide card fired
+    // its click on THIS wrapper instead of on tideRow, and tideRow's own
+    // click listener (the one that opens the tide sheet, a few lines
+    // below) never ran at all. Confirmed directly in a real browser:
+    // tapping tideRow logged "pointerup target=tideFishingPair / click
+    // on PAIR" and the sheet stayed shut, while calling openTideSheet()
+    // by hand worked perfectly — proving the sheet itself was fine and
+    // only the tap routing was broken. That is what made opening a card
+    // feel like it needed a second tap to work.
+    //
+    // Capture was never actually required for the swipe to work: a touch
+    // pointer already gets implicit capture on its own target, and these
+    // handlers sit on the pair, which is an ANCESTOR of both cards — so
+    // pointermove events fired on either card bubble up to here either
+    // way. Dropping it restores normal click targeting and costs the
+    // swipe nothing.
   });
 
   tideFishingPair.addEventListener("pointermove", e => {
@@ -992,7 +1008,15 @@ function renderTideLocationsList() {
 
     const stationSub = document.createElement("small");
     stationSub.className = "place-row-sub";
-    stationSub.textContent = `nearest gauge: ${loc.station.label} (${loc.station.distanceKm.toFixed(0)}km)`;
+    // distanceKm is normally set by nearestTideStation() when the
+    // location is first added, but it is guarded here because a location
+    // saved by an older build (before that field existed) has a station
+    // object without it — and an unguarded .toFixed() on undefined
+    // throws, which takes down the ENTIRE tide locations list render,
+    // not just this one label. A cosmetic distance is not worth losing
+    // the whole Settings section over.
+    stationSub.textContent = `nearest gauge: ${loc.station.label}` +
+      (typeof loc.station.distanceKm === "number" ? ` (${loc.station.distanceKm.toFixed(0)}km)` : "");
 
     info.appendChild(nameLine);
     info.appendChild(stationSub);
