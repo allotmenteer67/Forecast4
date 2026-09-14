@@ -5598,9 +5598,27 @@ window.addEventListener("online", () => {
 // so it clears itself either way without needing a manual tap. Cheap and
 // harmless when there's nothing wrong — it's a no-op unless
 // state.actual.status is genuinely "error".
+//
+// Forced (loadLocationData(true)), not a bare loadLocationData() call —
+// unforced, the very first thing it does is check for a fresh recent-
+// location cache snapshot and, if one exists, short-circuit straight to
+// re-announcing that SAME cached data (re-dispatching cloude:location-
+// ready, re-running renderTideRow) without ever attempting a real fetch
+// or touching state.actual.status at all. Since a cache snapshot from
+// before the error usually still exists and stays "fresh" for several
+// minutes, that shortcut was being taken on every single tick — meaning
+// this retry could never actually resolve the error it exists to clear,
+// only repeat the same cached announcement forever, every 30 seconds,
+// for as long as the tab stayed open. That's what was actually behind
+// tide's own value visibly recalculating (from a fresh Date.now()) once
+// every cycle with nothing else on screen changing, and occasionally
+// blanking outright from two of those announcements landing close
+// together. force=true skips the cache shortcut entirely, so this now
+// does what its own name implies — a genuine retry, not a repeating
+// no-op dressed up as one.
 setInterval(() => {
   if (state.actual.status === "error") {
-    loadLocationData();
+    loadLocationData(true);
   }
 }, 30000);
 
