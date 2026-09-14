@@ -233,6 +233,29 @@ function unitLabel(conditionName) {
   return CONDITION_UNIT_LABELS[conditionName]?.[conditionUnit(conditionName)] ?? CONFIG.conditions[conditionName].unit;
 }
 
+// Same band edges as map.js's own RAIN_BAND_THRESHOLDS (the map's Rain
+// legend swatches), duplicated here rather than imported since app.js
+// and map.js are never both loaded on the same page (map.js is
+// map.html-only) and this project has no shared module system between
+// its plain script-tag files. Kept identical on purpose: a reading
+// that paints as the map's "4" swatch should read as the same word
+// here, not a different threshold set someone has to learn twice.
+const RAIN_BAND_THRESHOLDS = [0.1, 0.5, 1, 2, 4, 8];
+const RAIN_INTENSITY_LABELS = ["Dry", "Drizzle", "Light rain", "Rain", "Heavy rain", "Very heavy rain", "Torrential rain"];
+
+// Always classifies against the true mm/hr figure, never the
+// display-converted one — a reading shown as 0.04in/hr because the
+// person's on imperial units should still say "Drizzle", not silently
+// shift band edges that only ever existed in mm.
+function rainIntensityLabel(mmPerHour) {
+  if (mmPerHour === null || mmPerHour === undefined) return null;
+  let band = 0;
+  for (; band < RAIN_BAND_THRESHOLDS.length; band++) {
+    if (mmPerHour < RAIN_BAND_THRESHOLDS[band]) break;
+  }
+  return RAIN_INTENSITY_LABELS[band];
+}
+
 // Converts a native-unit value (mm / mph / °C / hPa) to whichever system
 // this condition's own toggle is set to. isDelta matters only for
 // temperature: a DIFFERENCE (badge deltas, accuracy error magnitudes)
@@ -4553,7 +4576,10 @@ function openHourlySheet(conditionName) {
   // both routinely longer than every other condition's plain single
   // number, so they get a slightly smaller readout size to keep them
   // comfortably on one line instead of the default full size.
-  readoutValue.classList.toggle("is-compact", conditionName === "dewPoint" || conditionName === "wind");
+  // Rain added alongside dewPoint/wind's existing reasons for this —
+  // "2.3mm/hr · Very heavy rain" is real width, and this bar was never
+  // sized with a phrase that long in mind.
+  readoutValue.classList.toggle("is-compact", conditionName === "dewPoint" || conditionName === "wind" || conditionName === "rain");
 
   if (state.hourly.status !== "ready") {
     const empty = document.createElement("p");
@@ -4580,10 +4606,21 @@ function openHourlySheet(conditionName) {
         const display = raw.map(v => convertForDisplay(v, "rain"));
         const g = sheetRenderBar(hourTimes, display, "#2f6f4f", "rain");
         sheetBody.appendChild(g.wrap);
+        // Intensity word alongside the figure, not instead of it — the
+        // number is still what a returning user actually compares day to
+        // day, "Heavy rain" just gives a newcomer (or anyone not
+        // fluent in mm/hr) an instant read without doing that
+        // conversion in their head. Classified from raw[i] (true mm/hr)
+        // rather than display[i], so it never shifts with the person's
+        // own unit choice — see rainIntensityLabel's own comment.
+        const readoutLabel = i => {
+          const word = rainIntensityLabel(raw[i]);
+          return `${formatConverted(display[i], "rain")}${unitLabel("rain")}${word ? ` · ${word}` : ""}`;
+        };
         attachSheetScrubber({
           ...g,
-          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "rain")}${unitLabel("rain")}` }),
-          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "rain")}${unitLabel("rain")}` }
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: readoutLabel(i) }),
+          defaultReadout: { time: "Now", value: readoutLabel(0) }
         });
         // Each bar is that ONE hour's rainfall, not a running total — on
         // its own that reads oddly next to the headline's whole-day

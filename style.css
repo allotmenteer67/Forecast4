@@ -2561,6 +2561,15 @@ footer {
 .sheet-header {
   display: flex; align-items: baseline; justify-content: space-between;
   margin-bottom: 4px;
+  /* .sheet-close (below) is absolutely positioned outside this flex row
+     entirely, so nothing here ever reserved space for it — it sits
+     30px wide starting 16px from the sheet's own edge, landing right on
+     top of whatever .sheet-range text is flush against the right side.
+     Most conditions' range text ("Next 24h" etc.) was short enough to
+     just miss it; Rain's "Next 48h" was the one wide enough to actually
+     collide (confirmed on a real device). This padding is sized to
+     clear the button on every sheet, not just that one. */
+  padding-right: 38px;
 }
 .sheet-title { font-size: 20px; font-weight: 700; color: var(--accent-dark); margin: 0; }
 .sheet-range { font-size: 13px; color: #6b7d70; }
