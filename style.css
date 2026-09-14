@@ -2114,6 +2114,12 @@ footer {
 
 .title-bar h1 {
   margin: 0;
+  /* Fixed at order: 1 (left), settings-icon-button below at order: 2
+     (right) — plain DOM order alone put the icon first/left instead,
+     since it comes before <h1> in every page's markup. Both orders are
+     now static (no per-breakpoint difference needed, unlike the old
+     scheme this replaced). */
+  order: 1;
 }
 
 /* .place-menu is absolutely positioned, so it sits outside this flex
@@ -2156,6 +2162,7 @@ footer {
   border-radius: 50%;
   color: var(--accent-dark);
   flex: 0 0 auto;
+  order: 2;
 }
 
 .settings-icon-button:hover {
