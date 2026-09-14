@@ -1,0 +1,34 @@
+name: Backfill weather history
+
+on:
+  schedule:
+    # 1st of the month, 05:00 UTC — an hour before collect-weather's
+    # daily 06:00 run, and monthly rather than daily because a year of
+    # history barely shifts day to day; this only needs to catch newly
+    # added areas/favourites reasonably promptly, not track daily change.
+    - cron: "0 5 1 * *"
+  workflow_dispatch: {} # lets you trigger it manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Backfill a year of history for every known area
+        run: node scripts/backfill-weather.mjs
+
+      - name: Commit updated backfill files
+        run: |
+          git config user.name "forecast-compare-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/backfill/
+          git diff --staged --quiet || git commit -m "Update backfill history"
+          git push
