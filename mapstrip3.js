@@ -132,22 +132,6 @@ function setSvgContent(svgEl, innerMarkup) {
   });
 }
 
-function svgPolygonPath(geojson, view) {
-  if (!geojson) return "";
-  const parts = [];
-  geojson.features.forEach(feature => {
-    const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
-    polygons.forEach(polygon => {
-      polygon.forEach(ring => {
-        if (!ring.length) return;
-        const points = ring.map(([lon, lat]) => `${view.x(lon).toFixed(1)},${view.y(lat).toFixed(1)}`);
-        parts.push(`M${points.join("L")}Z`);
-      });
-    });
-  });
-  return parts.join(" ");
-}
-
 function eachMapStripRing(geometry, visit) {
   if (!geometry) return;
   const t = geometry.type, c = geometry.coordinates;
@@ -156,8 +140,59 @@ function eachMapStripRing(geometry, visit) {
   else if (t === "MultiPolygon") c.forEach(poly => poly.forEach(visit));
 }
 
+// Bounding-box viewport cull, ported from map.js's own viewBounds/
+// ringIntersectsView (see that file's comment on drawGeoJson for the
+// full story) — never applied here, so the strip was walking and
+// transforming every ring of the whole national coastline/waterways
+// file on every redraw regardless of how small a circle it actually
+// shows. A ring's own bounding box (cheap — one pass, no drawing) is
+// compared against what the strip can actually show before spending
+// any time projecting its points; a ring that WOULD be visible is
+// still drawn exactly as before, this only skips ones that provably
+// can't be.
+function mapStripViewBounds(view) {
+  const lonA = view.lon(0), lonB = view.lon(view.w);
+  const latA = view.lat(0), latB = view.lat(view.h);
+  return {
+    lonMin: Math.min(lonA, lonB), lonMax: Math.max(lonA, lonB),
+    latMin: Math.min(latA, latB), latMax: Math.max(latA, latB)
+  };
+}
+
+function mapStripRingIntersectsView(ring, bounds) {
+  let lonMin = Infinity, lonMax = -Infinity, latMin = Infinity, latMax = -Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const [lon, lat] = ring[i];
+    if (lon < lonMin) lonMin = lon;
+    if (lon > lonMax) lonMax = lon;
+    if (lat < latMin) latMin = lat;
+    if (lat > latMax) latMax = lat;
+  }
+  return lonMax >= bounds.lonMin && lonMin <= bounds.lonMax &&
+         latMax >= bounds.latMin && latMin <= bounds.latMax;
+}
+
+function svgPolygonPath(geojson, view) {
+  if (!geojson) return "";
+  const bounds = mapStripViewBounds(view);
+  const parts = [];
+  geojson.features.forEach(feature => {
+    const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+    polygons.forEach(polygon => {
+      polygon.forEach(ring => {
+        if (!ring.length) return;
+        if (!mapStripRingIntersectsView(ring, bounds)) return;
+        const points = ring.map(([lon, lat]) => `${view.x(lon).toFixed(1)},${view.y(lat).toFixed(1)}`);
+        parts.push(`M${points.join("L")}Z`);
+      });
+    });
+  });
+  return parts.join(" ");
+}
+
 function svgWaterwaysPaths(geo, view, colour) {
   if (!geo) return "";
+  const bounds = mapStripViewBounds(view);
   const features = geo.type === "FeatureCollection" ? geo.features : [geo];
   const parts = [];
   features.forEach(feature => {
@@ -165,6 +200,7 @@ function svgWaterwaysPaths(geo, view, colour) {
     const dash = feature.properties?.kind === "canal" ? ' stroke-dasharray="4,3"' : "";
     eachMapStripRing(geometry, ring => {
       if (!ring.length) return;
+      if (!mapStripRingIntersectsView(ring, bounds)) return;
       const points = ring.map(([lon, lat]) => `${view.x(lon).toFixed(1)},${view.y(lat).toFixed(1)}`);
       parts.push(`<path d="M${points.join("L")}" fill="none" stroke="${colour}" stroke-width="1"${dash}/>`);
     });
@@ -574,19 +610,22 @@ if (mapStripRoot && "ResizeObserver" in window) {
 // stage 1, when this only ever changed plain status text (see the
 // file's top-of-file history). That frequency was never reconsidered
 // once this got "reconnected to the real drawing logic" below, which
-// is a genuinely heavy full redraw: regenerating SVG paths from every
+// was a genuinely heavy full redraw: regenerating SVG paths from every
 // loaded dataset from scratch, including waterways.json (8+MB of
-// river/canal geometry for the whole dataset, not just what's in
-// view). Doing that ~50 times a minute, indefinitely, for as long as
-// the front page stayed open, is real sustained CPU/allocation
-// pressure — confirmed as the likely cause of a genuine WebKit crash-
-// and-reload loop on a phone (less memory headroom than an iPad,
-// matching this being phone-only), not just a slow frame here and
-// there. Nothing this redraws — coastline, terrain, waterways, the
-// rain grid, even tide's own marker position — meaningfully changes
-// on anything like a 1-2 second cadence, so a much longer interval
-// loses nothing users would actually notice while cutting the total
-// redraw cost by roughly 50x.
+// river/canal geometry) with no viewport cull at all at the time —
+// see svgWaterwaysPaths/svgPolygonPath further up, which now skip a
+// ring before transforming any of its points if its own bounding box
+// can't possibly be on screen, the same fix map.js's full map page
+// already had. Doing the old, uncapped walk ~50 times a minute,
+// indefinitely, for as long as the front page stayed open, was real
+// sustained CPU/allocation pressure — confirmed as the likely cause of
+// a genuine WebKit crash-and-reload loop on a phone (less memory
+// headroom than an iPad, matching this being phone-only), not just a
+// slow frame here and there. The interval stays at 60s regardless of
+// the viewport cull above: nothing this redraws — coastline, terrain,
+// waterways, the rain grid, even tide's own marker position —
+// meaningfully changes on anything like a 1-2 second cadence, so a
+// much longer interval loses nothing users would actually notice.
 setInterval(() => {
   if (document.visibilityState === "visible" && mapStripRoot && mapStripLastCentre) {
     renderMapStrip(mapStripLastCentre, mapStripLastGrid);
