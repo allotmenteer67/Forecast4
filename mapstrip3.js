@@ -373,7 +373,7 @@ async function renderMapStripInner(centre, grid) {
   }
 }
 
-const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
+const MAP_STRIP_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapstrip:grid";
 const MAP_STRIP_GRID_CACHE_MS = 15 * 60 * 1000;
 
@@ -434,7 +434,7 @@ async function fetchMapStripGrid(centre) {
     forecast_days: String(MAP_STRIP_FORECAST_DAYS),
     timezone: "auto"
   });
-  const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, 20000);
+  const res = await fetchOpenMeteo(`${MAP_STRIP_WEATHER_URL}?${params.toString()}`, {}, 20000);
   if (!res.ok) throw new Error(`Map strip fetch failed: ${res.status}`);
   const data = await res.json();
   const points = Array.isArray(data) ? data : [data];
