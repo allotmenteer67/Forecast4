@@ -2897,8 +2897,31 @@ function recordFFVSample(store, conditionName, sourceId, day, mean, actual, elig
 // page load WOULD double-count if real sources were included, since a
 // revisit re-adds the same days; the committed-history replay avoids
 // that by rebuilding from scratch each time rather than incrementing.
+//
+// Demo sources don't get that same protection, though — this function's
+// own EMA (see recordFFVSample) has no equivalent rebuild-from-scratch
+// step, so calling it twice on the same day's data folds that day into
+// the rolling average twice. Nothing previously stopped that: this runs
+// once per completed weather load, which — since the fast-path caching
+// fix — is roughly once per 15-minute cache window, or on every manual
+// refresh, so a day visited several times could get meaningfully
+// over-weighted relative to one visited once. updateAccuracyTrend()
+// just below already solves this exact problem for its own store by
+// checking its last entry's date before writing — this borrows that
+// same "once per calendar day" idea via its own small marker store,
+// following the project's existing convention (see the eligibility
+// store's own comment) of a separate small store rather than adding an
+// oddly-shaped field into the FFV store itself.
+function ffvRunDateStorageKey(areaCode) {
+  return `forecast-compare:ffvRunDate:${areaCode}`;
+}
+
 function updateFFVHistory() {
   if (!state.areaCode || state.actual.status !== "ready") return;
+
+  const today = isoDate(new Date());
+  const runDateStore = cachedLoadStore("ffvRunDate", state.areaCode, ffvRunDateStorageKey(state.areaCode));
+  if (runDateStore.date === today) return; // already learnt from today's actual values for this area
 
   const store = loadFFVStore(state.areaCode);
   const eligStore = loadEligibilityStore(state.areaCode);
@@ -2934,6 +2957,7 @@ function updateFFVHistory() {
   saveFFVStore(state.areaCode, store);
   saveEligibilityStore(state.areaCode, eligStore);
   saveAppAccuracyStore(state.areaCode, appStore);
+  cachedSaveStore("ffvRunDate", state.areaCode, ffvRunDateStorageKey(state.areaCode), { date: today });
 }
 
 // Returns the learned FFV for this source/condition/day, or null if there
