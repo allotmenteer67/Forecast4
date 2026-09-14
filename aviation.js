@@ -1,0 +1,373 @@
+// aviation.js — genuinely observed (not modelled) cloud cover from the
+// nearest UK METAR-reporting airport, decoded into the same
+// cloudLow/cloudMid/cloudHigh % shape the rest of the app already uses.
+//
+// Why this exists: app.js's "Actual" cloud figures (cloudLow_mean etc.,
+// see averageCloudByDay) come from Open-Meteo's hourly reanalysis —
+// itself a model output, not a human/sensor observation. METAR reports
+// are actual aerodrome observations (oktas of cloud at a reported
+// height, taken every 20-60 min), so this is a genuine independent
+// ground-truth check on that figure, not just another forecaster.
+// Scoped as a data-fetch/decode module only, same division of labour
+// as tide.js vs tide-ui.js — wiring this into the Actual row / a
+// display card is the next session's work, not this file's.
+//
+// Data source: aviationweather.gov's public METAR API — free, no key.
+// Relayed through a small Cloudflare Worker (aviation-proxy-worker.js,
+// same pattern as admiralty-proxy-worker.js) because several reports
+// say aviationweather.gov doesn't send CORS headers, which blocks a
+// direct browser fetch even though the API itself needs no auth.
+//
+// NOTE: this file was written without live network access to verify
+// aviationweather.gov's exact current response shape, so the parsing
+// below deliberately works from the raw METAR text (rawOb) rather than
+// trusting specific JSON field names — the raw METAR format is a
+// stable, decades-old international standard, so that's the safer
+// thing to depend on. Worth a real test against a live response before
+// relying on this.
+
+// A working subset of UK METAR stations, not exhaustive. Picked for
+// reasonable geographic spread (every English region, Wales, Scotland
+// incl. islands, Northern Ireland) rather than completeness — same
+// "good enough coverage, extend later" approach as EA_TIDE_STATIONS.
+// Add more rows as gaps in coverage show up in practice.
+const UK_METAR_STATIONS = [
+  { icao: "EGLL", name: "London Heathrow", lat: 51.4700, lon: -0.4543 },
+  { icao: "EGKK", name: "London Gatwick", lat: 51.1481, lon: -0.1903 },
+  { icao: "EGSS", name: "London Stansted", lat: 51.8860, lon: 0.2389 },
+  { icao: "EGGW", name: "London Luton", lat: 51.8747, lon: -0.3683 },
+  { icao: "EGLC", name: "London City", lat: 51.5053, lon: 0.0553 },
+  { icao: "EGMC", name: "Southend", lat: 51.5714, lon: 0.6956 },
+  { icao: "EGKB", name: "Biggin Hill", lat: 51.3308, lon: 0.0325 },
+  { icao: "EGLF", name: "Farnborough", lat: 51.2758, lon: -0.7764 },
+  { icao: "EGHI", name: "Southampton", lat: 50.9503, lon: -1.3567 },
+  { icao: "EGTE", name: "Exeter", lat: 50.7344, lon: -3.4139 },
+  { icao: "EGHQ", name: "Newquay", lat: 50.4406, lon: -4.9954 },
+  { icao: "EGHC", name: "Land's End", lat: 50.1028, lon: -5.6706 },
+  { icao: "EGGD", name: "Bristol", lat: 51.3827, lon: -2.7191 },
+  { icao: "EGBJ", name: "Gloucestershire", lat: 51.8942, lon: -2.1673 },
+  { icao: "EGTK", name: "Oxford", lat: 51.8369, lon: -1.3200 },
+  { icao: "EGVN", name: "RAF Brize Norton", lat: 51.7500, lon: -1.5836 },
+  { icao: "EGBB", name: "Birmingham", lat: 52.4539, lon: -1.7480 },
+  { icao: "EGNX", name: "East Midlands", lat: 52.8311, lon: -1.3281 },
+  { icao: "EGSH", name: "Norwich", lat: 52.6758, lon: 1.2828 },
+  { icao: "EGNJ", name: "Humberside", lat: 53.5744, lon: -0.3508 },
+  { icao: "EGFF", name: "Cardiff", lat: 51.3967, lon: -3.3433 },
+  { icao: "EGNR", name: "Hawarden (Chester)", lat: 53.1783, lon: -2.9781 },
+  { icao: "EGGP", name: "Liverpool John Lennon", lat: 53.3336, lon: -2.8497 },
+  { icao: "EGCC", name: "Manchester", lat: 53.3537, lon: -2.2750 },
+  { icao: "EGNH", name: "Blackpool", lat: 53.7717, lon: -3.0286 },
+  { icao: "EGNM", name: "Leeds Bradford", lat: 53.8659, lon: -1.6606 },
+  { icao: "EGNT", name: "Newcastle", lat: 55.0375, lon: -1.6917 },
+  { icao: "EGNV", name: "Durham Tees Valley", lat: 54.5092, lon: -1.4294 },
+  { icao: "EGNS", name: "Isle of Man Ronaldsway", lat: 54.0836, lon: -4.6239 },
+  { icao: "EGPH", name: "Edinburgh", lat: 55.9500, lon: -3.3725 },
+  { icao: "EGPF", name: "Glasgow", lat: 55.8719, lon: -4.4331 },
+  { icao: "EGPK", name: "Prestwick", lat: 55.5094, lon: -4.5864 },
+  { icao: "EGPN", name: "Dundee", lat: 56.4525, lon: -3.0258 },
+  { icao: "EGPD", name: "Aberdeen", lat: 57.2019, lon: -2.1978 },
+  { icao: "EGPE", name: "Inverness", lat: 57.5425, lon: -4.0475 },
+  { icao: "EGPC", name: "Wick", lat: 58.4589, lon: -3.0928 },
+  { icao: "EGPO", name: "Stornoway", lat: 58.2158, lon: -6.3311 },
+  { icao: "EGPB", name: "Sumburgh (Shetland)", lat: 59.8790, lon: -1.2956 },
+  { icao: "EGPA", name: "Kirkwall (Orkney)", lat: 58.9578, lon: -2.9053 },
+  { icao: "EGPI", name: "Islay", lat: 55.6819, lon: -6.2564 },
+  { icao: "EGAA", name: "Belfast International", lat: 54.6575, lon: -6.2158 },
+  { icao: "EGAC", name: "Belfast City", lat: 54.6181, lon: -5.8725 },
+  { icao: "EGAE", name: "Derry/Eglinton", lat: 55.0428, lon: -7.1611 }
+];
+
+// Reuses tide.js's haversineKm if it's already loaded on this page
+// (same script-order convention tide-ui.js relies on for tide.js);
+// falls back to a local copy so this file also works standalone.
+function aviationHaversineKm(lat1, lon1, lat2, lon2) {
+  if (typeof haversineKm === "function") return haversineKm(lat1, lon1, lat2, lon2);
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Same sparsity shape as the EA tide gauges: nearest station can
+// genuinely be 30-50km away, which is far enough that the reading
+// stops being representative of a specific place. No hard cutoff here
+// (callers get distanceKm and decide) but MAX_USEFUL_DISTANCE_KM is a
+// suggested cut-off for UI purposes — beyond this, cloud cover at the
+// station and at the target location have likely diverged.
+const AVIATION_MAX_USEFUL_DISTANCE_KM = 50;
+
+function nearestMetarStation(lat, lon) {
+  let best = null, bestDist = Infinity;
+  UK_METAR_STATIONS.forEach(station => {
+    const dist = aviationHaversineKm(lat, lon, station.lat, station.lon);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = station;
+    }
+  });
+  return best ? { ...best, distanceKm: bestDist } : null;
+}
+
+// ---- Quadrant matching (up to 4 stations: one N, E, S, W of a place) ----
+//
+// Why: a single nearest station can just be a local outlier — its own
+// terrain, its own coastal quirk. Several stations spread around a
+// location let a genuine forecast bias (all four disagree the same
+// way) be told apart from a station-specific one (only the coastal
+// one does). This directly informed by the person's own worked
+// example: The Lizard has real UK stations to its north and west, but
+// none within a sane distance to the south (open Atlantic) or east —
+// forcing a quadrant to use something 150km away would make the
+// comparison worse, not better, so an empty/skipped quadrant here is
+// the CORRECT outcome, not a gap to paper over.
+//
+// Compass bearing (0-360, the direction FROM the location TO the
+// station), not just distance — needed to sort stations into N/E/S/W
+// in the first place. Standard great-circle bearing formula.
+function bearingDegrees(lat1, lon1, lat2, lon2) {
+  const toRad = d => (d * Math.PI) / 180;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  const theta = Math.atan2(y, x);
+  return (theta * 180 / Math.PI + 360) % 360;
+}
+
+// Four 90° wedges centred on N/E/S/W rather than 8-point compass —
+// deliberately coarse. The goal is "is this bias general or
+// direction-specific", which four broad buckets answer; splitting
+// into 8 would mostly just multiply how often a bucket comes up empty
+// for no real gain in what the comparison can tell you.
+function quadrantForBearing(bearing) {
+  if (bearing >= 315 || bearing < 45) return "N";
+  if (bearing < 135) return "E";
+  if (bearing < 225) return "S";
+  return "W";
+}
+
+// Two thresholds, not one hard cutoff — this is the "fuzzy" part.
+// Under PREFERRED, a station is used at full confidence. Between
+// PREFERRED and FALLBACK, it's still used (better than nothing for
+// that direction) but flagged reducedConfidence so anything consuming
+// this later can choose to weight it down rather than treat a 100km
+// reading the same as an 20km one. Past FALLBACK, the quadrant is
+// left empty rather than stretched to fill it.
+const QUADRANT_PREFERRED_MAX_KM = 50;
+const QUADRANT_FALLBACK_MAX_KM = 120;
+
+// Returns 0-4 entries — however many quadrants actually have a
+// station worth using, never padded to 4. Each station can only ever
+// appear in the one quadrant its bearing puts it in, so there's no
+// risk of the same airport being double-counted from two directions.
+function nearestStationsByQuadrant(lat, lon) {
+  const byQuadrant = { N: [], E: [], S: [], W: [] };
+  UK_METAR_STATIONS.forEach(station => {
+    const distanceKm = aviationHaversineKm(lat, lon, station.lat, station.lon);
+    const bearing = bearingDegrees(lat, lon, station.lat, station.lon);
+    byQuadrant[quadrantForBearing(bearing)].push({ ...station, distanceKm, bearing });
+  });
+
+  const result = [];
+  for (const quadrant of ["N", "E", "S", "W"]) {
+    const nearest = byQuadrant[quadrant].sort((a, b) => a.distanceKm - b.distanceKm)[0];
+    if (!nearest || nearest.distanceKm > QUADRANT_FALLBACK_MAX_KM) continue; // genuinely nothing usable in this direction — skip it, don't force one
+    result.push({
+      quadrant,
+      icao: nearest.icao,
+      name: nearest.name,
+      distanceKm: nearest.distanceKm,
+      bearing: nearest.bearing,
+      reducedConfidence: nearest.distanceKm > QUADRANT_PREFERRED_MAX_KM
+    });
+  }
+  return result;
+}
+
+// ---- Proxy URL, same localStorage pattern as tide.js's Discovery proxy ----
+
+const AVIATION_PROXY_STORAGE = "cloude-aviation:proxyUrl";
+
+function loadAviationProxyUrl() {
+  try {
+    return (localStorage.getItem(AVIATION_PROXY_STORAGE) || "").replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function saveAviationProxyUrl(url) {
+  try {
+    const trimmed = (url || "").replace(/\/+$/, "");
+    if (trimmed) localStorage.setItem(AVIATION_PROXY_STORAGE, trimmed);
+    else localStorage.removeItem(AVIATION_PROXY_STORAGE);
+  } catch {
+    // Storage unavailable — proxy URL just won't persist between visits.
+  }
+}
+
+// Unlike Admiralty, aviationweather.gov needs no key at all, so a
+// missing proxy URL is the only likely cause of a raw network failure
+// here — the error message can be more specific than tide.js's.
+async function fetchMetarRaw(icao) {
+  const proxy = loadAviationProxyUrl();
+  const base = proxy || "https://aviationweather.gov";
+  const url = `${base}/api/data/metar?ids=${encodeURIComponent(icao)}&format=json&taf=false`;
+  try {
+    return await fetchWithTimeout(url, { cache: "no-store" }, 30000);
+  } catch (err) {
+    if (!proxy) {
+      throw new Error("Couldn't reach aviationweather.gov directly — browsers may need a small relay in between if this fails with a CORS-shaped error. Set an Aviation proxy URL in Settings (see aviation-proxy-worker.js in the project files).");
+    }
+    throw err;
+  }
+}
+
+// Oktas → approximate sky-cover %, following the standard METAR cover
+// codes. These are midpoints of each code's defined oktas range
+// (FEW=1-2, SCT=3-4, BKN=5-7, OVC=8/8), not exact — METAR only ever
+// reports in these four bins, so any mapping to a continuous %
+// necessarily picks a representative value rather than a measured one.
+const METAR_COVER_PCT = { FEW: 20, SCT: 40, BKN: 75, OVC: 100 };
+
+// WMO's standard low/mid/high cloud altitude bands, matched to this
+// app's existing cloudLow/Mid/High split. These are a genuine
+// approximation of Open-Meteo's own bands (which are defined by
+// pressure level, not a fixed ft AGL cutoff) — close enough for a
+// sanity check, not exact enough to treat the two as directly
+// interchangeable numbers.
+function cloudBandForHeightFt(ft) {
+  if (ft < 6500) return "cloudLow";
+  if (ft < 20000) return "cloudMid";
+  return "cloudHigh";
+}
+
+// Parses cloud groups straight out of the raw METAR body — e.g.
+// "BKN025", "SCT100", "OVC008CB", "FEW250", "VV004", "SKC", "NSC",
+// "CAVOK" — rather than trusting a specific JSON schema (see file-top
+// note on why). Height is always reported in hundreds of feet AGL.
+function decodeMetarClouds(rawOb) {
+  const result = { cloudLow: null, cloudMid: null, cloudHigh: null, ceilingFt: null };
+  if (!rawOb) return result;
+
+  if (/\b(SKC|CLR|NSC|CAVOK|NCD)\b/.test(rawOb)) {
+    // Explicitly clear/no significant cloud below 5000ft (NSC), or NCD
+    // ("No Cloud Detected") — the automated-station equivalent of
+    // SKC/CLR, used whenever the report is AUTO rather than
+    // human-observed. Confirmed against a real EGLL response
+    // ("...AUTO VRB01KT 9999 NCD 15/10...") that this codepath is
+    // common, not rare — a lot of the UK network reports AUTO, and
+    // without NCD here every one of them would have decoded as "no
+    // data" instead of "clear", silently wrong on a very ordinary
+    // case rather than an edge case. Safe to report all three bands
+    // as 0 rather than leaving them null, since the observation is
+    // genuinely saying "no cloud", not "no data".
+    return { cloudLow: 0, cloudMid: 0, cloudHigh: 0, ceilingFt: null };
+  }
+
+  const tokens = rawOb.match(/\b(FEW|SCT|BKN|OVC)(\d{3})(CB|TCU)?\b|\bVV(\d{3})\b/g) || [];
+  let ceilingFt = null;
+
+  tokens.forEach(token => {
+    const layerMatch = token.match(/^(FEW|SCT|BKN|OVC)(\d{3})/);
+    const vvMatch = token.match(/^VV(\d{3})$/);
+
+    let cover, heightFt;
+    if (layerMatch) {
+      cover = layerMatch[1];
+      heightFt = parseInt(layerMatch[2], 10) * 100;
+    } else if (vvMatch) {
+      // Vertical visibility = sky obscured (fog, heavy precip) rather
+      // than a discrete cloud layer. Treated as fully overcast at the
+      // reported height so it still shows up as "not clear" rather
+      // than silently vanishing from the decode.
+      cover = "OVC";
+      heightFt = parseInt(vvMatch[1], 10) * 100;
+    } else {
+      return;
+    }
+
+    const band = cloudBandForHeightFt(heightFt);
+    const pct = METAR_COVER_PCT[cover];
+    // A higher layer doesn't erase a lower one, but within the same
+    // band the highest coverage reported wins — max, not sum, because
+    // "BKN at 2000ft, OVC at 3000ft" isn't 175% cloud, it's one band
+    // that's at least mostly covered.
+    result[band] = result[band] === null ? pct : Math.max(result[band], pct);
+
+    if (cover === "BKN" || cover === "OVC") {
+      ceilingFt = ceilingFt === null ? heightFt : Math.min(ceilingFt, heightFt);
+    }
+  });
+
+  result.ceilingFt = ceilingFt;
+  return result;
+}
+
+// Top-level entry point: nearest station → fetch → decode, in one
+// call. Returns null (not a throw) if there's simply no station within
+// range or the fetch comes back empty, so callers can treat "no
+// ground truth available here" as a normal, expected outcome rather
+// than an error state — same convention as nearestTideStation callers.
+// Shared by both entry points below: fetch one station's METAR and
+// decode it. Pulled out on its own so the quadrant version isn't just
+// copy-pasting the single-station version's fetch/decode/shape logic
+// four times over.
+async function fetchAndDecodeMetar(station) {
+  const res = await fetchMetarRaw(station.icao);
+  if (!res.ok) throw new Error(`METAR fetch failed: ${res.status}`);
+  const data = await res.json();
+  const entry = Array.isArray(data) ? data[0] : data;
+  if (!entry || !entry.rawOb) return null;
+
+  const clouds = decodeMetarClouds(entry.rawOb);
+  return {
+    station: { icao: station.icao, name: station.name, distanceKm: station.distanceKm },
+    observedAt: entry.obsTime ? new Date(entry.obsTime * 1000).toISOString() : null,
+    rawText: entry.rawOb,
+    ...clouds
+  };
+}
+
+// Single-station entry point — nearest station only, regardless of
+// direction. Left in place for anything that only wants one quick
+// reading rather than a directional spread (e.g. a future display use,
+// where showing four stations' worth of numbers would be exactly the
+// clutter the person didn't want).
+async function getAviationGroundTruth(lat, lon) {
+  const station = nearestMetarStation(lat, lon);
+  if (!station) return null;
+  const result = await fetchAndDecodeMetar(station);
+  if (!result) return null;
+  return { ...result, beyondUsefulRange: station.distanceKm > AVIATION_MAX_USEFUL_DISTANCE_KM };
+}
+
+// Multi-station entry point for the actual FFV-comparison use case:
+// up to 4 stations (one per compass quadrant, see
+// nearestStationsByQuadrant for why some locations get fewer), fetched
+// in parallel. Uses allSettled rather than all — one station's flaky
+// network response shouldn't discard the three others that came back
+// fine, and a place near the coast/border genuinely might have a
+// quadrant backed by a station that occasionally times out.
+async function getAviationGroundTruthByQuadrant(lat, lon) {
+  const stations = nearestStationsByQuadrant(lat, lon);
+  if (!stations.length) return [];
+
+  const settled = await Promise.allSettled(
+    stations.map(station => fetchAndDecodeMetar(station))
+  );
+
+  return stations
+    .map((station, i) => {
+      const outcome = settled[i];
+      if (outcome.status !== "fulfilled" || !outcome.value) return null;
+      return {
+        ...outcome.value,
+        quadrant: station.quadrant,
+        bearing: station.bearing,
+        reducedConfidence: station.reducedConfidence
+      };
+    })
+    .filter(Boolean); // drops quadrants whose fetch failed or came back empty, same "skip rather than force" principle as the matching itself
+}
