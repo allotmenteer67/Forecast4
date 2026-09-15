@@ -379,13 +379,20 @@ function unitLabel(conditionName) {
 }
 
 // Same band edges as map.js's own RAIN_BAND_THRESHOLDS (the map's Rain
-// legend swatches), duplicated here rather than imported since app.js
-// and map.js are never both loaded on the same page (map.js is
-// map.html-only) and this project has no shared module system between
-// its plain script-tag files. Kept identical on purpose: a reading
-// that paints as the map's "4" swatch should read as the same word
-// here, not a different threshold set someone has to learn twice.
-const RAIN_BAND_THRESHOLDS = [0.1, 0.5, 1, 2, 4, 8];
+// legend swatches) — deliberately kept numerically identical by hand so
+// a reading that paints as the map's "4" swatch reads as the same word
+// here, not a different threshold set someone has to learn twice. NOT
+// the same variable, though, on purpose: app.js loads on every page,
+// including map.html, which ALSO loads map.js — two top-level `const
+// RAIN_BAND_THRESHOLDS` declarations in that shared global scope is a
+// fatal SyntaxError, not a harmless redeclaration, and it silently took
+// map.js down entirely (blank map, no legends, nothing — the page never
+// got far enough to report an error anywhere). Originally named the
+// same as map.js's constant on the wrong assumption that the two files
+// were never loaded together; they are, so this one is named
+// differently instead of relying on the two scripts never actually
+// meeting.
+const RAIN_INTENSITY_THRESHOLDS = [0.1, 0.5, 1, 2, 4, 8];
 const RAIN_INTENSITY_LABELS = ["Dry", "Drizzle", "Light rain", "Rain", "Heavy rain", "Very heavy rain", "Torrential rain"];
 
 // Always classifies against the true mm/hr figure, never the
@@ -395,8 +402,8 @@ const RAIN_INTENSITY_LABELS = ["Dry", "Drizzle", "Light rain", "Rain", "Heavy ra
 function rainIntensityLabel(mmPerHour) {
   if (mmPerHour === null || mmPerHour === undefined) return null;
   let band = 0;
-  for (; band < RAIN_BAND_THRESHOLDS.length; band++) {
-    if (mmPerHour < RAIN_BAND_THRESHOLDS[band]) break;
+  for (; band < RAIN_INTENSITY_THRESHOLDS.length; band++) {
+    if (mmPerHour < RAIN_INTENSITY_THRESHOLDS[band]) break;
   }
   return RAIN_INTENSITY_LABELS[band];
 }
