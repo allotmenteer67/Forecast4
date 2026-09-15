@@ -3278,6 +3278,13 @@ function median(values) {
 // currentColor from .headline-cell-icon (style.css), not hardcoded per
 // icon, so it always matches var(--accent-dark) for whichever theme is
 // active, same as the cell's own background now does.
+// Headline-only shortened names for the two conditions long enough to
+// wrap their label onto a second line once HEADLINE_CELL_ICONS' icon
+// started eating into the same width — see the label-building code
+// below for the full reasoning. CONFIG.conditions[name].name (the full
+// "Temperature"/"Pressure") is untouched and still used everywhere else.
+const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Pres" };
+
 const HEADLINE_CELL_ICONS = {
   rain: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
   temperature: '<svg viewBox="0 0 18 18" fill="none"><line x1="9" y1="3" x2="9" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13" r="2.3" stroke="currentColor" stroke-width="1.4"/></svg>',
@@ -4083,11 +4090,22 @@ function renderHeadline() {
     // not a number, and has no CONFIG.conditions entry of its own to
     // read a unit from (see the branch below).
     const showingUVPercent = conditionName === "sunshine" && showHourly && !night;
+    // Shortened here ONLY — CONFIG.conditions[name].name (the full
+    // "Temperature"/"Pressure") still shows everywhere else: Compare's
+    // dropdown, Settings' units list, the detail sheet title. This is
+    // purely about fitting THIS cell now that its icon (see
+    // HEADLINE_CELL_ICONS) eats into the same width the label has to
+    // fit in — confirmed on a real device that "Temperature °C" and
+    // "Pressure hPa" were the two long enough to wrap onto a second
+    // line, pushing those two cells to 3 lines tall against every
+    // other cell's 2, breaking the grid's own row rhythm. Every other
+    // condition's name was already short enough not to need this.
+    const headlineName = HEADLINE_LABEL_NAME[conditionName] || CONFIG.conditions[conditionName].name;
     label.textContent = conditionName === "cloud"
       ? "Cloud"
       : showingUVPercent
-      ? `${CONFIG.conditions[conditionName].name} %`
-      : `${CONFIG.conditions[conditionName].name} ${unitLabel(conditionName)}`;
+      ? `${headlineName} %`
+      : `${headlineName} ${unitLabel(conditionName)}`;
 
     if (conditionName === "sunshine") {
       // Sunshine itself has no hourly concept — a daily total doesn't
