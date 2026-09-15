@@ -340,19 +340,20 @@ function ensureMapStripScale() {
 // rather than the strip's own weather grid, which only ever fetches
 // rain. That means this needs no new network request at all, and can
 // never show a rain figure here that disagrees with the headline's own
-// Rain cell. Always "right now" (index 0), never the hour being
-// scrubbed to — that's deliberate: this is "what it's like", the
-// headline/hour-slider below is "what's coming next", and blurring the
-// two would undo the actual point of having both.
+// Rain cell — updateMapStripCorners() is called directly from
+// applyHourlyBlend (app.js) the instant that data lands, not just on
+// this file's own slower redraw cycle, specifically so the two can
+// never drift out of step with each other. Always "right now" (index
+// 0), never the hour being scrubbed to — that's deliberate: this is
+// "what it's like", the headline/hour-slider below is "what's coming
+// next", and blurring the two would undo the actual point of having
+// both.
 //
-// Pressure shares its physical corner (bottom-right) with the existing
-// scrub-time indicator above rather than adding a fifth element: this
-// app's own hour slider is shared across the whole front page, so
-// scrubbing it away from Now already needs somewhere to say what time
-// you're looking at, and knowing that matters more in that moment than
-// Pressure does. They're complementary — never both visible at once —
-// so toggling one another via the same is-visible class ANY OTHER
-// element already uses is enough; no new mechanism needed.
+// The scrub-time indicator (.map-strip-scale, above) no longer shares
+// bottom-right with Pressure — it now sits fixed in the centre of the
+// map instead, permanently, with its own visibility (only shown once
+// the shared hour slider leaves Now) completely unchanged. Pressure
+// keeps bottom-right to itself.
 const MAP_STRIP_CORNERS = [
   { id: "tl", cls: "map-strip-corner-tl", build: () => {
       const raw = typeof state !== "undefined" ? state.hourly?.precipitation?.[0] : null;
@@ -413,10 +414,6 @@ function updateMapStripCorners() {
     el.textContent = text || "";
     el.classList.toggle("is-visible", !!text);
   });
-  // Pressure (bottom-right) yields its corner to the scrub-time
-  // indicator the instant the shared hour slider leaves Now — same
-  // slot, never both on screen together.
-  if (els.br) els.br.classList.toggle("is-visible", !!els.br.textContent && mapStripHourOffset === 0);
 }
 
 async function renderMapStrip(centre, grid) {

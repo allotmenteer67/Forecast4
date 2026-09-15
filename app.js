@@ -1822,6 +1822,18 @@ function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
   });
 
   state.hourly.status = "ready";
+
+  // Tells the map strip's corner readouts (mapstrip3.js, index.html
+  // only) to refresh right now, rather than waiting for its own ~60s
+  // redraw cycle to catch up. Guarded since this function also runs on
+  // pages that never load mapstrip3.js at all (compare.html, map.html).
+  // This is the one place applyHourlyBlend actually finishes writing
+  // state.hourly — both the live-fetch and precache-hit paths already
+  // funnel through here, so hooking in exactly here (rather than after
+  // each of those two callers separately) keeps the corners honestly
+  // in step with the headline everywhere state.hourly changes, with
+  // nothing to keep in sync by hand if a third path is ever added.
+  if (typeof updateMapStripCorners === "function") updateMapStripCorners();
 }
 
 // ---- GitHub-precached weather ----

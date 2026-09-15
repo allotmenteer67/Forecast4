@@ -3061,8 +3061,20 @@ footer {
    most of the time showing nothing more than the current real time). */
 .map-strip-scale {
   position: absolute;
-  right: 8px;
+  /* Was right:8px/bottom:8px, sharing that corner with Pressure below —
+     moved to bottom-centre instead, permanently, so Pressure can keep
+     bottom-right to itself outright. NOT true dead-centre (left:50%/
+     top:50% together) — that was tried first and sits directly on top
+     of the crosshair dot marking the current location, which is also
+     drawn at the exact centre of the map. Horizontally centred, same
+     8px inset from the bottom edge every corner pill already uses, so
+     it reads as part of the same family rather than floating loose in
+     open water. Visibility is completely unchanged (.is-visible below
+     still only applies once the shared hour slider leaves Now) — only
+     where it sits when shown has moved. */
+  left: 50%;
   bottom: 8px;
+  transform: translateX(-50%);
   font-size: 13px;
   font-weight: 600;
   padding: 4px 9px;
@@ -3101,11 +3113,6 @@ footer {
 .map-strip-corner-tl { left: 8px; top: 8px; }
 .map-strip-corner-tr { right: 8px; top: 8px; }
 .map-strip-corner-bl { left: 8px; bottom: 8px; }
-/* Bottom-right deliberately has no fixed left/right/top/bottom of its
-   own beyond matching .map-strip-scale's own inset — it and that
-   scrub-time pill share this exact corner and are never both visible
-   together (see updateMapStripCorners in mapstrip3.js), so there's
-   nothing to keep from overlapping in practice. */
 .map-strip-corner-br { right: 8px; bottom: 8px; }
 
 /* Sits directly under the map, between it and the layer toggles — close
