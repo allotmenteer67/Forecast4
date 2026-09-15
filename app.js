@@ -5940,6 +5940,13 @@ if (hourSlider) {
     updateSliderFill(hourSlider);
     updateHourLabel();
     renderHeadline();
+    // Keeps the map strip's corner figures tracking whichever hour this
+    // card itself is now showing (see MAP_STRIP_CORNERS, mapstrip3.js)
+    // — on request, so they move together with the headline rather than
+    // the corners sitting frozen on an old hour while everything else
+    // moves. Guarded since this file also runs on pages that never load
+    // mapstrip3.js at all (compare.html, map.html).
+    if (typeof updateMapStripCorners === "function") updateMapStripCorners();
   });
 }
 

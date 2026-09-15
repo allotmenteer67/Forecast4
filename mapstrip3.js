@@ -362,40 +362,42 @@ function ensureMapStripScale() {
   return mapStripScaleEl;
 }
 
-// Four small "what's it like right now" readouts, one per corner —
-// Temperature (top-right), Rain (top-left), Wind (bottom-left),
-// Pressure (bottom-right). Same visual treatment as the expanded map's
-// own top-right time/conditions pill (.map-strip-corner shares
-// .map-strip-scale's exact font/padding/radius/background), just four
-// of them instead of one line.
+// Four small readouts, one per corner — Temperature (top-right), Rain
+// (top-left), Wind (bottom-left), Pressure (bottom-right). Same visual
+// treatment as the expanded map's own top-right time/conditions pill
+// (.map-strip-corner shares .map-strip-scale's exact font/padding/
+// radius/background), just four of them instead of one line.
 //
 // Deliberately sourced from state.hourly (app.js) — the SAME already-
 // fetched, already-corrected data the headline grid itself shows —
 // rather than the strip's own weather grid, which only ever fetches
 // rain. That means this needs no new network request at all, and can
-// never show a rain figure here that disagrees with the headline's own
-// Rain cell — updateMapStripCorners() is called directly from
-// applyHourlyBlend (app.js) the instant that data lands, not just on
-// this file's own slower redraw cycle, specifically so the two can
-// never drift out of step with each other. Always "right now" (index
-// 0), never the hour being scrubbed to — that's deliberate: this is
-// "what it's like", the headline/hour-slider below is "what's coming
-// next", and blurring the two would undo the actual point of having
-// both.
+// never show a figure here that disagrees with the headline's own
+// cells for the same hour.
 //
-// The scrub-time indicator (.map-strip-scale, above) no longer shares
-// bottom-right with Pressure — it now sits fixed in the centre of the
-// map instead, permanently, with its own visibility (only shown once
-// the shared hour slider leaves Now) completely unchanged. Pressure
-// keeps bottom-right to itself.
+// Tracks state.hourIndex, not a fixed "now" — on request, so scrubbing
+// or playing through the hours moves the corner figures in step with
+// the headline and the map's own smoothly-animating rain colour,
+// rather than the numbers sitting frozen while the colour underneath
+// them visibly moves. state.hourIndex only ever holds a genuine whole
+// hour (Play rounds it the same way the headline itself does — see
+// hourPlayRaw in app.js), so these never show fake half-hour precision
+// even while the rain wash between them is doing exactly that.
+//
+// Refreshed from two places: applyHourlyBlend (app.js), the instant
+// fresh data lands, and the hourSlider "input" handler (app.js), the
+// instant the scrubbed hour itself changes — between them, the corners
+// can't drift out of step with the headline in either direction.
 const MAP_STRIP_CORNERS = [
   { id: "tl", cls: "map-strip-corner-tl", build: () => {
-      const raw = typeof state !== "undefined" ? state.hourly?.precipitation?.[0] : null;
+      const i = typeof state !== "undefined" ? (state.hourIndex ?? 0) : 0;
+      const raw = typeof state !== "undefined" ? state.hourly?.precipitation?.[i] : null;
       const word = typeof rainIntensityLabel === "function" ? rainIntensityLabel(raw) : null;
       return word;
     } },
   { id: "tr", cls: "map-strip-corner-tr", build: () => {
-      const raw = typeof state !== "undefined" ? state.hourly?.temperature?.[0] : null;
+      const i = typeof state !== "undefined" ? (state.hourIndex ?? 0) : 0;
+      const raw = typeof state !== "undefined" ? state.hourly?.temperature?.[i] : null;
       if (raw === null || raw === undefined) return null;
       const display = typeof convertForDisplay === "function" ? convertForDisplay(raw, "temperature") : raw;
       const value = typeof formatConverted === "function" ? formatConverted(display, "temperature") : Math.round(display);
@@ -403,8 +405,9 @@ const MAP_STRIP_CORNERS = [
       return `${value}${unit}`;
     } },
   { id: "bl", cls: "map-strip-corner-bl", build: () => {
-      const speed = typeof state !== "undefined" ? state.hourly?.windSpeed?.[0] : null;
-      const dir = typeof state !== "undefined" ? state.hourly?.windDirection?.[0] : null;
+      const i = typeof state !== "undefined" ? (state.hourIndex ?? 0) : 0;
+      const speed = typeof state !== "undefined" ? state.hourly?.windSpeed?.[i] : null;
+      const dir = typeof state !== "undefined" ? state.hourly?.windDirection?.[i] : null;
       if (speed === null || speed === undefined) return null;
       const label = (dir !== null && dir !== undefined && typeof compassLabel === "function") ? `${compassLabel(dir)} ` : "";
       const display = typeof convertForDisplay === "function" ? convertForDisplay(speed, "wind") : speed;
@@ -413,7 +416,8 @@ const MAP_STRIP_CORNERS = [
       return `${label}${value}${unit}`;
     } },
   { id: "br", cls: "map-strip-corner-br", build: () => {
-      const raw = typeof state !== "undefined" ? state.hourly?.pressure?.[0] : null;
+      const i = typeof state !== "undefined" ? (state.hourIndex ?? 0) : 0;
+      const raw = typeof state !== "undefined" ? state.hourly?.pressure?.[i] : null;
       if (raw === null || raw === undefined) return null;
       const display = typeof convertForDisplay === "function" ? convertForDisplay(raw, "pressure") : raw;
       const value = typeof formatConverted === "function" ? formatConverted(display, "pressure") : Math.round(display);
