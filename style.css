@@ -539,18 +539,38 @@ header p {
 
 .headline-cell {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   text-align: left;
-  background: none;
-  border: 0;
+  /* Was background: none/border: 0 — every cell just sat directly on
+     the big headline panel's own colour. Individually bordered now, on
+     request, with var(--accent-light) rather than a fixed colour so
+     every theme (Settings > Appearance) recolours these exactly the
+     way it already recolours everything else — nothing here is a new
+     colour, it's the same token each theme already defines for itself. */
+  background: var(--accent-light);
+  border: 0.5px solid var(--border);
   font: inherit;
   color: inherit;
-  padding: 6px;
-  margin: -6px;
-  border-radius: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   transition: background-color .15s ease;
+}
+
+.headline-cell-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  color: var(--accent-dark);
+}
+
+.headline-cell-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 /* A single full-width row rather than one of the 2-column headline

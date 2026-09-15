@@ -3270,6 +3270,25 @@ function median(values) {
 // shows what a given person actually finds useful — Sunshine matters a
 // lot to a gardener, barely at all to someone else, and there's no
 // reason to force either way.
+// One small icon per headline cell, sat to the left of its label/value
+// — hand-drawn inline SVG (stroke="currentColor", same 1.4-1.6 stroke
+// weight as the settings/hour-play icons already use elsewhere),
+// matching this project's existing convention of never pulling in an
+// icon font or external asset for something this small. Coloured via
+// currentColor from .headline-cell-icon (style.css), not hardcoded per
+// icon, so it always matches var(--accent-dark) for whichever theme is
+// active, same as the cell's own background now does.
+const HEADLINE_CELL_ICONS = {
+  rain: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  temperature: '<svg viewBox="0 0 18 18" fill="none"><line x1="9" y1="3" x2="9" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13" r="2.3" stroke="currentColor" stroke-width="1.4"/></svg>',
+  wind: '<svg viewBox="0 0 18 18" fill="none"><path d="M2 6 h8 a2 2 0 1 0 -2 -2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 10 h11 a2 2 0 1 1 -2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 14 h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  pressure: '<svg viewBox="0 0 18 18" fill="none"><path d="M3 12 a6 6 0 1 1 12 0" stroke="currentColor" stroke-width="1.4"/><line x1="9" y1="12" x2="12" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="9" cy="12" r="1" fill="currentColor"/></svg>',
+  sunshine: '<svg viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="3" stroke="currentColor" stroke-width="1.4"/><line x1="9" y1="1.5" x2="9" y2="3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="9" y1="14.5" x2="9" y2="16.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="1.5" y1="9" x2="3.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="14.5" y1="9" x2="16.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="3.6" y1="3.6" x2="5" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="13" y1="13" x2="14.4" y2="14.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="14.4" y1="3.6" x2="13" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="5" y1="13" x2="3.6" y2="14.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  cloud: '<svg viewBox="0 0 18 18" fill="none"><path d="M5.5 13 a3 3 0 0 1 0 -6 a4 4 0 0 1 7.6 -1 a3.2 3.2 0 0 1 -0.6 7 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  soilTemperature: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 16 V9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M9 9 C9 5 12 4 14 4 C14 7 12 9 9 9 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 11 C9 8.5 7 7.5 5 7.5 C5 10 7 11 9 11 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
+  dewPoint: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><line x1="5.5" y1="11" x2="12.5" y2="11" stroke="currentColor" stroke-width="1.2"/></svg>'
+};
+
 const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
 const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "tide", "fishing"];
 const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
@@ -4194,7 +4213,16 @@ function renderHeadline() {
     valueRow.className = "headline-value-row";
     valueRow.appendChild(valueEl);
 
-    cell.append(label, valueRow);
+    const icon = document.createElement("span");
+    icon.className = "headline-cell-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = HEADLINE_CELL_ICONS[conditionName] || "";
+
+    const textWrap = document.createElement("div");
+    textWrap.className = "headline-cell-text";
+    textWrap.append(label, valueRow);
+
+    cell.append(icon, textWrap);
 
     if (conditionName === "wind") {
       const direction = showHourly
