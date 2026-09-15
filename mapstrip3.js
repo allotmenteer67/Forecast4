@@ -328,6 +328,97 @@ function ensureMapStripScale() {
   return mapStripScaleEl;
 }
 
+// Four small "what's it like right now" readouts, one per corner —
+// Temperature (top-right), Rain (top-left), Wind (bottom-left),
+// Pressure (bottom-right). Same visual treatment as the expanded map's
+// own top-right time/conditions pill (.map-strip-corner shares
+// .map-strip-scale's exact font/padding/radius/background), just four
+// of them instead of one line.
+//
+// Deliberately sourced from state.hourly (app.js) — the SAME already-
+// fetched, already-corrected data the headline grid itself shows —
+// rather than the strip's own weather grid, which only ever fetches
+// rain. That means this needs no new network request at all, and can
+// never show a rain figure here that disagrees with the headline's own
+// Rain cell. Always "right now" (index 0), never the hour being
+// scrubbed to — that's deliberate: this is "what it's like", the
+// headline/hour-slider below is "what's coming next", and blurring the
+// two would undo the actual point of having both.
+//
+// Pressure shares its physical corner (bottom-right) with the existing
+// scrub-time indicator above rather than adding a fifth element: this
+// app's own hour slider is shared across the whole front page, so
+// scrubbing it away from Now already needs somewhere to say what time
+// you're looking at, and knowing that matters more in that moment than
+// Pressure does. They're complementary — never both visible at once —
+// so toggling one another via the same is-visible class ANY OTHER
+// element already uses is enough; no new mechanism needed.
+const MAP_STRIP_CORNERS = [
+  { id: "tl", cls: "map-strip-corner-tl", build: () => {
+      const raw = typeof state !== "undefined" ? state.hourly?.precipitation?.[0] : null;
+      const word = typeof rainIntensityLabel === "function" ? rainIntensityLabel(raw) : null;
+      return word;
+    } },
+  { id: "tr", cls: "map-strip-corner-tr", build: () => {
+      const raw = typeof state !== "undefined" ? state.hourly?.temperature?.[0] : null;
+      if (raw === null || raw === undefined) return null;
+      const display = typeof convertForDisplay === "function" ? convertForDisplay(raw, "temperature") : raw;
+      const value = typeof formatConverted === "function" ? formatConverted(display, "temperature") : Math.round(display);
+      const unit = typeof unitLabel === "function" ? unitLabel("temperature") : "°C";
+      return `${value}${unit}`;
+    } },
+  { id: "bl", cls: "map-strip-corner-bl", build: () => {
+      const speed = typeof state !== "undefined" ? state.hourly?.windSpeed?.[0] : null;
+      const dir = typeof state !== "undefined" ? state.hourly?.windDirection?.[0] : null;
+      if (speed === null || speed === undefined) return null;
+      const label = (dir !== null && dir !== undefined && typeof compassLabel === "function") ? `${compassLabel(dir)} ` : "";
+      const display = typeof convertForDisplay === "function" ? convertForDisplay(speed, "wind") : speed;
+      const value = typeof formatConverted === "function" ? formatConverted(display, "wind") : Math.round(display);
+      const unit = typeof unitLabel === "function" ? unitLabel("wind") : "mph";
+      return `${label}${value}${unit}`;
+    } },
+  { id: "br", cls: "map-strip-corner-br", build: () => {
+      const raw = typeof state !== "undefined" ? state.hourly?.pressure?.[0] : null;
+      if (raw === null || raw === undefined) return null;
+      const display = typeof convertForDisplay === "function" ? convertForDisplay(raw, "pressure") : raw;
+      const value = typeof formatConverted === "function" ? formatConverted(display, "pressure") : Math.round(display);
+      const unit = typeof unitLabel === "function" ? unitLabel("pressure") : "hPa";
+      return `${value}${unit}`;
+    } }
+];
+
+const mapStripCornerEls = {};
+function ensureMapStripCorners() {
+  if (!mapStripRoot) return null;
+  const host = mapStripRoot.closest(".map-strip");
+  if (!host) return null;
+  MAP_STRIP_CORNERS.forEach(corner => {
+    if (mapStripCornerEls[corner.id]) return;
+    const el = document.createElement("div");
+    el.className = `map-strip-corner ${corner.cls}`;
+    host.appendChild(el);
+    mapStripCornerEls[corner.id] = el;
+  });
+  return mapStripCornerEls;
+}
+
+function updateMapStripCorners() {
+  const els = ensureMapStripCorners();
+  if (!els) return;
+  MAP_STRIP_CORNERS.forEach(corner => {
+    const el = els[corner.id];
+    if (!el) return;
+    let text;
+    try { text = corner.build(); } catch { text = null; }
+    el.textContent = text || "";
+    el.classList.toggle("is-visible", !!text);
+  });
+  // Pressure (bottom-right) yields its corner to the scrub-time
+  // indicator the instant the shared hour slider leaves Now — same
+  // slot, never both on screen together.
+  if (els.br) els.br.classList.toggle("is-visible", !!els.br.textContent && mapStripHourOffset === 0);
+}
+
 async function renderMapStrip(centre, grid) {
   try {
     await renderMapStripInner(centre, grid);
@@ -407,6 +498,7 @@ async function renderMapStripInner(centre, grid) {
     scaleEl.classList.toggle("is-visible", mapStripHourOffset !== 0);
     if (mapStripHourOffset !== 0) scaleEl.textContent = mapStripHourClock(grid, mapStripHourOffset);
   }
+  updateMapStripCorners();
 }
 
 const MAP_STRIP_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";

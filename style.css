@@ -3076,6 +3076,38 @@ footer {
   display: block;
 }
 
+/* Four "what's it like right now" readouts — Rain (top-left),
+   Temperature (top-right), Wind (bottom-left), Pressure (bottom-right).
+   Exact same look as .map-strip-scale above (same pill, same corner
+   inset) — one shared rule for the part every corner has in common,
+   one line each for which corner. Same show/hide pattern too: absent
+   from layout when empty (a genuinely missing reading, not just an
+   empty string) rather than an empty pill sitting there. */
+.map-strip-corner {
+  position: absolute;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .82);
+  color: var(--accent-dark);
+  display: none;
+}
+
+.map-strip-corner.is-visible {
+  display: block;
+}
+
+.map-strip-corner-tl { left: 8px; top: 8px; }
+.map-strip-corner-tr { right: 8px; top: 8px; }
+.map-strip-corner-bl { left: 8px; bottom: 8px; }
+/* Bottom-right deliberately has no fixed left/right/top/bottom of its
+   own beyond matching .map-strip-scale's own inset — it and that
+   scrub-time pill share this exact corner and are never both visible
+   together (see updateMapStripCorners in mapstrip3.js), so there's
+   nothing to keep from overlapping in practice. */
+.map-strip-corner-br { right: 8px; bottom: 8px; }
+
 /* Sits directly under the map, between it and the layer toggles — close
    enough to read as "this explains what's above" rather than a
    disconnected key floating elsewhere on the page. */
