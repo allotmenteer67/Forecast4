@@ -319,9 +319,31 @@ function svgRainRects(view, centre, grid, palette) {
 }
 
 function mapStripHourClock(grid, hoursAhead) {
-  const idx = grid && grid.times ? Math.min(grid.startIdx + hoursAhead, grid.times.length - 1) : null;
-  const iso = idx !== null ? grid.times[idx] : null;
-  const when = iso ? new Date(iso) : new Date(Date.now() + hoursAhead * 3600000);
+  if (!grid || !grid.times || !grid.times.length) return "";
+  const maxIdx = grid.times.length - 1;
+  const rawIdx = Math.min(Math.max(grid.startIdx + hoursAhead, 0), maxIdx);
+  const lo = Math.floor(rawIdx);
+  const hi = Math.min(lo + 1, maxIdx);
+  const frac = rawIdx - lo;
+  // Always interpolates between two REAL grid timestamps (both aligned
+  // to the hour, same as Open-Meteo's own hourly response always is),
+  // never the wall-clock moment "now" happens to be. The previous
+  // version fell back to Date.now() + hoursAhead whenever grid.times[]
+  // had no entry for a given index — harmless when every offset was a
+  // whole number (grid.times[idx] almost always existed), but Play's
+  // new fractional offsets hit that missing-entry case on every single
+  // half-hour step, so the pill was silently alternating between two
+  // DIFFERENT clocks: real grid timestamps on whole hours, "now plus
+  // however long you've been playing" on the half-hours in between.
+  // Confirmed on a real device — starting Play at 04:54 produced
+  // 05:24, 06:00, 05:24, i.e. the wall-clock fallback (04:54+30min,
+  // 04:54+90min) interleaved with genuine grid times (06:00), uneven
+  // by exactly the 6 minutes between 04:54 and the nearest hour. A
+  // pure midpoint between two real hourly timestamps is always evenly
+  // spaced regardless of what moment Play happens to start at.
+  const loTime = new Date(grid.times[lo]).getTime();
+  const hiTime = new Date(grid.times[hi]).getTime();
+  const when = new Date(loTime + (hiTime - loTime) * frac);
   const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   const isToday = when.toDateString() === new Date().toDateString();
   if (hoursAhead === 0) return `Now, ${time}`;
