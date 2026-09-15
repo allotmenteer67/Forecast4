@@ -120,6 +120,19 @@ applyTheme(loadTheme());
 // own prefix since it's a genuinely separate feature — see tide.js).
 const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:"];
 
+// Bump this whenever a backup's own SHAPE changes in a way an older
+// importer couldn't handle (a renamed field, a restructured store) —
+// not for ordinary feature additions, which the plain key/value dump
+// above already absorbs automatically. exportedAt (below) says WHEN a
+// backup was taken, which is useful on its own but doesn't say WHAT
+// SHAPE it's in; this does. Checked on import so a backup from a newer
+// Cloude than the code reading it understands is refused outright
+// rather than silently misapplied — there's nothing yet that needs a
+// difference between reading an OLDER shape's backup (nothing has
+// broken backward compatibility so far) and this only guards the
+// direction that actually matters today.
+const BACKUP_FORMAT_VERSION = 1;
+
 function exportAppData() {
   const data = {};
   for (let i = 0; i < localStorage.length; i++) {
@@ -128,7 +141,7 @@ function exportAppData() {
       data[key] = localStorage.getItem(key);
     }
   }
-  return JSON.stringify({ app: "Cloude", exportedAt: new Date().toISOString(), data }, null, 2);
+  return JSON.stringify({ app: "Cloude", formatVersion: BACKUP_FORMAT_VERSION, exportedAt: new Date().toISOString(), data }, null, 2);
 }
 
 // Returns { ok: true, keyCount } on success, or { ok: false, error } on
@@ -143,6 +156,9 @@ function importAppData(jsonText) {
   }
   if (!parsed || typeof parsed.data !== "object" || parsed.data === null) {
     return { ok: false, error: "That text isn't a Cloude backup (missing expected data)." };
+  }
+  if (parsed.formatVersion && parsed.formatVersion > BACKUP_FORMAT_VERSION) {
+    return { ok: false, error: "This backup is from a newer version of Cloude and can't be read here — update the app first." };
   }
 
   const entries = Object.entries(parsed.data).filter(([key]) => BACKUP_KEY_PREFIXES.some(prefix => key.startsWith(prefix)));
@@ -172,6 +188,7 @@ function exportFFVShare(areaCode) {
   return JSON.stringify({
     app: "Cloude",
     type: FFV_SHARE_TYPE,
+    formatVersion: BACKUP_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
     areaCode,
     ffv: loadFFVStore(areaCode),
@@ -217,6 +234,9 @@ function pickBetterFFVEntry(local, imported) {
 // was only ever meant to be temporary. Selection only ever affects
 // what's currently shown, never what's remembered.
 function importFFVShare(parsed) {
+  if (parsed.formatVersion && parsed.formatVersion > BACKUP_FORMAT_VERSION) {
+    return { ok: false, error: "This accuracy share is from a newer version of Cloude and can't be read here — update the app first." };
+  }
   if (!parsed.areaCode || typeof parsed.areaCode !== "string") {
     return { ok: false, error: "That doesn't look like a Cloude accuracy share (missing area)." };
   }
