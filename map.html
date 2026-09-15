@@ -3,6 +3,38 @@
 <head>
   <meta charset="utf-8">
   <script>
+    // Catches any uncaught error or promise rejection on this page and
+    // shows it directly, in plain text, at the very top of the page —
+    // added specifically because there's no way to see a real browser
+    // console on an iPad, so a silent crash here (blank map, no error
+    // text from mapStatus/mapTerrainStatus, because the crash happened
+    // before those mechanisms even ran) was otherwise completely
+    // undiagnosable from the device itself. Deliberately the FIRST
+    // script on the page, before app.js/tide.js/map.js — a crash in any
+    // of those still gets caught, since this listener is already
+    // attached before they even start running. Not meant to stay
+    // forever as visible chrome; remove once map.js's actual crash (if
+    // this catches one) is found and fixed, but harmless to leave
+    // running either way — it stays invisible unless something genuinely
+    // throws.
+    window.addEventListener("error", function (e) {
+      showPageCrashBanner((e.error && e.error.stack) || e.message || String(e));
+    });
+    window.addEventListener("unhandledrejection", function (e) {
+      showPageCrashBanner((e.reason && e.reason.stack) || (e.reason && e.reason.message) || String(e.reason));
+    });
+    function showPageCrashBanner(text) {
+      var el = document.getElementById("pageCrashBanner");
+      if (!el) {
+        el = document.createElement("pre");
+        el.id = "pageCrashBanner";
+        el.style.cssText = "position:relative;z-index:9999;margin:0;padding:12px 14px;background:#7a1f1f;color:#fff;font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;word-break:break-word;";
+        document.body.insertBefore(el, document.body.firstChild);
+      }
+      el.textContent += (el.textContent ? "\n\n" : "") + text;
+    }
+  </script>
+  <script>
     // Applies a saved colour theme before the page paints — see index.html
     // for the full explanation; duplicated identically in every page's head.
     (function () {

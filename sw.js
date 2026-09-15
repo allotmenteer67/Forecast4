@@ -326,13 +326,24 @@
 // re-trigger that whole fetch on every single install — only a
 // genuinely fresh geo cache (first install ever, or a deliberate
 // GEO_CACHE_NAME bump) does.
-const SHELL_CACHE_NAME = "cloude-shell-v58";
+// Bumped to v59: removed solar.html/solar.js/solar-ui.js from
+// SHELL_FILES. They were added in v58 on the untested assumption that
+// they existed, because every page's bottom nav links to solar.html —
+// never actually confirmed the files themselves had been built (the
+// solar feature was spec'd, not built, as of that session). If any one
+// of them 404s, cache.addAll() fails its ENTIRE install, which can
+// silently stop a service worker update from ever taking effect at
+// all — not just fail to precache those three files. Real risk: this
+// may be why v58 never actually activated, reported as the expanded
+// map going blank with no error shown anywhere. Re-add once solar's
+// files are confirmed to exist; everything not in this list still
+// works fine via ordinary lazy caching in the meantime.
+const SHELL_CACHE_NAME = "cloude-shell-v59";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
   "settings.html",
   "help.html",
-  "solar.html",
   // map.html/map.js/map-strip.js added to the precache list. They were
   // always cached anyway (the fetch handler applies to every
   // same-origin request, not just this list), but only lazily, on first
@@ -345,8 +356,6 @@ const SHELL_FILES = [
   "mapstrip3.js",
   "app.js",
   "settings.js",
-  "solar.js",
-  "solar-ui.js",
   "tide.js",
   "tide-ui.js",
   "fishing.js",
