@@ -285,10 +285,20 @@ function mapStripRainAt(grid, fr, fc, hourIndex) {
 
 function svgRainRects(view, centre, grid, palette) {
   if (!grid) return "";
-  const hourIndex = Math.min(
-    grid.startIdx + mapStripHourOffset,
-    grid.rainByHour[0][0].length - 1
-  );
+  const maxIndex = grid.rainByHour[0][0].length - 1;
+  // mapStripHourOffset is only ever fractional while Play is actually
+  // running (see scheduleHourPlayStep, app.js) — a genuine manual drag
+  // always lands on a whole number, same as before. hourLo/hourHi are
+  // the two REAL, actually-fetched hourly slices either side of that
+  // position; hourFrac blends between them the same way mapStripRainAt
+  // above already blends between grid cells spatially — one more
+  // dimension of the same idea, not a new technique. Skipped entirely
+  // at a whole hour (hourFrac === 0) so the ordinary case pays no extra
+  // cost, only Play's in-between frames do.
+  const rawIndex = Math.min(grid.startIdx + mapStripHourOffset, maxIndex);
+  const hourLo = Math.floor(rawIndex);
+  const hourHi = Math.min(hourLo + 1, maxIndex);
+  const hourFrac = rawIndex - hourLo;
   const cell = 6;
   const parts = [];
   for (let px = 0; px < view.w; px += cell) {
@@ -297,7 +307,9 @@ function svgRainRects(view, centre, grid, palette) {
       const lat = centre.lat - (py - view.h / 2) / (view.pxPerKm * KM_PER_DEG_LAT);
       const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
       if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
-      const value = mapStripRainAt(grid, fr, fc, hourIndex);
+      const value = hourFrac === 0
+        ? mapStripRainAt(grid, fr, fc, hourLo)
+        : mapStripRainAt(grid, fr, fc, hourLo) + (mapStripRainAt(grid, fr, fc, hourHi) - mapStripRainAt(grid, fr, fc, hourLo)) * hourFrac;
       const band = rainBandIndex(value);
       if (band < 0) continue;
       parts.push(`<rect x="${px}" y="${py}" width="${cell}" height="${cell}" fill="${palette.ramp[band]}" fill-opacity="0.85"/>`);

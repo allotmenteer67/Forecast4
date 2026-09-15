@@ -5824,10 +5824,23 @@ function stopHourPlay() {
 // draw, so the failure mode this avoids is unlikely to bite here in
 // practice — but the fix costs nothing to apply up front, and it's one
 // less thing to have to debug twice.
+//
+// Steps by 0.5 rather than a whole hour, at half the previous delay —
+// same total time to play through the full range, twice as many
+// frames. The slider's own step="1" is untouched and still governs
+// manual dragging (a fractional .value assigned here doesn't trip any
+// constraint the browser actually enforces on a range input — same
+// technique map.js's own MAP_HOUR_STEP already relies on), so scrubbing
+// by hand still snaps to whole hours exactly as before; only Play's own
+// steps go fractional. The "input" handler below rounds state.hourIndex
+// from this raw value before anything numeric reads it, so the
+// headline's own numbers only ever change on a whole hour — this is
+// purely a smoother map strip and a smoother-moving thumb, not
+// genuinely finer weather data anywhere.
 function scheduleHourPlayStep() {
   hourPlayTimer = setTimeout(() => {
     const max = Number(hourSlider.max) || 0;
-    const next = Number(hourSlider.value) + 1;
+    const next = Number(hourSlider.value) + 0.5;
     if (next > max) {
       // Stops at the end rather than looping back to "Now" — this is a
       // look-ahead through the day, not a radar-style loop, so running
@@ -5843,7 +5856,7 @@ function scheduleHourPlayStep() {
     // handling, label formatting) is picked up automatically.
     hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
     scheduleHourPlayStep();
-  }, 700);
+  }, 350);
 }
 
 function startHourPlay() {
@@ -5873,7 +5886,16 @@ if (hourSlider) {
   updateSliderFill(hourSlider);
 
   hourSlider.addEventListener("input", () => {
-    state.hourIndex = Number(hourSlider.value);
+    // Rounded, not a direct read of hourSlider.value — Play now steps
+    // by 0.5 (see scheduleHourPlayStep) so the raw value can be
+    // fractional between whole-hour frames. Every hourly array this
+    // indexes into is still genuinely hourly data, so rounding here
+    // (rather than trying to interpolate every reader of
+    // state.hourIndex) is what keeps the headline's own numbers honest
+    // — the map strip reads hourSlider.value directly for its own
+    // smoother rain-colour interpolation instead (see mapstrip3.js),
+    // so nothing is lost by rounding it here for this card's purposes.
+    state.hourIndex = Math.round(Number(hourSlider.value));
     // Only a genuinely different hour switches to the hourly reading —
     // landing back on "Now" (0) behaves as if the slider was never
     // touched, so it matches what's shown on launch instead of jumping
