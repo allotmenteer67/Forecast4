@@ -5751,24 +5751,33 @@ if (rollback) {
 
 function updateHourLabel() {
   if (!hourLabel) return;
+  // TEMPORARY DIAGNOSTIC — remove once the half-hour Play issue is
+  // resolved. Shows the raw hourSlider.value (what Play is ACTUALLY
+  // setting) next to the normal label, so it's visible on-device
+  // without needing a console. If this never shows a ".5" while
+  // playing, the bug is upstream of everything mapstrip3.js does — the
+  // fractional value itself isn't surviving being set. If it DOES show
+  // ".5" but the map strip still looks hourly, the bug is downstream
+  // instead, inside mapstrip3.js's own reading of it.
+  const rawDebug = hourSlider ? ` [raw ${hourSlider.value}]` : "";
   if (state.hourIndex === 0) {
     // At rest, this cell isn't showing one instant anymore — it's
     // showing the whole Today range (see liveTodayValueFor). "+24h" /
     // "+48h" describes that span itself, matching whichever the
     // Settings hour-range choice is; dragging away from here switches to
     // an actual clock time for the specific hour landed on, unchanged.
-    hourLabel.textContent = `+${loadHourRange()}h`;
+    hourLabel.textContent = `+${loadHourRange()}h${rawDebug}`;
     return;
   }
   const iso = state.hourly.times[state.hourIndex];
   if (!iso) {
-    hourLabel.textContent = `+${state.hourIndex}h`;
+    hourLabel.textContent = `+${state.hourIndex}h${rawDebug}`;
     return;
   }
   const d = new Date(iso);
   const crossesDay = isoDate(d) !== isoDate(new Date());
   const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  hourLabel.textContent = crossesDay ? `${time}, ${formatDateShort(d)}` : time;
+  hourLabel.textContent = (crossesDay ? `${time}, ${formatDateShort(d)}` : time) + rawDebug;
 }
 
 // No timer-based revert — a dragged position stays put indefinitely so
