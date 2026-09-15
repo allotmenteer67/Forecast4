@@ -5751,33 +5751,24 @@ if (rollback) {
 
 function updateHourLabel() {
   if (!hourLabel) return;
-  // TEMPORARY DIAGNOSTIC — remove once the half-hour Play issue is
-  // resolved. Shows the raw hourSlider.value (what Play is ACTUALLY
-  // setting) next to the normal label, so it's visible on-device
-  // without needing a console. If this never shows a ".5" while
-  // playing, the bug is upstream of everything mapstrip3.js does — the
-  // fractional value itself isn't surviving being set. If it DOES show
-  // ".5" but the map strip still looks hourly, the bug is downstream
-  // instead, inside mapstrip3.js's own reading of it.
-  const rawDebug = hourSlider ? ` [raw ${hourSlider.value}]` : "";
   if (state.hourIndex === 0) {
     // At rest, this cell isn't showing one instant anymore — it's
     // showing the whole Today range (see liveTodayValueFor). "+24h" /
     // "+48h" describes that span itself, matching whichever the
     // Settings hour-range choice is; dragging away from here switches to
     // an actual clock time for the specific hour landed on, unchanged.
-    hourLabel.textContent = `+${loadHourRange()}h${rawDebug}`;
+    hourLabel.textContent = `+${loadHourRange()}h`;
     return;
   }
   const iso = state.hourly.times[state.hourIndex];
   if (!iso) {
-    hourLabel.textContent = `+${state.hourIndex}h${rawDebug}`;
+    hourLabel.textContent = `+${state.hourIndex}h`;
     return;
   }
   const d = new Date(iso);
   const crossesDay = isoDate(d) !== isoDate(new Date());
   const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  hourLabel.textContent = (crossesDay ? `${time}, ${formatDateShort(d)}` : time) + rawDebug;
+  hourLabel.textContent = crossesDay ? `${time}, ${formatDateShort(d)}` : time;
 }
 
 // No timer-based revert — a dragged position stays put indefinitely so
@@ -5806,11 +5797,35 @@ function resetHourly() {
 let hourPlayTimer = null;
 const hourPlayButton = document.getElementById("hourPlayButton");
 
+// Holds Play's own smooth position (0, 0.5, 1, 1.5, ...) independently
+// of hourSlider.value. Confirmed on a real device that assigning a
+// fractional value to hourSlider.value directly does NOT reliably hold
+// — the map's own scrub-time pill and debug readout only ever showed
+// whole numbers back, and the 48h range specifically overran to double
+// its real max (96) rather than stopping at 48, an asymmetry neither
+// spec reading nor reasoning from here fully explains. Rather than
+// chase exactly why a range input's own value resists holding a
+// fractional intermediate, this stops depending on it doing that at
+// all: hourSlider.value now only ever gets set to a genuine whole
+// number (Math.round of this), so it behaves completely normally for
+// every purpose that already reads it (state.hourIndex, native
+// dragging, keyboard steps). The true fractional position is handed to
+// anything that wants smoother motion (currently just the map strip)
+// through a dedicated event instead of through the slider element at
+// all — see the CustomEvent dispatch below and mapstrip3.js's own
+// listener for it.
+let hourPlayRaw = 0;
+
 function stopHourPlay() {
   if (hourPlayTimer) {
     clearTimeout(hourPlayTimer);
     hourPlayTimer = null;
   }
+  // Resyncs to wherever the slider actually is (a whole number, always)
+  // rather than leaving a stale fractional position behind — if Play is
+  // started again later, possibly after a manual drag moved things
+  // on, it should resume smoothly from THAT point, not silently jump.
+  if (hourSlider) hourPlayRaw = Number(hourSlider.value) || 0;
   if (hourPlayButton) {
     hourPlayButton.setAttribute("aria-label", "Play");
     // .hidden rather than a class or plain style.display would be the
@@ -5834,22 +5849,20 @@ function stopHourPlay() {
 // practice — but the fix costs nothing to apply up front, and it's one
 // less thing to have to debug twice.
 //
-// Steps by 0.5 rather than a whole hour, at half the previous delay —
-// same total time to play through the full range, twice as many
-// frames. The slider's own step="1" is untouched and still governs
-// manual dragging (a fractional .value assigned here doesn't trip any
-// constraint the browser actually enforces on a range input — same
-// technique map.js's own MAP_HOUR_STEP already relies on), so scrubbing
-// by hand still snaps to whole hours exactly as before; only Play's own
-// steps go fractional. The "input" handler below rounds state.hourIndex
-// from this raw value before anything numeric reads it, so the
-// headline's own numbers only ever change on a whole hour — this is
-// purely a smoother map strip and a smoother-moving thumb, not
-// genuinely finer weather data anywhere.
+// Advances hourPlayRaw by 0.5 at half the previous delay — same total
+// time to play through the full range, twice as many frames.
+// hourSlider.value itself only ever receives Math.round(hourPlayRaw) —
+// always a genuine whole number — so the ordinary "input" handler below
+// (and everything downstream of state.hourIndex) needs no change at
+// all and behaves exactly as it always has. The map strip gets the true
+// fractional position via a separate CustomEvent instead, dispatched
+// only when hourPlayRaw actually lands on a genuine half-hour, so a
+// drag-triggered stop mid-step never leaves a stray smoothed frame
+// on screen.
 function scheduleHourPlayStep() {
   hourPlayTimer = setTimeout(() => {
     const max = Number(hourSlider.max) || 0;
-    const next = Number(hourSlider.value) + 0.5;
+    const next = hourPlayRaw + 0.5;
     if (next > max) {
       // Stops at the end rather than looping back to "Now" — this is a
       // look-ahead through the day, not a radar-style loop, so running
@@ -5858,18 +5871,31 @@ function scheduleHourPlayStep() {
       stopHourPlay();
       return;
     }
-    hourSlider.value = next;
-    // Dispatched rather than calling the "input" handler above
-    // directly, so Play stays a second caller of that existing logic
-    // rather than a fork of it — anything that changes there (unit
-    // handling, label formatting) is picked up automatically.
-    hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    hourPlayRaw = next;
+    const rounded = Math.round(hourPlayRaw);
+    if (Number(hourSlider.value) !== rounded) {
+      hourSlider.value = rounded;
+      // Dispatched rather than calling the "input" handler above
+      // directly, so Play stays a second caller of that existing logic
+      // rather than a fork of it — anything that changes there (unit
+      // handling, label formatting) is picked up automatically. Only
+      // fired on a tick that actually lands on a new whole hour, not
+      // every half-hour tick — the headline itself has nothing finer
+      // than hourly data to show, so re-running its render on every
+      // half-hour tick would just repeat the same numbers for no
+      // reason.
+      hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    // The map strip's own smoother reading — fired every tick,
+    // including the half-hour ones the block above deliberately skips.
+    hourSlider.dispatchEvent(new CustomEvent("cloude:hour-play-raw", { detail: { raw: hourPlayRaw }, bubbles: true }));
     scheduleHourPlayStep();
   }, 350);
 }
 
 function startHourPlay() {
   if (hourPlayTimer || !hourSlider) return;
+  hourPlayRaw = Number(hourSlider.value) || 0;
   scheduleHourPlayStep();
   if (hourPlayButton) {
     hourPlayButton.setAttribute("aria-label", "Pause");

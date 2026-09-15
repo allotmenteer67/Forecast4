@@ -691,6 +691,16 @@ if (mapStripHourSlider) {
     mapStripHourOffset = Number(mapStripHourSlider.value) || 0;
     if (mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   });
+  // Play's own smoother position (app.js) — genuinely fractional,
+  // dispatched separately from "input" above rather than relying on
+  // hourSlider.value itself ever holding a fractional number, which
+  // testing on a real device showed it doesn't reliably do. A manual
+  // drag never fires this event at all, only "input" above, so
+  // dragging is completely unaffected by any of this.
+  mapStripHourSlider.addEventListener("cloude:hour-play-raw", e => {
+    mapStripHourOffset = e.detail.raw;
+    if (mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+  });
 }
 
 let mapStripResizeObserver = null;
