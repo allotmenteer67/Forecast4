@@ -3283,7 +3283,7 @@ function median(values) {
 // started eating into the same width — see the label-building code
 // below for the full reasoning. CONFIG.conditions[name].name (the full
 // "Temperature"/"Pressure") is untouched and still used everywhere else.
-const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Pres" };
+const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Press" };
 
 const HEADLINE_CELL_ICONS = {
   rain: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
@@ -4054,6 +4054,23 @@ function renderHeadline() {
   const night = showHourly && !isDaytime(hourDate);
 
   activeHeadlineConditions().forEach(conditionName => {
+    // Wraps this whole per-condition body — same principle already
+    // applied to a per-source failure elsewhere in this file ("a source
+    // that fails here just sits out this run"), generalised to every
+    // condition rather than just tide/fishing's own explicit guard just
+    // below. Without this, an uncaught throw partway through ONE
+    // condition's cell (a genuine bug, a null the code didn't expect)
+    // doesn't just lose that one cell — forEach has no per-iteration
+    // isolation of its own, so it silently stops the ENTIRE loop right
+    // there, and every condition after it in HEADLINE_OPTIONAL_CONDITIONS'
+    // fixed order (pressure, sunshine, cloud, soilTemperature, dewPoint)
+    // never renders at all. Reported as: enabling Cloud alone made Soil
+    // Temp and Dew Point vanish too, leaving only the 3 core cells plus
+    // Pressure (the ones already built before Cloud's turn) — exactly
+    // what a bug in Cloud's own rendering, with no isolation, would do
+    // to whatever's queued after it.
+    try {
+
     // Tide and Fishing don't go through this generic per-forecaster cell
     // loop at all — each has its own data source, own full-width card,
     // and its own render path (renderTideRow/renderFishingRow, called
@@ -4101,11 +4118,29 @@ function renderHeadline() {
     // other cell's 2, breaking the grid's own row rhythm. Every other
     // condition's name was already short enough not to need this.
     const headlineName = HEADLINE_LABEL_NAME[conditionName] || CONFIG.conditions[conditionName].name;
-    label.textContent = conditionName === "cloud"
-      ? "Cloud"
-      : showingUVPercent
-      ? `${headlineName} %`
-      : `${headlineName} ${unitLabel(conditionName)}`;
+    if (conditionName === "cloud") {
+      label.textContent = "Cloud";
+    } else if (showingUVPercent) {
+      label.textContent = `${headlineName} %`;
+    } else if (conditionName === "pressure") {
+      // hPa specifically kept mixed-case (a lowercase h, capital P) —
+      // .headline-label otherwise uppercases everything via CSS
+      // (text-transform), which is exactly what was turning this into
+      // "HPA". unitLabel("pressure") already returns the correct "hPa"
+      // string; text-transform: none on this one span is what actually
+      // lets it render as typed rather than the parent's uppercase
+      // silently overriding it. Every other condition's unit (mm, mph,
+      // °C) reads fine uppercased, so this exemption stays scoped to
+      // just this one span rather than turning off uppercase for the
+      // whole label.
+      label.append(`${headlineName} `);
+      const unitSpan = document.createElement("span");
+      unitSpan.className = "headline-label-unit-cased";
+      unitSpan.textContent = unitLabel("pressure");
+      label.appendChild(unitSpan);
+    } else {
+      label.textContent = `${headlineName} ${unitLabel(conditionName)}`;
+    }
 
     if (conditionName === "sunshine") {
       // Sunshine itself has no hourly concept — a daily total doesn't
@@ -4291,6 +4326,18 @@ function renderHeadline() {
     }
 
     headlineGrid.appendChild(cell);
+
+    } catch (err) {
+      // This one condition is skipped — nothing rendered for it this
+      // pass — but every OTHER condition still gets its normal turn,
+      // which is the entire point of this wrapper. No on-screen error
+      // (a missing headline cell isn't worth interrupting the page
+      // over), but still surfaced somewhere real rather than silently
+      // swallowed entirely — if the error-catcher pattern from map.html
+      // ever gets added to the front page too, this is exactly the kind
+      // of throw it would want to catch.
+      console.error(`Headline cell for "${conditionName}" failed to render:`, err);
+    }
   });
 
   renderUnderperformBanner();
