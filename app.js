@@ -4117,7 +4117,7 @@ function renderHeadline() {
     // line, pushing those two cells to 3 lines tall against every
     // other cell's 2, breaking the grid's own row rhythm. Every other
     // condition's name was already short enough not to need this.
-    const headlineName = HEADLINE_LABEL_NAME[conditionName] || CONFIG.conditions[conditionName].name;
+    const headlineName = HEADLINE_LABEL_NAME[conditionName] || CONFIG.conditions[conditionName]?.name;
     if (conditionName === "cloud") {
       label.textContent = "Cloud";
     } else if (showingUVPercent) {
