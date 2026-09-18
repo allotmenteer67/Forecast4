@@ -1,0 +1,43 @@
+name: Build forecast feed
+
+# Deliberately a SEPARATE job from precache-weather.yml and
+# backfill-weather.yml, not an extra step tacked onto either of them —
+# this is new, less-tested code; keeping it in its own workflow means a
+# bug or a bad exit here can never block those two well-established
+# jobs from committing their own output. It reads whatever
+# data/precache-weather.json and data/backfill/TA7.json are already
+# checked out — it does not need to run in lockstep with the run that
+# wrote them, just reasonably soon after.
+#
+# Same cadence as precache-weather.yml (every 20 minutes) so the feed
+# never lags far behind what's actually precached — My Plot's own
+# staleness check (mirroring the app's own ~30 minute threshold) is
+# sized against that same drift-prone GitHub scheduling.
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-feed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build forecast.json
+        run: node scripts/build-forecast-feed.mjs
+
+      - name: Commit updated forecast feed
+        run: |
+          git config user.name "forecast-compare-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/forecast.json
+          git diff --staged --quiet || git commit -m "Update forecast feed"
+          git push
