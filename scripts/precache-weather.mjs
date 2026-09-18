@@ -145,7 +145,13 @@ function buildSourceUrl(sourceId, model, lat, lon) {
   const params = new URLSearchParams({
     latitude: lat,
     longitude: lon,
-    hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m" + (sourceId === "metoffice" ? ",uv_index,cloud_cover_low,cloud_cover_mid,cloud_cover_high" : ""),
+    // cloud_cover_low/mid/high now requested for EVERY source, not just
+    // metoffice — needed so build-forecast-feed.mjs can FFV-correct and
+    // blend cloud across sources the same way it already does for
+    // rain/wind/temperature, rather than relying on metoffice alone.
+    // uv_index stays metoffice-only: nothing downstream blends UV across
+    // sources, so there's no reason to pay for it on every request.
+    hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m,cloud_cover_low,cloud_cover_mid,cloud_cover_high" + (sourceId === "metoffice" ? ",uv_index" : ""),
     models: model,
     wind_speed_unit: "mph",
     forecast_days: 3,
@@ -204,7 +210,15 @@ async function fetchWeatherLocation(location, topForecasters) {
       windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined),
       pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined),
       soilTemperature: data.hourly.soil_temperature_0cm.slice(from, from + sharedTimes.length || undefined),
-      dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined)
+      dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined),
+      // Per-source cloud, new — the app's own hourly view still reads
+      // the top-level cloudCoverLow/Mid/High below (metoffice only,
+      // unchanged), but build-forecast-feed.mjs needs each source's own
+      // reading to FFV-correct and blend cloud the same way as every
+      // other real condition.
+      cloudLow: data.hourly.cloud_cover_low.slice(from, from + sharedTimes.length || undefined),
+      cloudMid: data.hourly.cloud_cover_mid.slice(from, from + sharedTimes.length || undefined),
+      cloudHigh: data.hourly.cloud_cover_high.slice(from, from + sharedTimes.length || undefined)
     };
   });
 
