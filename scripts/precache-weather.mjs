@@ -202,23 +202,44 @@ async function fetchWeatherLocation(location, topForecasters) {
 
   const sources = {};
   Object.entries(perSource).forEach(([sourceId, data]) => {
+    // Defensive: a specific model can genuinely lack a field on Open-
+    // Meteo's plain /v1/forecast endpoint even when the SAME model
+    // supports it on the previous-runs endpoint (collect-weather.mjs's
+    // own working cloud data doesn't guarantee this endpoint has it
+    // too) — confirmed as the real cause of a silent bug where a
+    // missing field's .slice() threw here, uncaught, and made the
+    // WHOLE location fall back to stale cached data every run with no
+    // visible error anywhere. Logging which field is missing for which
+    // source, and substituting an all-null array instead of crashing,
+    // means one gap degrades gracefully (that one field stays null for
+    // that one source — blendHour in build-forecast-feed.mjs already
+    // treats null as "no data from this source" and moves on) rather
+    // than silently freezing the entire location's data indefinitely.
+    const field = (key, label) => {
+      const arr = data.hourly[key];
+      if (!arr) {
+        console.error(`${location.id}/${sourceId}: missing "${key}" (${label}) from Open-Meteo — substituting nulls for this field only.`);
+        return new Array(sharedTimes.length).fill(null);
+      }
+      return arr.slice(from, from + sharedTimes.length || undefined);
+    };
     sources[sourceId] = {
-      temperature: data.hourly.temperature_2m.slice(from, from + sharedTimes.length || undefined),
-      precipitation: data.hourly.precipitation.slice(from, from + sharedTimes.length || undefined),
-      windSpeed: data.hourly.wind_speed_10m.slice(from, from + sharedTimes.length || undefined),
-      windGust: data.hourly.wind_gusts_10m.slice(from, from + sharedTimes.length || undefined),
-      windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined),
-      pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined),
-      soilTemperature: data.hourly.soil_temperature_0cm.slice(from, from + sharedTimes.length || undefined),
-      dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined),
+      temperature: field("temperature_2m", "temperature"),
+      precipitation: field("precipitation", "rain"),
+      windSpeed: field("wind_speed_10m", "wind speed"),
+      windGust: field("wind_gusts_10m", "wind gust"),
+      windDirection: field("wind_direction_10m", "wind direction"),
+      pressure: field("pressure_msl", "pressure"),
+      soilTemperature: field("soil_temperature_0cm", "soil temperature"),
+      dewPoint: field("dewpoint_2m", "dew point"),
       // Per-source cloud, new — the app's own hourly view still reads
       // the top-level cloudCoverLow/Mid/High below (metoffice only,
       // unchanged), but build-forecast-feed.mjs needs each source's own
       // reading to FFV-correct and blend cloud the same way as every
       // other real condition.
-      cloudLow: data.hourly.cloud_cover_low.slice(from, from + sharedTimes.length || undefined),
-      cloudMid: data.hourly.cloud_cover_mid.slice(from, from + sharedTimes.length || undefined),
-      cloudHigh: data.hourly.cloud_cover_high.slice(from, from + sharedTimes.length || undefined)
+      cloudLow: field("cloud_cover_low", "cloud low"),
+      cloudMid: field("cloud_cover_mid", "cloud mid"),
+      cloudHigh: field("cloud_cover_high", "cloud high")
     };
   });
 
