@@ -338,7 +338,7 @@
 // map going blank with no error shown anywhere. Re-add once solar's
 // files are confirmed to exist; everything not in this list still
 // works fine via ordinary lazy caching in the meantime.
-const SHELL_CACHE_NAME = "cloude-shell-v59";
+const SHELL_CACHE_NAME = "cloude-shell-v60";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
