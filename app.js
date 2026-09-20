@@ -41,6 +41,13 @@ const CONFIG = {
     uv: { name: "UV", unit: "index" },
     soilTemperature: { name: "Soil Temp", unit: "°C" },
     dewPoint: { name: "Dew Point", unit: "°C" },
+    // Open-Meteo provides this natively (apparent_temperature) for every
+    // real source and the actual-weather archive alike — no separate
+    // fetch or calculation of our own needed, same free-ride soilTemp/
+    // dewPoint already get. °C-scale like Temperature, so it follows the
+    // exact same unit/correction treatment those two already set up —
+    // see conditionUnit(), convertForDisplay() and isRatioCondition().
+    feelsLike: { name: "Feels Like", unit: "°C" },
     tide: { name: "Tide", unit: "m" }
   }
 };
@@ -337,7 +344,8 @@ const CONDITION_UNIT_LABELS = {
   sunshine: { metric: "hrs", imperial: "hrs" },
   uv: { metric: "index", imperial: "index" },
   soilTemperature: { metric: "°C", imperial: "°F" },
-  dewPoint: { metric: "°C", imperial: "°F" }
+  dewPoint: { metric: "°C", imperial: "°F" },
+  feelsLike: { metric: "°C", imperial: "°F" }
 };
 
 function loadConditionUnits() {
@@ -366,11 +374,11 @@ function saveConditionUnit(conditionName, system) {
 // conditions without a toggle (Cloud's bands, Sunshine, UV) always read
 // as metric, which is harmless since their labels are identical either way.
 function conditionUnit(conditionName) {
-  // Soil Temp and Dew Point are both °C-scale like Temperature and don't
-  // get their own choice in Settings — asking twice for the same
-  // metric/imperial decision would just be clutter, so they follow
-  // whatever Temperature is already set to.
-  const key = (conditionName === "soilTemperature" || conditionName === "dewPoint") ? "temperature" : conditionName;
+  // Soil Temp, Dew Point and Feels Like are all °C-scale like Temperature
+  // and don't get their own choice in Settings — asking three times over
+  // for the same metric/imperial decision would just be clutter, so they
+  // follow whatever Temperature is already set to.
+  const key = (conditionName === "soilTemperature" || conditionName === "dewPoint" || conditionName === "feelsLike") ? "temperature" : conditionName;
   return state.conditionUnits[key] ?? "metric";
 }
 
@@ -418,7 +426,7 @@ function convertForDisplay(value, conditionName, isDelta = false) {
   const system = conditionUnit(conditionName);
   if (system === "imperial") {
     if (conditionName === "rain") return value / 25.4; // mm -> in
-    if (conditionName === "temperature" || conditionName === "soilTemperature" || conditionName === "dewPoint") {
+    if (conditionName === "temperature" || conditionName === "soilTemperature" || conditionName === "dewPoint" || conditionName === "feelsLike") {
       return isDelta ? value * 9 / 5 : value * 9 / 5 + 32; // °C -> °F
     }
     if (conditionName === "pressure") return value / 33.8639; // hPa -> inHg
@@ -426,7 +434,7 @@ function convertForDisplay(value, conditionName, isDelta = false) {
   }
   // metric
   if (conditionName === "wind") return value * 1.60934; // mph -> km/h
-  return value; // rain (mm), temperature/soilTemperature/dewPoint (°C) and pressure (hPa) are already metric natively
+  return value; // rain (mm), temperature/soilTemperature/dewPoint/feelsLike (°C) and pressure (hPa) are already metric natively
 }
 
 // ---- Actual weather (Open-Meteo, no API key) ----
@@ -546,7 +554,7 @@ const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live 
 // time (see the headline cell's own "cloud" branch and
 // cloudHeadlineStillCollecting) — it deliberately has no entry in this
 // Set, since it has no real data of its own to be eligible for.
-const REAL_DATA_CONDITIONS = new Set(["rain", "cloudLow", "cloudMid", "cloudHigh", "wind", "temperature", "pressure", "soilTemperature", "dewPoint", "sunshine"]);
+const REAL_DATA_CONDITIONS = new Set(["rain", "cloudLow", "cloudMid", "cloudHigh", "wind", "temperature", "pressure", "soilTemperature", "dewPoint", "feelsLike", "sunshine"]);
 
 // Every source with genuine data behind it. Adding another real source
 // later is just another entry here — everything downstream (fetching,
@@ -666,7 +674,7 @@ function loadSelectedForecasters() {
 function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
-    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloudLow: [], cloudMid: [], cloudHigh: [], pressure: [], soilTemp: [], dewPoint: [], sunshine: [] };
+    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloudLow: [], cloudMid: [], cloudHigh: [], pressure: [], soilTemp: [], dewPoint: [], feelsLike: [], sunshine: [] };
   }
   return byLeadDay;
 }
@@ -760,6 +768,7 @@ const state = {
     pressure_mean: [],
     soilTemp_mean: [],
     dewPoint_mean: [],
+    feelsLike_mean: [],
     // Raw hourly pressure (not day-aggregated) covering the past window
     // through "now" — kept only to compute the pressure trend arrow
     // (see pressureTrend()), which needs a real few-hours-ago comparison
@@ -791,6 +800,7 @@ const state = {
     pressure: [],
     soilTemperature: [],
     dewPoint: [],
+    feelsLike: [],
     uvIndex: [],
     cloudCoverLow: [],
     cloudCoverMid: [],
@@ -923,6 +933,15 @@ function demoValue(day, source, conditionName) {
       // Dew point is always at or below air temperature — this demo
       // formula mirrors Temperature's shape with a fixed gap under it.
       value = 17.5 - day * 0.3 + sourceOffset * 0.4 - 4;
+      break;
+    case "feelsLike":
+      // Real feels-like accounts for wind chill and humidity; this demo
+      // stand-in just mirrors Temperature's shape with a small fixed
+      // offset below it, same simplified approach as Dew Point's own
+      // case just above — not modelling wind/humidity, just giving a
+      // plausibly-shaped placeholder until FFV correction (and, for
+      // real sources, Open-Meteo's own apparent_temperature) takes over.
+      value = 17.5 - day * 0.3 + sourceOffset * 0.4 - 1;
       break;
     case "sunshine":
       value = Math.max(0, 5.2 - day * 0.3 - sourceOffset * 0.2);
@@ -1504,7 +1523,7 @@ async function fetchActualWeather(lat, lon) {
         "sunshine_duration",
         "uv_index_max"
       ].join(","),
-      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m",
+      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m,apparent_temperature",
       past_days: MAX_ROLLBACK,
       forecast_days: 1,
       wind_speed_unit: "mph",
@@ -1560,6 +1579,12 @@ async function fetchActualWeather(lat, lon) {
       dayCount,
       "mean"
     );
+    state.actual.feelsLike_mean = aggregateHourlyByDay(
+      data.hourly.time,
+      data.hourly.apparent_temperature,
+      dayCount,
+      "mean"
+    );
     state.actual.status = "ready";
   } catch (err) {
     state.actual.status = "error";
@@ -1596,6 +1621,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         `pressure_msl_previous_day${d}`,
         `soil_temperature_0cm_previous_day${d}`,
         `dewpoint_2m_previous_day${d}`,
+        `apparent_temperature_previous_day${d}`,
         `direct_normal_irradiance_previous_day${d}`
       );
     }
@@ -1637,6 +1663,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
         soilTemp: aggregateHourlyByDay(hourlyTimes, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
         dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
+        feelsLike: aggregateHourlyByDay(hourlyTimes, data.hourly[`apparent_temperature_previous_day${d}`], dayCount, "mean"),
         sunshine: sunshineHoursByDay(hourlyTimes, data.hourly[`direct_normal_irradiance_previous_day${d}`], dayCount)
       };
     }
@@ -1810,6 +1837,15 @@ function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
   state.hourly.pressure = blend("pressure", "pressure");
   state.hourly.soilTemperature = blend("soilTemperature", "soilTemperature");
   state.hourly.dewPoint = blend("dewPoint", "dewPoint");
+  // Precached data (tryPrecachedHourlyForecast) doesn't currently carry
+  // apparent_temperature — perSource[id].feelsLike will simply be
+  // undefined for every source on a precache hit, and blend() already
+  // treats that as "no value from this source" the same as any other
+  // missing field, so this degrades to a null hourly reading rather than
+  // throwing. Genuinely fixing that means adding apparent_temperature to
+  // scripts/precache-weather.mjs's own Open-Meteo request — a repo/
+  // Action-side change, separate from this file.
+  state.hourly.feelsLike = blend("feelsLike", "feelsLike");
   // Direction can't be medianed the way speed can (it's angular, not
   // linear) — first real source with a reading for that hour, same
   // convention as anyRealWindDirection() uses for the daily table.
@@ -1924,7 +1960,7 @@ async function fetchHourlyForecast(lat, lon, force = false) {
       const params = new URLSearchParams({
         latitude: lat,
         longitude: lon,
-        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m" + (id === "metoffice" ? ",uv_index,cloud_cover_low,cloud_cover_mid,cloud_cover_high" : ""),
+        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m,apparent_temperature" + (id === "metoffice" ? ",uv_index,cloud_cover_low,cloud_cover_mid,cloud_cover_high" : ""),
         models: model,
         wind_speed_unit: "mph",
         forecast_days: 3,
@@ -1962,7 +1998,8 @@ async function fetchHourlyForecast(lat, lon, force = false) {
         windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined),
         pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined),
         soilTemperature: data.hourly.soil_temperature_0cm.slice(from, from + sharedTimes.length || undefined),
-        dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined)
+        dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined),
+        feelsLike: data.hourly.apparent_temperature.slice(from, from + sharedTimes.length || undefined)
       };
     });
 
@@ -2546,6 +2583,8 @@ function actualValueFor(conditionName, rollbackDays) {
       return state.actual.soilTemp_mean[idx];
     case "dewPoint":
       return state.actual.dewPoint_mean[idx];
+    case "feelsLike":
+      return state.actual.feelsLike_mean[idx];
     default:
       return null;
   }
@@ -2582,6 +2621,7 @@ function realSourceValueFor(sourceId, conditionName, day, rollbackDays) {
     case "pressure": return byDay.pressure[idx] ?? null;
     case "soilTemperature": return byDay.soilTemp[idx] ?? null;
     case "dewPoint": return byDay.dewPoint[idx] ?? null;
+    case "feelsLike": return byDay.feelsLike[idx] ?? null;
     case "sunshine": return byDay.sunshine[idx] ?? null;
     default: return null;
   }
@@ -2749,11 +2789,11 @@ function ensureAccuracyEmaSeeded(entry) {
 // separate running average alongside the ratio one, rather than
 // reinterpreting.
 function isRatioCondition(conditionName) {
-  // Temperature, Pressure, Soil Temp, and Dew Point all sit on scales
-  // without a practically-meaningful zero for this purpose — same
-  // reasoning as Temperature/Pressure above, applied consistently to the
-  // two newer °C-scale conditions.
-  return !["temperature", "pressure", "soilTemperature", "dewPoint"].includes(conditionName);
+  // Temperature, Pressure, Soil Temp, Dew Point, and Feels Like all sit
+  // on scales without a practically-meaningful zero for this purpose —
+  // same reasoning as Temperature/Pressure above, applied consistently
+  // to every °C-scale condition since.
+  return !["temperature", "pressure", "soilTemperature", "dewPoint", "feelsLike"].includes(conditionName);
 }
 
 function applyCorrection(mean, ffv, conditionName) {
@@ -3196,7 +3236,7 @@ function ffvSampleTotal(conditionName) {
 // Approximate 0-100 closeness scale per condition — the error (in real
 // units) at which the score bottoms out at 0. Deliberately simple, not a
 // formal statistic; the average-error-in-units figure is the primary one.
-const ACCURACY_SCALE = { rain: 5, cloudLow: 60, cloudMid: 60, cloudHigh: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3, soilTemperature: 4, dewPoint: 6 };
+const ACCURACY_SCALE = { rain: 5, cloudLow: 60, cloudMid: 60, cloudHigh: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3, soilTemperature: 4, dewPoint: 6, feelsLike: 8 };
 
 function accuracyPercent(avgError, conditionName) {
   if (avgError === null) return null;
@@ -3283,7 +3323,7 @@ function median(values) {
 // started eating into the same width — see the label-building code
 // below for the full reasoning. CONFIG.conditions[name].name (the full
 // "Temperature"/"Pressure") is untouched and still used everywhere else.
-const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Press" };
+const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Press", feelsLike: "Feels" };
 
 const HEADLINE_CELL_ICONS = {
   rain: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
@@ -3293,17 +3333,23 @@ const HEADLINE_CELL_ICONS = {
   sunshine: '<svg viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="3" stroke="currentColor" stroke-width="1.4"/><line x1="9" y1="1.5" x2="9" y2="3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="9" y1="14.5" x2="9" y2="16.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="1.5" y1="9" x2="3.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="14.5" y1="9" x2="16.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="3.6" y1="3.6" x2="5" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="13" y1="13" x2="14.4" y2="14.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="14.4" y1="3.6" x2="13" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="5" y1="13" x2="3.6" y2="14.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
   cloud: '<svg viewBox="0 0 18 18" fill="none"><path d="M5.5 13 a3 3 0 0 1 0 -6 a4 4 0 0 1 7.6 -1 a3.2 3.2 0 0 1 -0.6 7 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
   soilTemperature: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 16 V9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M9 9 C9 5 12 4 14 4 C14 7 12 9 9 9 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 11 C9 8.5 7 7.5 5 7.5 C5 10 7 11 9 11 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
-  dewPoint: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><line x1="5.5" y1="11" x2="12.5" y2="11" stroke="currentColor" stroke-width="1.2"/></svg>'
+  dewPoint: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><line x1="5.5" y1="11" x2="12.5" y2="11" stroke="currentColor" stroke-width="1.2"/></svg>',
+  // Temperature's own thermometer bulb/stem, with two short curved lines
+  // either side suggesting air moving around it — the wind/humidity
+  // effect "feels like" is actually about, distinguishing it at a glance
+  // from plain Temperature's bare thermometer.
+  feelsLike: '<svg viewBox="0 0 18 18" fill="none"><line x1="9" y1="3" x2="9" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13" r="2.3" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 6 C4 6 4 8 2.5 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M15.5 6 C14 6 14 8 15.5 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>'
 };
 
 const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
-const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "tide", "fishing"];
+const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "feelsLike", "tide", "fishing"];
 const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
 const DEFAULT_HEADLINE_TOGGLES = {
   pressure: true,
   sunshine: true,
   soilTemperature: false,
   dewPoint: false,
+  feelsLike: false,
   tide: false,
   fishing: false
 };
@@ -3605,6 +3651,7 @@ function hourlyValueFor(conditionName) {
     case "pressure": return state.hourly.pressure[idx] ?? null;
     case "soilTemperature": return state.hourly.soilTemperature[idx] ?? null;
     case "dewPoint": return state.hourly.dewPoint[idx] ?? null;
+    case "feelsLike": return state.hourly.feelsLike[idx] ?? null;
     default: return null; // Sunshine has no hourly reading — see renderHeadline
   }
 }
@@ -3662,6 +3709,8 @@ function liveTodayValueFor(conditionName) {
       return state.hourly.soilTemperature[0] ?? null;
     case "dewPoint":
       return state.hourly.dewPoint[0] ?? null;
+    case "feelsLike":
+      return state.hourly.feelsLike[0] ?? null;
     default:
       return null;
   }
@@ -4961,6 +5010,16 @@ function openHourlySheet(conditionName) {
           formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "soilTemperature")}${unitLabel("soilTemperature")}` }),
           defaultReadout: { time: "Now", value: `${formatConverted(display[0], "soilTemperature")}${unitLabel("soilTemperature")}` }
         });
+      } else if (conditionName === "feelsLike") {
+        const raw = state.hourly.feelsLike.slice(0, count);
+        const display = raw.map(v => convertForDisplay(v, "feelsLike"));
+        const g = sheetRenderLine(hourTimes, display, "#c1440e", "feelsLike");
+        sheetBody.appendChild(g.wrap);
+        attachSheetScrubber({
+          ...g,
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "feelsLike")}${unitLabel("feelsLike")}` }),
+          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "feelsLike")}${unitLabel("feelsLike")}` }
+        });
       } else if (conditionName === "dewPoint") {
         const dewRaw = state.hourly.dewPoint.slice(0, count);
         const dewDisplay = dewRaw.map(v => convertForDisplay(v, "dewPoint"));
@@ -5569,6 +5628,7 @@ const BACKFILL_FIELD_FOR_CONDITION = {
   pressure: "pressure",
   soilTemperature: "soilTemp",
   dewPoint: "dewPoint",
+  feelsLike: "feelsLike",
   sunshine: "sunshine"
 };
 
@@ -5608,6 +5668,7 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       `pressure_msl_previous_day${d}`,
       `soil_temperature_0cm_previous_day${d}`,
       `dewpoint_2m_previous_day${d}`,
+      `apparent_temperature_previous_day${d}`,
       `direct_normal_irradiance_previous_day${d}`
     );
   }
@@ -5640,6 +5701,7 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       pressure: aggregateHourlyByDay(hourlyTime, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
       soilTemp: aggregateHourlyByDay(hourlyTime, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
       dewPoint: aggregateHourlyByDay(hourlyTime, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
+      feelsLike: aggregateHourlyByDay(hourlyTime, data.hourly[`apparent_temperature_previous_day${d}`], dayCount, "mean"),
       sunshine: sunshineHoursByDay(hourlyTime, data.hourly[`direct_normal_irradiance_previous_day${d}`], dayCount)
     };
   }
@@ -5699,7 +5761,7 @@ async function backfillRealSourceHistory() {
       latitude: state.lat,
       longitude: state.lon,
       daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max,sunshine_duration",
-      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m",
+      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m,apparent_temperature",
       start_date: isoDate(start),
       end_date: isoDate(end),
       wind_speed_unit: "mph",
@@ -5719,6 +5781,7 @@ async function backfillRealSourceHistory() {
       pressure: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.pressure_msl, dayCount, "mean"),
       soilTemp: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.soil_temperature_0cm, dayCount, "mean"),
       dewPoint: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.dewpoint_2m, dayCount, "mean"),
+      feelsLike: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.apparent_temperature, dayCount, "mean"),
       tempAvg: actualData.daily.temperature_2m_max.map((max, i) => {
         const min = actualData.daily.temperature_2m_min[i];
         return (max !== null && min !== null) ? (max + min) / 2 : null;
