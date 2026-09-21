@@ -17,19 +17,30 @@
 // covers that gap; a half-written forecast.json would be worse than none.
 //
 // ---- "Ours, with a fallback to metoffice" ----
-// For every hour and every one of rain/wind/temperature/cloud: take the
-// median of that hour's FFV-corrected reading across every source that
-// has data for it. Only if NO source has data for that hour (a genuine
-// gap, not just low confidence) does that hour fall back to metoffice's
-// own raw reading instead — metoffice is the one source always present
-// (see precache-weather.mjs's own reasoning). A field only ever comes
-// back null if metoffice itself has nothing for that hour either.
+// For every hour and every one of rain/wind/temperature/cloud/soil
+// temperature: take the median of that hour's FFV-corrected reading
+// across every source that has data for it. Only if NO source has data
+// for that hour (a genuine gap, not just low confidence) does that hour
+// fall back to metoffice's own raw reading instead — metoffice is the
+// one source always present (see precache-weather.mjs's own reasoning).
+// A field only ever comes back null if metoffice itself has nothing for
+// that hour either.
 //
 // ---- Cloud ----
 // Each band (cloudLow/cloudMid/cloudHigh) is corrected and blended
 // exactly like any other real condition, THEN combined into one
 // "effective cloud" figure via the same max(low, mid*0.7, high*0.4)
 // weighting app.js's own effectiveCloudCover uses — see ffv-core.mjs.
+//
+// ---- Soil temperature ----
+// Corrected and blended the same way as air temperature — soilTemperature
+// is already a real condition in app.js (REAL_DATA_CONDITIONS,
+// ACCURACY_SCALE, grouped with temperature for °C units) and already
+// fetched per-source in precache-weather.mjs, so this is the same
+// blendHour() call as every other field here, nothing bespoke. Reported
+// as a daily min/max, same shape as air temperature, rather than a
+// single figure — a gardener checking "is the ground still cold" cares
+// about the low as much as the average.
 //
 // ---- Frost ----
 // Ported from app.js's own frostRiskTonight(), restricted to the night
@@ -62,7 +73,7 @@ const NIGHT_END_HOUR = 7;
 
 // Conditions this feed corrects — a subset of app.js's REAL_DATA_
 // CONDITIONS, just the ones the feed actually uses.
-const CONDITIONS = ["rain", "wind", "temperature", "cloudLow", "cloudMid", "cloudHigh"];
+const CONDITIONS = ["rain", "wind", "temperature", "cloudLow", "cloudMid", "cloudHigh", "soilTemperature"];
 
 async function readJsonIfExists(url) {
   try {
@@ -134,7 +145,7 @@ async function main() {
   }
 
   const times = entry.times || [];
-  const hourly = { rain: [], wind: [], temperature: [], cloud: [] };
+  const hourly = { rain: [], wind: [], temperature: [], cloud: [], soilTemperature: [] };
   let anyCorrected = false;
 
   for (let i = 0; i < times.length; i++) {
@@ -144,8 +155,9 @@ async function main() {
     const cLow = blendHour(entry.sources, sourceIds, "cloudLow", "cloudLow", i, ffvStore);
     const cMid = blendHour(entry.sources, sourceIds, "cloudMid", "cloudMid", i, ffvStore);
     const cHigh = blendHour(entry.sources, sourceIds, "cloudHigh", "cloudHigh", i, ffvStore);
+    const soil = blendHour(entry.sources, sourceIds, "soilTemperature", "soilTemperature", i, ffvStore);
 
-    if (rain.corrected || wind.corrected || temp.corrected || cLow.corrected) anyCorrected = true;
+    if (rain.corrected || wind.corrected || temp.corrected || cLow.corrected || soil.corrected) anyCorrected = true;
 
     hourly.rain.push(rain.value);
     hourly.wind.push(wind.value);
@@ -153,13 +165,14 @@ async function main() {
     hourly.cloud.push(
       cLow.value === null ? null : effectiveCloudCover(cLow.value, cMid.value, cHigh.value)
     );
+    hourly.soilTemperature.push(soil.value);
   }
 
   // ---- Daily aggregates, one entry per local calendar date present ----
   const daily = {};
   times.forEach((t, i) => {
     const date = localDate(t);
-    daily[date] ??= { rain: 0, rainKnown: false, windMax: null, tempMin: null, tempMax: null };
+    daily[date] ??= { rain: 0, rainKnown: false, windMax: null, tempMin: null, tempMax: null, soilMin: null, soilMax: null };
     const d = daily[date];
     if (hourly.rain[i] !== null) {
       d.rain += hourly.rain[i];
@@ -170,13 +183,18 @@ async function main() {
       d.tempMin = d.tempMin === null ? hourly.temperature[i] : Math.min(d.tempMin, hourly.temperature[i]);
       d.tempMax = d.tempMax === null ? hourly.temperature[i] : Math.max(d.tempMax, hourly.temperature[i]);
     }
+    if (hourly.soilTemperature[i] !== null) {
+      d.soilMin = d.soilMin === null ? hourly.soilTemperature[i] : Math.min(d.soilMin, hourly.soilTemperature[i]);
+      d.soilMax = d.soilMax === null ? hourly.soilTemperature[i] : Math.max(d.soilMax, hourly.soilTemperature[i]);
+    }
   });
   Object.keys(daily).forEach(date => {
     const d = daily[date];
     daily[date] = {
       rain: d.rainKnown ? Math.round(d.rain * 10) / 10 : null,
       wind: d.windMax === null ? null : Math.round(d.windMax),
-      temperature: (d.tempMin === null || d.tempMax === null) ? null : { min: Math.round(d.tempMin * 10) / 10, max: Math.round(d.tempMax * 10) / 10 }
+      temperature: (d.tempMin === null || d.tempMax === null) ? null : { min: Math.round(d.tempMin * 10) / 10, max: Math.round(d.tempMax * 10) / 10 },
+      soilTemperature: (d.soilMin === null || d.soilMax === null) ? null : { min: Math.round(d.soilMin * 10) / 10, max: Math.round(d.soilMax * 10) / 10 }
     };
   });
 
