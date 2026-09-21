@@ -4,20 +4,27 @@ name: Precache weather
 # on how many locations are in data/precache-config.json. If you add or
 # remove a weather location, recompute the budget using the sizing
 # formula in that config's own _readme block and update the schedule
-# below by hand to match. Current setting (*/20 minutes) is sized for
-# the 3 weather locations / top-4-forecasters config discussed when this
-# was built — see data/precache-config.json for the actual current
+# below by hand to match. Current setting (every 20 minutes) is sized
+# for the 3 weather locations / top-4-forecasters config discussed when
+# this was built — see data/precache-config.json for the actual current
 # location count.
 #
-# "*/20 * * * *" is GitHub's own best-effort schedule, not a guarantee —
-# their docs state scheduled runs can be delayed during high platform
-# load, particularly at the top of each hour, sometimes by 15-45+
-# minutes. The app's own freshness check (a ~30 minute threshold on the
-# precached data's own dataAsOf timestamp) is sized with that drift in
-# mind — see app.js.
+# Deliberately NOT "*/20 * * * *" (i.e. not :00/:20/:40). GitHub's own
+# scheduling docs warn that jobs land less reliably at those round,
+# popular minutes specifically, because that's when the platform is
+# busiest with everyone else's scheduled jobs too — an unpopular offset
+# minute is their own recommended fix, not something specific to this
+# repo. ":07/:27/:47" keeps the same every-20-minutes cadence, just off
+# the busy top-of-slot.
+#
+# GitHub's schedule is still best-effort even off the busy slots, not a
+# guarantee — their docs state scheduled runs can still be delayed
+# under high platform load, sometimes by 15-45+ minutes. The app's own
+# freshness check (a ~30 minute threshold on the precached data's own
+# dataAsOf timestamp) is sized with that drift in mind — see app.js.
 on:
   schedule:
-    - cron: "*/20 * * * *"
+    - cron: "7,27,47 * * * *"
   # Lets you trigger a run by hand from the Actions tab — useful for
   # testing a config change immediately rather than waiting up to 20
   # minutes for the next scheduled run.

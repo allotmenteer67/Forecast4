@@ -9,13 +9,32 @@ name: Build forecast feed
 # checked out — it does not need to run in lockstep with the run that
 # wrote them, just reasonably soon after.
 #
-# Same cadence as precache-weather.yml (every 20 minutes) so the feed
-# never lags far behind what's actually precached — My Plot's own
-# staleness check (mirroring the app's own ~30 minute threshold) is
-# sized against that same drift-prone GitHub scheduling.
+# ---- Trigger ----
+# Runs automatically the moment "Precache weather" finishes, rather than
+# guessing on its own independent timer. The two workflows used to run
+# on separate 20-minute clocks with no relationship to each other, which
+# caused two real problems: they'd occasionally fire close enough
+# together to collide on the same push (see the retry loop below, kept
+# as a second line of defence), and — more importantly — this workflow
+# could run and find nothing new simply because its own timer happened
+# to land before precache's did, leaving the feed stuck on old figures
+# even though the workflow itself reported "success" every time.
+# workflow_run fixes both: this only ever runs right after precache has
+# genuinely finished, so it's always working from the freshest data
+# precache actually has.
+#
+# The schedule below is kept too, purely as a backup in case the
+# workflow_run trigger itself is ever missed — moved off the busy
+# :00/:20/:40 slots the same way precache-weather.yml's own schedule
+# was, and deliberately offset from precache's own :07/:27/:47 times so
+# a backup run always has precache's latest commit already sitting
+# there to read, rather than racing it.
 on:
+  workflow_run:
+    workflows: ["Precache weather"]
+    types: [completed]
   schedule:
-    - cron: "*/20 * * * *"
+    - cron: "17,37,57 * * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -24,6 +43,12 @@ permissions:
 jobs:
   build-feed:
     runs-on: ubuntu-latest
+    # Skip a workflow_run trigger if precache itself failed - there's
+    # nothing new to build from, and the script's own "no change to
+    # commit" check further down would just make this a no-op run
+    # anyway, so better not to run it at all. A schedule or manual
+    # trigger (no workflow_run info attached) always proceeds normally.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
 
@@ -34,11 +59,10 @@ jobs:
       - name: Build forecast.json
         run: node scripts/build-forecast-feed.mjs
 
-      # This job runs every 20 minutes, same as precache-weather.yml, so
-      # the two occasionally land close enough together that this job's
-      # push gets rejected because the other one committed first (a
-      # normal git "fetch first" rejection, not a real failure). The old
-      # version just gave up at that point and needed a manual re-run.
+      # This job can still occasionally land close to precache-weather.yml's
+      # own commit (a manual trigger of either one, for instance), so the
+      # retry loop stays as a second line of defence even now that the
+      # normal case is event-driven rather than a race between two timers.
       #
       # Fixed by retrying: on a rejected push, pull down whatever the
       # other run just committed, put this run's freshly-built
