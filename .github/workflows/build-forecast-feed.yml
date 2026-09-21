@@ -34,10 +34,49 @@ jobs:
       - name: Build forecast.json
         run: node scripts/build-forecast-feed.mjs
 
+      # This job runs every 20 minutes, same as precache-weather.yml, so
+      # the two occasionally land close enough together that this job's
+      # push gets rejected because the other one committed first (a
+      # normal git "fetch first" rejection, not a real failure). The old
+      # version just gave up at that point and needed a manual re-run.
+      #
+      # Fixed by retrying: on a rejected push, pull down whatever the
+      # other run just committed, put this run's freshly-built
+      # forecast.json back on top of it, and try again. forecast.json is
+      # a fully regenerated snapshot each run, never something to merge
+      # line-by-line, so "take the latest commit, then overwrite the one
+      # file this job owns with what was just built" is always the right
+      # resolution — there's no meaningful conflict to resolve by hand.
       - name: Commit updated forecast feed
         run: |
           git config user.name "forecast-compare-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/forecast.json
-          git diff --staged --quiet || git commit -m "Update forecast feed"
-          git push
+
+          # Keep a copy of this run's freshly-built file somewhere a
+          # later `git reset --hard` in the retry loop below can't touch.
+          cp data/forecast.json /tmp/forecast.json
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+            cp /tmp/forecast.json data/forecast.json
+            git add data/forecast.json
+
+            if git diff --staged --quiet; then
+              echo "No change to commit — another run already pushed the same result."
+              exit 0
+            fi
+
+            git commit -m "Update forecast feed"
+
+            if git push; then
+              echo "Pushed successfully on attempt $attempt."
+              exit 0
+            fi
+
+            echo "Push rejected on attempt $attempt (another run committed first) — retrying..."
+            sleep $((RANDOM % 10 + 5))
+          done
+
+          echo "Failed to push after several retries — giving up this run."
+          exit 1
