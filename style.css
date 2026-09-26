@@ -890,6 +890,16 @@ header p {
   margin-top: -2px;
 }
 
+/* Exempts just Pressure's "hPa" from .headline-label's own
+   text-transform: uppercase above — deliberately mixed-case (a
+   lowercase h, capital P), not the "HPA" uppercasing everything else
+   in the label produces. Scoped to this one span rather than turning
+   uppercase off for the whole label, since every other condition's
+   unit (mm, mph, °C) is meant to stay uppercased. */
+.headline-label-unit-cased {
+  text-transform: none;
+}
+
 .headline-value-row {
   display: flex;
   align-items: center;
@@ -2755,6 +2765,28 @@ footer {
 }
 .accuracy-trend-graph { margin-top: 0; }
 .accuracy-trend-caption { margin-top: 6px; }
+.accuracy-trend-legend {
+  display: flex;
+  gap: 14px;
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--accent-muted);
+}
+.accuracy-trend-legend-item { display: flex; align-items: center; gap: 5px; }
+.accuracy-trend-swatch { display: inline-block; width: 14px; height: 2px; }
+.accuracy-trend-swatch-corrected { background: var(--accent); }
+.accuracy-trend-swatch-raw { height: 0; border-top: 2px dashed var(--amber); }
+.accuracy-trend-callout {
+  margin-top: 12px;
+  background: var(--accent-light);
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-dark);
+}
+.accuracy-trend-callout-warning { background: var(--amber-light); color: var(--amber); }
 
 /* ---- Backup & restore (Settings) ---- */
 .backup-textarea {

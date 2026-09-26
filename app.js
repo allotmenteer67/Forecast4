@@ -3008,7 +3008,14 @@ function updateAccuracyTrend() {
     if (!stats) return;
     const series = (store[conditionName] ??= []);
     if (series.length && series[series.length - 1].date === today) return; // already snapshotted today
-    series.push({ date: today, avgError: stats.avgError });
+    const point = { date: today, avgError: stats.avgError };
+    // rawAvgError may not exist yet (e.g. right after a reset, before any
+    // forecaster has raw history again) — omit the key entirely rather
+    // than storing null, so renderAccuracyTrend can tell "no data yet"
+    // apart from a genuine zero when it draws the raw-average line.
+    const rawAvgError = rawAverageErrorFor(conditionName);
+    if (rawAvgError !== null) point.rawAvgError = rawAvgError;
+    series.push(point);
     if (series.length > ACCURACY_TREND_MAX_POINTS) {
       series.splice(0, series.length - ACCURACY_TREND_MAX_POINTS);
     }
@@ -3279,7 +3286,22 @@ function accuracyStatsFor(source, conditionName) {
   };
 }
 
-
+// ---- Raw baseline: "if you'd just believed an arbitrary forecaster" ----
+// Averages accuracyStatsFor(...).avgErrorRaw across every forecaster that
+// currently has raw error data for this condition. Deliberately a plain
+// mean across sources rather than sample-count-weighted like the FFV
+// combine does — the question here is "how would an ordinary uncorrected
+// forecast have looked", and letting one long-running source dominate
+// would defeat that. Feeds the "Accuracy over time" graph's raw-average
+// line — see updateAccuracyTrend/renderAccuracyTrend.
+function rawAverageErrorFor(conditionName) {
+  if (!state.areaCode) return null;
+  const errors = CONFIG.forecasters
+    .map(source => accuracyStatsFor(source, conditionName)?.avgErrorRaw)
+    .filter(v => v !== null && v !== undefined);
+  if (!errors.length) return null;
+  return errors.reduce((a, b) => a + b, 0) / errors.length;
+}
 
 function formatError(avgError, conditionName, mode) {
   if (avgError === null) return "–";
@@ -5182,15 +5204,43 @@ function renderAccuracyTrend() {
     return;
   }
 
-  const values = series.map(pt => pt.avgError);
-  const W = 320, H = 90, PAD_L = 34, PAD_B = 16, PAD_T = 8;
   const svgNS = "http://www.w3.org/2000/svg";
+  const correctedValues = series.map(pt => pt.avgError);
+
+  // Raw-average line: only the points that actually have a rawAvgError
+  // recorded (older snapshots, from before this line existed or from a
+  // gap in raw history, won't). Kept as {index, value} pairs rather than
+  // a dense array so a gap doesn't have to be faked as zero or
+  // interpolated — it's drawn as separate contiguous segments below,
+  // so a break in the data shows as a break in the line.
+  const rawPoints = series
+    .map((pt, i) => ({ i, v: pt.rawAvgError }))
+    .filter(pt => pt.v !== undefined && pt.v !== null);
+
+  // Needs at least two points to draw a line at all, same reasoning as
+  // the "not enough history" guard above for the corrected series.
+  const showRaw = rawPoints.length >= 2;
+
+  if (showRaw) {
+    const legend = document.createElement("div");
+    legend.className = "accuracy-trend-legend";
+    legend.innerHTML =
+      '<span class="accuracy-trend-legend-item"><span class="accuracy-trend-swatch accuracy-trend-swatch-corrected"></span>App corrected</span>' +
+      '<span class="accuracy-trend-legend-item"><span class="accuracy-trend-swatch accuracy-trend-swatch-raw"></span>Raw average</span>';
+    container.appendChild(legend);
+  }
+
+  const W = 320, H = 90, PAD_L = 34, PAD_B = 16, PAD_T = 8;
   const svg = document.createElementNS(svgNS, "svg");
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("class", "graph-svg");
 
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
+  // Shared scale across both lines, so the raw line's position is
+  // genuinely comparable to the corrected line's rather than each being
+  // scaled to its own range.
+  const allValues = showRaw ? correctedValues.concat(rawPoints.map(p => p.v)) : correctedValues;
+  const minV = Math.min(...allValues);
+  const maxV = Math.max(...allValues);
   const range = Math.max(0.001, maxV - minV);
   const plotW = W - PAD_L - 10;
   const plotH = H - PAD_T - PAD_B;
@@ -5217,9 +5267,38 @@ function renderAccuracyTrend() {
     svg.appendChild(label);
   });
 
-  const pts = values.map((v, i) => [xFor(i), yFor(v)]);
+  // Raw-average line drawn first (underneath the corrected line), in
+  // contiguous segments so a gap in the raw history shows as a break
+  // rather than a misleading straight line jumping across days with no
+  // data at all.
+  if (showRaw) {
+    let segment = [];
+    let lastI = null;
+    const flushSegment = () => {
+      if (segment.length >= 2) {
+        const segPath = document.createElementNS(svgNS, "path");
+        segPath.setAttribute("d", "M" + segment.map(p => p.join(",")).join(" L"));
+        segPath.setAttribute("fill", "none");
+        segPath.setAttribute("stroke", "var(--amber)");
+        segPath.setAttribute("stroke-width", "2");
+        segPath.setAttribute("stroke-dasharray", "5,4");
+        segPath.setAttribute("stroke-linecap", "round");
+        segPath.setAttribute("stroke-linejoin", "round");
+        svg.appendChild(segPath);
+      }
+      segment = [];
+    };
+    rawPoints.forEach(pt => {
+      if (lastI !== null && pt.i !== lastI + 1) flushSegment();
+      segment.push([xFor(pt.i), yFor(pt.v)]);
+      lastI = pt.i;
+    });
+    flushSegment();
+  }
+
+  const correctedPts = correctedValues.map((v, i) => [xFor(i), yFor(v)]);
   const path = document.createElementNS(svgNS, "path");
-  path.setAttribute("d", "M" + pts.map(p => p.join(",")).join(" L"));
+  path.setAttribute("d", "M" + correctedPts.map(p => p.join(",")).join(" L"));
   path.setAttribute("fill", "none");
   path.setAttribute("stroke", "var(--accent)");
   path.setAttribute("stroke-width", "2");
@@ -5246,6 +5325,32 @@ function renderAccuracyTrend() {
   wrap.className = "graph-wrap accuracy-trend-graph";
   wrap.appendChild(svg);
   container.appendChild(wrap);
+
+  // Callout: a 7-day rolling average of (raw − corrected), i.e. how much
+  // error the FFV correction is currently saving vs an uncorrected
+  // forecast. Averaged over the trailing week rather than just today's
+  // point — a single day's gap is noisy, and the callout is meant to be
+  // a stable "is this actually helping" read rather than a jumpy one.
+  if (showRaw) {
+    const recentRaw = rawPoints.filter(pt => pt.i >= series.length - 7);
+    if (recentRaw.length) {
+      const diffs = recentRaw.map(pt => pt.v - correctedValues[pt.i]);
+      const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+      const valueText = formatValue(Math.abs(avgDiff), state.condition, true) + unitLabel(state.condition);
+      const callout = document.createElement("div");
+      if (avgDiff > 0) {
+        callout.className = "accuracy-trend-callout";
+        callout.textContent = `Currently adding ${valueText} of accuracy vs raw`;
+      } else {
+        // Honest rather than flattering — if the correction isn't
+        // currently beating a plain raw average, that's worth surfacing,
+        // not smoothing over.
+        callout.className = "accuracy-trend-callout accuracy-trend-callout-warning";
+        callout.textContent = `Not yet beating raw average (${valueText} behind)`;
+      }
+      container.appendChild(callout);
+    }
+  }
 
   const caption = document.createElement("p");
   caption.className = "sheet-footnote accuracy-trend-caption";
