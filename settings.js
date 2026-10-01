@@ -359,3 +359,62 @@ FORECASTERS.forEach(source => {
   label.append(input, text);
   forecasters.appendChild(label);
 });
+
+// ---- App version ----
+// Shown at the bottom of Settings. The number comes from sw.js's
+// SHELL_CACHE_NAME ("cloude-shell-v61" -> 61), so it changes by itself
+// with the usual sw.js bump on every deploy - nothing to keep in step
+// by hand. Asks the running service worker first (the version actually
+// serving the app); falls back to the newest cache name on this device
+// if no service worker is in charge of the page yet (e.g. first visit).
+(function showAppVersion() {
+  const el = document.getElementById("appVersion");
+  if (!el) return;
+
+  function show(version) {
+    el.textContent = version ? `Cloude version ${version}` : "Cloude version unknown";
+  }
+
+  function versionFromCaches() {
+    if (!("caches" in window)) return Promise.resolve(null);
+    return caches.keys().then(names => {
+      const numbers = names
+        .map(n => (n.match(/^cloude-shell-v(\d+)$/) || [])[1])
+        .filter(Boolean)
+        .map(Number);
+      return numbers.length ? String(Math.max(...numbers)) : null;
+    }).catch(() => null);
+  }
+
+  function versionFromWorker() {
+    const controller = navigator.serviceWorker && navigator.serviceWorker.controller;
+    if (!controller) return Promise.resolve(null);
+    return new Promise(resolve => {
+      const channel = new MessageChannel();
+      // An older service worker (before this feature) never replies -
+      // give up after a moment and let the cache fallback answer.
+      const timer = setTimeout(() => resolve(null), 1500);
+      channel.port1.onmessage = event => {
+        clearTimeout(timer);
+        resolve(event.data && event.data.version ? String(event.data.version) : null);
+      };
+      controller.postMessage({ type: "getVersion" }, [channel.port2]);
+    });
+  }
+
+  function update() {
+    return versionFromWorker()
+      .then(version => version || versionFromCaches())
+      .then(show)
+      .catch(() => show(null));
+  }
+
+  update();
+
+  // On the very first visit (or right after an update) the service
+  // worker takes charge a moment after the page loads - ask again then,
+  // so the number appears without needing a reload.
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.addEventListener("controllerchange", update);
+  }
+})();

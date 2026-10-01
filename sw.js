@@ -338,7 +338,10 @@
 // map going blank with no error shown anywhere. Re-add once solar's
 // files are confirmed to exist; everything not in this list still
 // works fine via ordinary lazy caching in the meantime.
-const SHELL_CACHE_NAME = "cloude-shell-v60";
+// This is also the app's VERSION NUMBER. The number after "-v" is what
+// Settings shows at the bottom ("Cloude version 61"), so bumping it here
+// on every deploy - as always - is the only place it ever needs changing.
+const SHELL_CACHE_NAME = "cloude-shell-v61";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -425,6 +428,16 @@ self.addEventListener("activate", event => {
       ))
       .then(() => self.clients.claim())
   );
+});
+
+// Settings asks the running service worker which version it is, so the
+// number shown is the version actually serving the app's files, not
+// just whatever a file on disk happens to say.
+self.addEventListener("message", event => {
+  if (event.data && event.data.type === "getVersion" && event.ports && event.ports[0]) {
+    const match = SHELL_CACHE_NAME.match(/-v(\d+)$/);
+    event.ports[0].postMessage({ version: match ? match[1] : null });
+  }
 });
 
 self.addEventListener("fetch", event => {
