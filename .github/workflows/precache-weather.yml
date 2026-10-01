@@ -1,34 +1,33 @@
 name: Precache weather
 
-# Cron interval is a STATIC number here — it cannot adjust itself based
-# on how many locations are in data/precache-config.json. If you add or
-# remove a weather location, recompute the budget using the sizing
-# formula in that config's own _readme block and update the schedule
-# below by hand to match. Current setting (every 20 minutes) is sized
-# for the 3 weather locations / top-4-forecasters config discussed when
-# this was built — see data/precache-config.json for the actual current
-# location count.
+# ---- Trigger ----
+# The real 20-minute clock is now a Cloudflare Worker
+# (precache-trigger-worker.js), NOT GitHub's own schedule. GitHub
+# treats frequent schedules as best-effort and in practice was skipping
+# most of them: around 6 runs a day actually happened instead of the
+# 72 the old "7,27,47 * * * *" cron asked for. Cloudflare's Cron
+# Triggers fire on time, and every 20 minutes (:07/:27/:47 UTC) the
+# Worker asks GitHub to run this workflow via the same
+# "workflow_dispatch" mechanism as pressing "Run workflow" by hand.
 #
-# Deliberately NOT "*/20 * * * *" (i.e. not :00/:20/:40). GitHub's own
-# scheduling docs warn that jobs land less reliably at those round,
-# popular minutes specifically, because that's when the platform is
-# busiest with everyone else's scheduled jobs too — an unpopular offset
-# minute is their own recommended fix, not something specific to this
-# repo. ":07/:27/:47" keeps the same every-20-minutes cadence, just off
-# the busy top-of-slot.
+# The schedule below is kept ONLY as a slow safety net (every 3 hours)
+# in case the Worker ever stops - e.g. its GitHub token expires. It is
+# not what keeps the data fresh.
 #
-# GitHub's schedule is still best-effort even off the busy slots, not a
-# guarantee — their docs state scheduled runs can still be delayed
-# under high platform load, sometimes by 15-45+ minutes. The app's own
-# freshness check (a ~30 minute threshold on the precached data's own
-# dataAsOf timestamp) is sized with that drift in mind — see app.js.
+# Budget: if you add or remove a weather location, re-check the sizing
+# formula in data/precache-config.json's _readme. The interval to plug
+# in is the Worker's (20 minutes), not this backup's.
 on:
-  schedule:
-    - cron: "7,27,47 * * * *"
-  # Lets you trigger a run by hand from the Actions tab — useful for
-  # testing a config change immediately rather than waiting up to 20
-  # minutes for the next scheduled run.
   workflow_dispatch:
+  schedule:
+    - cron: "52 */3 * * *"
+
+# Never let two precache runs overlap. A backup run and a Worker run can
+# occasionally land close together; this makes the second one wait for
+# the first to finish instead of both racing to push the same file.
+concurrency:
+  group: precache-weather
+  cancel-in-progress: false
 
 # Only this one job needs write access, and only to push its own
 # output file — kept minimal rather than granting broader repo access
@@ -41,6 +40,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Check out the CURRENT tip of main, not the commit that existed
+          # when this run was queued - matters when this run had to wait
+          # behind another one (see concurrency above).
+          ref: main
 
       - uses: actions/setup-node@v4
         with:
@@ -60,5 +64,20 @@ jobs:
           # bucket-skip means it often writes nothing new at all) — an
           # empty commit every 20 minutes would bury the repo's real
           # history in thousands of no-op commits over time.
-          git diff --staged --quiet || git commit -m "Precache weather $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push
+          if git diff --staged --quiet; then
+            echo "No change to commit."
+            exit 0
+          fi
+          git commit -m "Precache weather $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # Other workflows (Build forecast feed, Collect weather data)
+          # push to this repo too. If one of them pushed while this run
+          # was working, a plain push is rejected - so pull their commit
+          # in first and retry a few times. They never touch
+          # precache-weather.json, so this can't clash with our change.
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase --autostash origin main && git push && exit 0
+            echo "Push attempt $attempt failed, retrying shortly..."
+            sleep $((attempt * 5))
+          done
+          echo "Could not push after 5 attempts."
+          exit 1
