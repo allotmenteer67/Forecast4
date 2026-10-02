@@ -3211,6 +3211,13 @@ function stopMapHourPlay() {
 // each step now genuinely takes as long as it takes — slower in real
 // seconds when the layers are heavy — rather than silently skipping
 // hours to keep pretending it can hit a fixed cadence it can't sustain.
+// Pause between Play steps, in milliseconds. Was 700; cut to 583
+// (20% faster) on request - smaller = faster. Each step is
+// MAP_HOUR_STEP (half an hour), and the pause starts after the render
+// finishes, so heavy layers (Pressure, Temperature) still add their own
+// render time on top.
+const MAP_HOUR_PLAY_DELAY_MS = 583;
+
 function scheduleMapHourPlayStep() {
   mapHourPlayTimer = setTimeout(() => {
     // parseFloat + MAP_HOUR_STEP, not the old hardcoded parseInt/+1 —
@@ -3221,7 +3228,7 @@ function scheduleMapHourPlayStep() {
     mapHourInput.value = next > 47 ? 0 : next;
     renderMap();
     scheduleMapHourPlayStep();
-  }, 700);
+  }, MAP_HOUR_PLAY_DELAY_MS);
 }
 
 function startMapHourPlay() {

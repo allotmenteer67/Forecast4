@@ -362,7 +362,7 @@ FORECASTERS.forEach(source => {
 
 // ---- App version ----
 // Shown at the bottom of Settings. The number comes from sw.js's
-// SHELL_CACHE_NAME ("cloude-shell-v61" -> 61), so it changes by itself
+// SHELL_CACHE_NAME ("cloude-shell-v62" -> 62), so it changes by itself
 // with the usual sw.js bump on every deploy - nothing to keep in step
 // by hand. Asks the running service worker first (the version actually
 // serving the app); falls back to the newest cache name on this device

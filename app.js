@@ -6041,7 +6041,7 @@ function updateHourLabel() {
 function resetHourly() {
   state.hourlyActive = false;
   state.hourIndex = 0;
-  stopHourPlay();
+  stopHourPlay(false);
   if (hourSlider) {
     hourSlider.value = 0;
     updateSliderFill(hourSlider);
@@ -6077,10 +6077,32 @@ const hourPlayButton = document.getElementById("hourPlayButton");
 // listener for it.
 let hourPlayRaw = 0;
 
-function stopHourPlay() {
+// settle: pass false when the caller is about to put the slider
+// somewhere else itself (resetHourly), so this doesn't first announce a
+// stray "settled on hour N" that the reset then contradicts. Anything
+// else - including the pointerdown listener, which passes an Event -
+// settles as normal.
+function stopHourPlay(settle) {
   if (hourPlayTimer) {
     clearTimeout(hourPlayTimer);
     hourPlayTimer = null;
+  }
+  // Play lets the knob glide through half-hours (see
+  // scheduleHourPlayStep), so on stopping, put the slider back to
+  // whole-hour steps for dragging, and settle the knob on the hour the
+  // headline is already showing (rounded DOWN, matching the input
+  // handler below) - the map strip is told too, so everything ends on
+  // the same hour. Only when actually mid-glide: pointerdown calls this
+  // on every touch, and a plain drag shouldn't trigger an extra render.
+  if (hourSlider) {
+    const current = Number(hourSlider.value) || 0;
+    const whole = Math.floor(current);
+    hourSlider.step = "1";
+    if (current !== whole && settle !== false) {
+      hourSlider.value = whole;
+      updateSliderFill(hourSlider);
+      hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    }
   }
   // Resyncs to wherever the slider actually is (a whole number, always)
   // rather than leaving a stale fractional position behind — if Play is
@@ -6120,6 +6142,11 @@ function stopHourPlay() {
 // only when hourPlayRaw actually lands on a genuine half-hour, so a
 // drag-triggered stop mid-step never leaves a stray smoothed frame
 // on screen.
+// Pause between Play steps on the front page, in milliseconds. Was
+// 350; cut to 292 (20% faster) on request - smaller = faster. Each step
+// is half an hour, so this is about 0.58s per hour of forecast.
+const HOUR_PLAY_DELAY_MS = 292;
+
 function scheduleHourPlayStep() {
   hourPlayTimer = setTimeout(() => {
     const max = Number(hourSlider.max) || 0;
@@ -6133,9 +6160,20 @@ function scheduleHourPlayStep() {
       return;
     }
     hourPlayRaw = next;
-    const rounded = Math.round(hourPlayRaw);
-    if (Number(hourSlider.value) !== rounded) {
-      hourSlider.value = rounded;
+    // The knob itself now glides through every half-hour along with
+    // the map strip's rain, rather than jumping once an hour. The
+    // earlier on-device finding that the slider "wouldn't hold" a
+    // fractional value was the slider's own step="1" snapping it back
+    // to a whole number - so Play switches it to step 0.5 while running
+    // (startHourPlay) and stopHourPlay puts step="1" back for dragging.
+    const previousHour = Math.floor(Number(hourSlider.value) || 0);
+    hourSlider.value = hourPlayRaw;
+    updateSliderFill(hourSlider);
+    // The headline's figures still only change on a genuine new whole
+    // hour - rounded DOWN, so they change as the knob reaches the hour
+    // mark, not half an hour early as Math.round used to.
+    const wholeHour = Math.floor(hourPlayRaw);
+    if (previousHour !== wholeHour) {
       // Dispatched rather than calling the "input" handler above
       // directly, so Play stays a second caller of that existing logic
       // rather than a fork of it — anything that changes there (unit
@@ -6151,12 +6189,15 @@ function scheduleHourPlayStep() {
     // including the half-hour ones the block above deliberately skips.
     hourSlider.dispatchEvent(new CustomEvent("cloude:hour-play-raw", { detail: { raw: hourPlayRaw }, bubbles: true }));
     scheduleHourPlayStep();
-  }, 350);
+  }, HOUR_PLAY_DELAY_MS);
 }
 
 function startHourPlay() {
   if (hourPlayTimer || !hourSlider) return;
   hourPlayRaw = Number(hourSlider.value) || 0;
+  // Half-hour steps while playing so the knob can glide (see
+  // scheduleHourPlayStep); stopHourPlay restores "1".
+  hourSlider.step = "0.5";
   scheduleHourPlayStep();
   if (hourPlayButton) {
     hourPlayButton.setAttribute("aria-label", "Pause");
@@ -6191,7 +6232,11 @@ if (hourSlider) {
     // — the map strip reads hourSlider.value directly for its own
     // smoother rain-colour interpolation instead (see mapstrip3.js),
     // so nothing is lost by rounding it here for this card's purposes.
-    state.hourIndex = Math.round(Number(hourSlider.value));
+    // Math.floor (was Math.round): during Play the knob glides through
+    // half-hours, and the figures should change as it reaches each hour
+    // mark rather than half an hour before. A manual drag only ever
+    // lands on whole numbers, where floor and round are identical.
+    state.hourIndex = Math.floor(Number(hourSlider.value));
     // Only a genuinely different hour switches to the hourly reading —
     // landing back on "Now" (0) behaves as if the slider was never
     // touched, so it matches what's shown on launch instead of jumping

@@ -339,9 +339,9 @@
 // files are confirmed to exist; everything not in this list still
 // works fine via ordinary lazy caching in the meantime.
 // This is also the app's VERSION NUMBER. The number after "-v" is what
-// Settings shows at the bottom ("Cloude version 61"), so bumping it here
+// Settings shows at the bottom ("Cloude version 62"), so bumping it here
 // on every deploy - as always - is the only place it ever needs changing.
-const SHELL_CACHE_NAME = "cloude-shell-v61";
+const SHELL_CACHE_NAME = "cloude-shell-v62";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
