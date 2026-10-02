@@ -2725,6 +2725,14 @@ function sizeMapCanvas() {
 
 function renderMap() {
   if (!mapCanvas) return;
+  // A fresh render draws the map at mapCentre, which already includes
+  // any drag so far - so any temporary slide from an in-progress drag
+  // (see the panning section) must be cleared in the same moment, or
+  // the picture would end up shifted twice.
+  if (mapPanOffset.x || mapPanOffset.y) {
+    mapPanOffset = { x: 0, y: 0 };
+    mapCanvas.style.transform = "";
+  }
   const ctx = mapCanvas.getContext("2d");
   const dpr = mapCanvas.width / (mapCanvas.getBoundingClientRect().width || mapCanvas.width);
   // Everything after this draws in CSS pixels and comes out sharp.
@@ -2822,22 +2830,43 @@ let panMoved = false;
 // back for one full-quality render, as soon as the drag ends.
 let mapIsPanning = false;
 
-// Coalesces pointermove into at most one renderMap() per animation
-// frame. Previously every single pointermove event called renderMap()
-// directly and synchronously — a touch surface can report far more of
-// these than the screen can actually redraw for, so a fast drag queued
-// up many full redraws back to back with no chance to catch up between
-// them. Confirmed on-device as multi-second freezes during dragging.
-// This keeps only the latest position (mapCentre is already updated
-// synchronously below — cheap arithmetic — only the expensive redraw
-// itself is deferred and coalesced).
-let mapPanRenderQueued = false;
+// How far the already-drawn picture has been slid, in CSS pixels,
+// since it was last properly drawn.
+let mapPanOffset = { x: 0, y: 0 };
+
+// Dragging no longer redraws the map at all on each finger movement.
+// It used to - first on every pointermove (multi-second freezes), then
+// coalesced to once per animation frame with the heavy layers skipped -
+// but even that lighter redraw (rain grid, coastline, rivers, wind,
+// labels) still costs more per frame than an iPad can keep up with,
+// which is the lag still felt during a drag.
+//
+// Now the picture that's already drawn is simply SLID under the finger
+// with a CSS transform, which the browser's graphics hardware does for
+// free, every frame. mapCentre is still updated exactly as before, so
+// the moment the finger lifts (endPan), one proper render at the new
+// centre replaces the slid picture in the same instant - no visible
+// jump. The only trade: the strip of map uncovered at the edge you're
+// dragging away from is blank until then. On a long drag, once it's
+// been slid more than MAP_PAN_REDRAW_FRACTION of the map's width or
+// height, one quick redraw fills it in and sliding carries on from
+// there.
+const MAP_PAN_REDRAW_FRACTION = 0.3;
+let mapPanFrameQueued = false;
 function scheduleMapRender() {
-  if (mapPanRenderQueued) return;
-  mapPanRenderQueued = true;
+  if (mapPanFrameQueued) return;
+  mapPanFrameQueued = true;
   requestAnimationFrame(() => {
-    mapPanRenderQueued = false;
-    renderMap();
+    mapPanFrameQueued = false;
+    const rect = mapCanvas.getBoundingClientRect();
+    const limitX = rect.width * MAP_PAN_REDRAW_FRACTION;
+    const limitY = rect.height * MAP_PAN_REDRAW_FRACTION;
+    if (Math.abs(mapPanOffset.x) > limitX || Math.abs(mapPanOffset.y) > limitY) {
+      // renderMap() clears the slide itself (see its first lines).
+      renderMap();
+    } else {
+      mapCanvas.style.transform = `translate3d(${mapPanOffset.x}px, ${mapPanOffset.y}px, 0)`;
+    }
   });
 }
 
@@ -2874,6 +2903,11 @@ if (mapCanvas) {
     // below — including for a plain tap that never becomes a drag at
     // all — so this never stays stuck on past the touch that set it.
     mapIsPanning = true;
+    mapPanOffset = { x: 0, y: 0 };
+    // Tells the browser this is about to be slid, so it hands the
+    // canvas to the graphics hardware up front rather than on the
+    // first movement.
+    mapCanvas.style.willChange = "transform";
     mapCanvas.setPointerCapture(e.pointerId);
   });
 
@@ -2896,9 +2930,13 @@ if (mapCanvas) {
       lat: mapCentre.lat + dyKm / KM_PER_DEG_LAT,
       lon: mapCentre.lon - dxKm / kmPerDegLon(mapCentre.lat)
     };
+    mapPanOffset = {
+      x: mapPanOffset.x + (e.clientX - panLast.x),
+      y: mapPanOffset.y + (e.clientY - panLast.y)
+    };
     panLast = { x: e.clientX, y: e.clientY };
-    // Was a direct renderMap() call here — see scheduleMapRender()'s own
-    // comment above for why that was the main cause of the freeze.
+    // Slides the existing picture rather than redrawing - see
+    // scheduleMapRender()'s own comment above.
     scheduleMapRender();
   });
 
@@ -2916,6 +2954,10 @@ if (mapCanvas) {
     // drag completes — silently kept skipping terrain/temperature/
     // pressure. A real regression, not just a missed optimisation.
     mapIsPanning = false;
+    mapCanvas.style.willChange = "";
+    // Every path below ends in a render at the new centre (renderMap
+    // directly, or goTo for a tapped marker), which clears the slide in
+    // the same instant. A tap that barely moved still renders below.
 
     if (wasTap) {
       // A tap on a saved-place marker jumps straight there rather than
