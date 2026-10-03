@@ -6125,7 +6125,6 @@ function stopHourPlay(settle) {
   if (hourSlider) {
     const current = Number(hourSlider.value) || 0;
     const whole = Math.floor(current);
-    hourSlider.step = "1";
     if (current !== whole && settle !== false) {
       hourSlider.value = whole;
       updateSliderFill(hourSlider);
@@ -6192,8 +6191,8 @@ function scheduleHourPlayStep() {
     // the map strip's rain, rather than jumping once an hour. The
     // earlier on-device finding that the slider "wouldn't hold" a
     // fractional value was the slider's own step="1" snapping it back
-    // to a whole number - so Play switches it to step 0.5 while running
-    // (startHourPlay) and stopHourPlay puts step="1" back for dragging.
+    // to a whole number - the slider now uses fine steps all the time
+    // (HOUR_SLIDER_FINE_STEP, below), for dragging as well as Play.
     const previousHour = Math.floor(Number(hourSlider.value) || 0);
     hourSlider.value = hourPlayRaw;
     updateSliderFill(hourSlider);
@@ -6223,9 +6222,6 @@ function scheduleHourPlayStep() {
 function startHourPlay() {
   if (hourPlayTimer || !hourSlider) return;
   hourPlayRaw = Number(hourSlider.value) || 0;
-  // Half-hour steps while playing so the knob can glide (see
-  // scheduleHourPlayStep); stopHourPlay restores "1".
-  hourSlider.step = "0.5";
   scheduleHourPlayStep();
   if (hourPlayButton) {
     hourPlayButton.setAttribute("aria-label", "Pause");
@@ -6246,9 +6242,34 @@ hourPlayButton?.addEventListener("click", () => {
 // pointerdown only ever happens from an actual touch.
 hourSlider?.addEventListener("pointerdown", stopHourPlay);
 
+// The slider moves in tenths of an hour rather than whole hours, so the
+// knob follows a finger smoothly instead of clicking from notch to
+// notch (each hour is only a few pixels of track, which made a manual
+// drag feel jerky). The figures still only ever show whole hours (see
+// the input handler below), the map strip blends its rain between the
+// two real hours either side - exactly as it already does for Play -
+// and letting go settles the knob on the nearest whole hour.
+// Overrides the step="1" in index.html.
+const HOUR_SLIDER_FINE_STEP = "0.1";
+
 if (hourSlider) {
+  hourSlider.step = HOUR_SLIDER_FINE_STEP;
   hourSlider.max = String(loadHourRange());
   updateSliderFill(hourSlider);
+
+  // Letting go of a manual drag: settle on the nearest whole hour, which
+  // is the hour the figures are already showing (rounded, see below), so
+  // nothing on screen changes except the knob tidying itself up.
+  // "change" fires on release for a range input, not during the drag.
+  hourSlider.addEventListener("change", () => {
+    if (hourPlayTimer) return;
+    const current = Number(hourSlider.value) || 0;
+    const whole = Math.round(current);
+    if (current !== whole) {
+      hourSlider.value = whole;
+      hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
 
   hourSlider.addEventListener("input", () => {
     // Rounded, not a direct read of hourSlider.value — Play now steps
@@ -6264,7 +6285,19 @@ if (hourSlider) {
     // half-hours, and the figures should change as it reaches each hour
     // mark rather than half an hour before. A manual drag only ever
     // lands on whole numbers, where floor and round are identical.
-    state.hourIndex = Math.floor(Number(hourSlider.value));
+    //
+    // Rounded (to the nearest hour) for a manual drag, so the figures
+    // agree with where letting go will settle the knob. Play keeps
+    // Math.floor so its figures change as the knob reaches each hour.
+    const sliderValue = Number(hourSlider.value);
+    const newHourIndex = hourPlayTimer ? Math.floor(sliderValue) : Math.round(sliderValue);
+    updateSliderFill(hourSlider);
+    // The slider now reports many positions per hour (see
+    // HOUR_SLIDER_FINE_STEP). Rebuilding the headline for each one would
+    // repeat identical work and make the drag stutter - only a genuinely
+    // different hour needs it. The map strip listens separately.
+    if (newHourIndex === state.hourIndex && state.hourlyActive === (newHourIndex !== 0)) return;
+    state.hourIndex = newHourIndex;
     // Only a genuinely different hour switches to the hourly reading —
     // landing back on "Now" (0) behaves as if the slider was never
     // touched, so it matches what's shown on launch instead of jumping

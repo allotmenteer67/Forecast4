@@ -286,9 +286,9 @@ function mapStripRainAt(grid, fr, fc, hourIndex) {
 function svgRainRects(view, centre, grid, palette) {
   if (!grid) return "";
   const maxIndex = grid.rainByHour[0][0].length - 1;
-  // mapStripHourOffset is only ever fractional while Play is actually
-  // running (see scheduleHourPlayStep, app.js) — a genuine manual drag
-  // always lands on a whole number, same as before. hourLo/hourHi are
+  // mapStripHourOffset is fractional during Play and now during a manual
+  // drag too (the slider moves in tenths of an hour - see
+  // HOUR_SLIDER_FINE_STEP, app.js). hourLo/hourHi are
   // the two REAL, actually-fetched hourly slices either side of that
   // position; hourFrac blends between them the same way mapStripRainAt
   // above already blends between grid cells spatially — one more
@@ -713,19 +713,28 @@ document.addEventListener("cloude:location-ready", e => {
 const mapStripHourSlider = document.getElementById("hourSlider");
 if (mapStripHourSlider) {
   mapStripHourOffset = Number(mapStripHourSlider.value) || 0;
+  // A finger drag fires "input" many times between screen refreshes, and
+  // the slider now reports tenths of an hour (HOUR_SLIDER_FINE_STEP,
+  // app.js) - so redrawing the strip for every one of them made the knob
+  // stutter. This keeps only the latest position and redraws at most
+  // once per screen refresh.
+  let mapStripHourRenderQueued = false;
+  function scheduleMapStripHourRender() {
+    if (mapStripHourRenderQueued) return;
+    mapStripHourRenderQueued = true;
+    requestAnimationFrame(() => {
+      mapStripHourRenderQueued = false;
+      if (mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+    });
+  }
   mapStripHourSlider.addEventListener("input", () => {
     mapStripHourOffset = Number(mapStripHourSlider.value) || 0;
-    if (mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+    scheduleMapStripHourRender();
   });
-  // Play's own smoother position (app.js) — genuinely fractional,
-  // dispatched separately from "input" above rather than relying on
-  // hourSlider.value itself ever holding a fractional number, which
-  // testing on a real device showed it doesn't reliably do. A manual
-  // drag never fires this event at all, only "input" above, so
-  // dragging is completely unaffected by any of this.
+  // Play's own position (app.js), dispatched every half-hour step.
   mapStripHourSlider.addEventListener("cloude:hour-play-raw", e => {
     mapStripHourOffset = e.detail.raw;
-    if (mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+    scheduleMapStripHourRender();
   });
 }
 

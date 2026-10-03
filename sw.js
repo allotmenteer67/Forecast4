@@ -341,7 +341,7 @@
 // This is also the app's VERSION NUMBER. The number after "-v" is what
 // Settings shows at the bottom ("Cloude version 63"), so bumping it here
 // on every deploy - as always - is the only place it ever needs changing.
-const SHELL_CACHE_NAME = "cloude-shell-v64";
+const SHELL_CACHE_NAME = "cloude-shell-v66";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

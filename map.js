@@ -1399,6 +1399,9 @@ function clipToLand(ctx, view) {
   return true;
 }
 
+// The off-screen copy of the terrain shading - see the terrain layer.
+let mapTerrainCache = { canvas: null, key: null, grid: null, coastline: null, lakes: null };
+
 registerMapLayer({
   id: "terrain",
   draw(ctx, view) {
@@ -1417,10 +1420,43 @@ registerMapLayer({
     // redraws in full once the drag ends (see the panning section
     // below for exactly where).
     if (mapIsPanning) return;
+    // Terrain never changes with the hour - only with where the map is
+    // looking - so its shading is drawn once into an off-screen copy and
+    // re-used for every render at the same view: moving the Hour slider,
+    // Play, toggling a weather layer. Before this, every one of those
+    // re-did the whole per-pixel pass below, which is the main reason
+    // dragging the Hour slider felt jerky. The copy is thrown away and
+    // redrawn as soon as anything it depends on changes (position, zoom,
+    // map size, screen sharpness, or the terrain/coastline/lake data).
+    const dpr = ctx.getTransform().a || 1;
+    const key = [view.w, view.h, dpr, view.lat(0), view.lon(0), view.lat(view.h), view.lon(view.w)].join("|");
+    const cache = mapTerrainCache;
+    if (!(cache.canvas && cache.key === key && cache.grid === grid &&
+          cache.coastline === mapVectorData.coastline && cache.lakes === mapVectorData.lakes)) {
+      const off = cache.canvas || document.createElement("canvas");
+      off.width = Math.round(view.w * dpr);
+      off.height = Math.round(view.h * dpr);
+      const tctx = off.getContext("2d");
+      tctx.setTransform(1, 0, 0, 1, 0, 0);
+      tctx.clearRect(0, 0, off.width, off.height);
+      tctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawTerrainShading(tctx, view, grid);
+      mapTerrainCache = {
+        canvas: off, key, grid,
+        coastline: mapVectorData.coastline, lakes: mapVectorData.lakes
+      };
+    }
+    ctx.drawImage(mapTerrainCache.canvas, 0, 0, view.w, view.h);
+  }
+});
+
+// The per-pixel terrain shading itself (unchanged), drawn onto whatever
+// canvas it's given - the off-screen copy, in practice.
+function drawTerrainShading(tctx, view, grid) {
     // Save/restore around the clip so it can't leak into any layer drawn
     // after this one.
-    ctx.save();
-    clipToLand(ctx, view);
+    tctx.save();
+    clipToLand(tctx, view);
     // 3px rather than 4: with the interpolation below there is now real
     // detail to resolve between grid nodes, where before every pixel in
     // a cell was identical and a smaller step just drew the same value
@@ -1438,7 +1474,7 @@ registerMapLayer({
         if (z === null || z === undefined || z <= 0) continue;
         const shade = terrainShadeBilinear(grid, fr, fc);
         if (Math.abs(shade) < 0.02) continue; // flat ground: leave the land colour alone entirely
-        ctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
+        tctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
         // Cap raised 0.32 -> 0.50 and the multiplier 0.4 -> 0.7, after
         // the first look at real terrain showed the whole layer reading
         // uniformly too pale. Both original numbers were arrived at by
@@ -1451,14 +1487,13 @@ registerMapLayer({
         // the strongest shadows while leaving lowland relief invisible.
         // The complaint was that everything was too faint, so both the
         // ramp and its ceiling needed lifting.
-        ctx.globalAlpha = Math.min(0.50, Math.abs(shade) * 0.7);
-        ctx.fillRect(px, py, cell, cell);
+        tctx.globalAlpha = Math.min(0.50, Math.abs(shade) * 0.7);
+        tctx.fillRect(px, py, cell, cell);
       }
     }
-    ctx.globalAlpha = 1;
-    ctx.restore();
-  }
-});
+    tctx.globalAlpha = 1;
+    tctx.restore();
+}
 
 registerMapLayer({
   id: "lakes",
@@ -3294,9 +3329,19 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") stopMapHourPlay();
 });
 
+// A finger drag fires "input" many times between screen refreshes, and
+// each one used to redraw the whole map straight away - the redraws
+// queued up behind each other and the knob stuttered. Now only the
+// latest position is drawn, at most once per screen refresh.
+let mapHourRenderQueued = false;
 mapHourInput?.addEventListener("input", () => {
   stopMapHourPlay();
-  renderMap();
+  if (mapHourRenderQueued) return;
+  mapHourRenderQueued = true;
+  requestAnimationFrame(() => {
+    mapHourRenderQueued = false;
+    renderMap();
+  });
 });
 
 window.addEventListener("resize", () => { sizeMapCanvas(); renderMap(); });
