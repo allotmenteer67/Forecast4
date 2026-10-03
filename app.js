@@ -7095,6 +7095,44 @@ if (useMyLocationButton) {
 
 if (placesList) renderPlacesList();
 
+// Frees up this device's favourite slots when a favourite has since been
+// removed from the shared list (by hand-editing data/precache-config.json
+// on GitHub - there's no in-app delete). Without this, each device kept
+// counting a removed favourite against its own 4-per-person limit
+// forever, and kept showing it as "★ Shared favourite".
+//
+// Reads the same copy of precache-config.json the site itself serves
+// (a plain relative path, so it keeps working if the repo is ever
+// renamed or moved again). The service worker hands back its cached copy
+// first and refreshes it in the background, so a removal may take one
+// extra app-open to show up. Offline or any failure: does nothing, and
+// the device's list stays exactly as it was.
+async function syncFavouritesAddedWithShared() {
+  const local = loadFavouritesAdded();
+  if (!local.length) return;
+  try {
+    const res = await fetchWithTimeout("data/precache-config.json");
+    if (!res.ok) return;
+    const config = await res.json();
+    const shared = new Set(
+      [...(config.weatherFavourites || []), ...(config.fishingFavourites || [])]
+        .map(f => String(f.outcode || "").toUpperCase())
+    );
+    // A list with nothing in it at all is more likely a bad read than a
+    // genuine "everything was deleted" - leave things alone rather than
+    // wipe every slot on a fluke.
+    if (!shared.size) return;
+    const kept = local.filter(code => shared.has(String(code).toUpperCase()));
+    if (kept.length !== local.length) {
+      saveFavouritesAdded(kept);
+      if (placesList) renderPlacesList();
+    }
+  } catch {
+    // offline or unreadable - leave this device's list as it is
+  }
+}
+syncFavouritesAddedWithShared();
+
 if (rollback) {
   updateSliderFill(rollback);
   updateRollbackRangeDates();
