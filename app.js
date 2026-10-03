@@ -490,9 +490,35 @@ function saveFavouritesAdded(list) {
 // same shape looksLikePostcode already accepts, reduced to just the
 // area part. Deliberately never a full postcode or a plain place name;
 // see the Worker's own comment for why that boundary matters here.
+// The outward code (the part before the space) of whatever was typed:
+// a full postcode ("SA62 3AB", "SA623AB"), a postcode sector ("SA62 3",
+// "SA623"), or just the outward code itself ("SA62", "TA6").
+//
+// Fixed: this used to grab the first 3-4 characters greedily, and the
+// geocoder separately chopped everything to 3 characters - so any
+// 4-character outward code (SA62, BS21, SW1A...) was looked up as a
+// different, shorter one (SA6 = Swansea instead of Pembrokeshire, BS2 =
+// central Bristol instead of Clevedon), and a typed sector like "SA623"
+// wasn't recognised as a postcode at all.
 function outwardCodeOf(input) {
-  const match = String(input || "").replace(/\s+/g, "").toUpperCase().match(/^[A-Z]{1,2}\d[A-Z\d]?/);
-  return match ? match[0] : null;
+  const raw = String(input || "").trim().toUpperCase();
+  const outward = "[A-Z]{1,2}\\d[A-Z\\d]?";
+  // Typed with a space: everything before it is the outward code.
+  const spaced = raw.match(new RegExp(`^(${outward})\\s+\\d([A-Z]{2})?$`));
+  if (spaced) return spaced[1];
+  const s = raw.replace(/\s+/g, "");
+  // Full postcode without a space: the last 3 characters (digit + two
+  // letters) are always the inward code, so the rest is the outward.
+  const full = s.match(new RegExp(`^(${outward})\\d[A-Z]{2}$`));
+  if (full) return full[1];
+  // Outward code + sector digit, no space ("SA623"). Only read this way
+  // when the outward part is unmistakably 4 characters - "BS21" on its
+  // own must stay BS21, not become BS2 + sector 1.
+  const sector = s.match(/^([A-Z]{1,2}\d[A-Z\d])(\d)$/);
+  if (sector && s.length === 5) return sector[1];
+  // Otherwise the whole thing is the outward code (or not a postcode).
+  const whole = s.match(new RegExp(`^(${outward})$`));
+  return whole ? whole[1] : null;
 }
 
 // POSTs one favourite to the shared relay. Returns
@@ -1170,11 +1196,11 @@ async function reverseGeocodeCoords(lat, lon) {
 }
 
 async function geocodePostcode(pc) {
-  // Location is resolved from the first 3 characters of the postcode
-  // (area-level, not the exact address) via postcodes.io's outcode lookup.
-  // Note: some outward codes are 4 characters (e.g. "SW1A"); truncating to
-  // 3 will miss those and the lookup below will fail for them.
-  const areaCode = pc.replace(/\s+/g, "").slice(0, 3);
+  // Location is resolved from the postcode's outward code (area-level,
+  // not the exact address) via postcodes.io's outcode lookup. Was the
+  // first 3 characters regardless, which silently swapped every
+  // 4-character outward code for a different area - see outwardCodeOf.
+  const areaCode = outwardCodeOf(pc) || pc.replace(/\s+/g, "").toUpperCase();
   const res = await fetchWithTimeout(GEOCODE_URL + encodeURIComponent(areaCode));
   if (!res.ok) throw new Error(`Area code "${areaCode}" not found`);
   const data = await res.json();
@@ -1195,7 +1221,9 @@ async function geocodePostcode(pc) {
 // outcode is valid input on its own. Anything that doesn't match this
 // shape is treated as a place name instead.
 function looksLikePostcode(input) {
-  return /^[A-Z]{1,2}\d[A-Z\d]?(\s*\d[A-Z]{2})?$/i.test(input.trim());
+  // The inward part is optional, and so are its two letters - so a
+  // postcode sector ("SA62 3", "SA623") counts too.
+  return /^[A-Z]{1,2}\d[A-Z\d]?(\s*\d([A-Z]{2})?)?$/i.test(input.trim());
 }
 
 // Thrown instead of a plain Error when a plain place name genuinely
