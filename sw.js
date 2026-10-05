@@ -350,7 +350,9 @@
 // the first time the layer is switched on.
 // Bumped to v69: "Save gauge choice" on the map sends the chosen rain
 // gauges through the favourite relay to data/rain-gauge-choice.json.
-const SHELL_CACHE_NAME = "cloude-shell-v69";
+// Bumped to v70: help.html gains a "Rain gauges" section, and its Map
+// section is corrected (no double-tap zoom any more; Cloud listed).
+const SHELL_CACHE_NAME = "cloude-shell-v70";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
