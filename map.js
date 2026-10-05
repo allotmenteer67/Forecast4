@@ -346,8 +346,12 @@ function bandIndexFor(value, thresholds) {
 // what this is for.
 // ---------------------------------------------------------------------
 const MAP_LAYER_TOGGLES_KEY = "forecast-compare:map:layers";
-const MAP_LAYER_IDS = ["rain", "wind", "pressure", "temperature", "cloud"];
-const MAP_LAYER_DEFAULTS = { rain: true, wind: false, pressure: false, temperature: false, cloud: false };
+// "gauges" isn't a weather wash like the other five — it's the
+// Environment Agency rain gauge picker (see the rain-gauges layer
+// further down). It shares this toggle store only so its checkbox
+// gets the same remembered on/off behaviour for free. Off by default.
+const MAP_LAYER_IDS = ["rain", "wind", "pressure", "temperature", "cloud", "gauges"];
+const MAP_LAYER_DEFAULTS = { rain: true, wind: false, pressure: false, temperature: false, cloud: false, gauges: false };
 
 function loadMapLayerToggles() {
   try {
@@ -2377,6 +2381,157 @@ async function refreshSavedPlacesForMap() {
   renderMap();
 }
 
+// ---------------------------------------------------------------------
+// Rain gauges (Environment Agency) — choosing which ones count
+//
+// Step 2 of the "real rain actuals" plan (HANDOVER-precis-5.md). The
+// daily collector (scripts/collect-ea-rain.mjs) keeps
+// data/rain-gauges.json up to date: every EA rainfall gauge in England,
+// ID and position only. This layer draws them so you can pick, by eye,
+// the gauges that genuinely share your weather — same side of the
+// hills, same sea breeze — rather than trusting a plain distance.
+//
+// Only drawn at the CLOSEST zoom (index 0): ~1,000 gauges across
+// England would be clutter at any wider view, and the closest view is
+// the only one where valleys and ridges are readable anyway.
+//
+// For now the choice is saved on THIS device only. Sending it to
+// GitHub (so the collector uses it) is the next step, through the
+// favourite relay. The gauge list itself is a same-site file, cached by
+// sw.js's ordinary stale-while-revalidate handler like everything else.
+//
+// Attribution, required for this Open Government Licence data, is shown
+// under the layer toggles whenever the layer is on (updateRainGaugeHint).
+// ---------------------------------------------------------------------
+const RAIN_GAUGES_URL = "data/rain-gauges.json";
+const RAIN_GAUGES_CHOSEN_KEY = "forecast-compare:rainGauges:chosen";
+const RAIN_GAUGE_ZOOM_INDEX = 0;
+const RAIN_GAUGE_ATTRIBUTION = "This uses Environment Agency rainfall data from the real-time data API (Beta).";
+
+let mapRainGauges = null;          // [{ id, lat, lon }] once loaded
+let rainGaugesLoadState = "idle";  // idle | loading | loaded | failed
+let mapRainGaugeHitboxes = [];
+
+function loadChosenRainGauges() {
+  try {
+    const raw = localStorage.getItem(RAIN_GAUGES_CHOSEN_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveChosenRainGauges(ids) {
+  try { localStorage.setItem(RAIN_GAUGES_CHOSEN_KEY, JSON.stringify(ids)); } catch {}
+}
+
+function toggleChosenRainGauge(id) {
+  const chosen = loadChosenRainGauges();
+  const next = chosen.includes(id) ? chosen.filter(x => x !== id) : [...chosen, id];
+  saveChosenRainGauges(next.sort());
+}
+
+async function loadRainGauges() {
+  if (rainGaugesLoadState === "loading" || rainGaugesLoadState === "loaded") return;
+  rainGaugesLoadState = "loading";
+  updateRainGaugeHint();
+  try {
+    const res = await fetch(RAIN_GAUGES_URL);
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    mapRainGauges = (data.gauges || [])
+      .filter(g => Array.isArray(g) && typeof g[1] === "number" && typeof g[2] === "number")
+      .map(([id, lat, lon]) => ({ id: String(id), lat, lon }));
+    rainGaugesLoadState = "loaded";
+  } catch {
+    // Not retried in a loop: a failed load says so in the hint line,
+    // and switching the layer off and on again (or reopening the page)
+    // tries once more.
+    rainGaugesLoadState = "failed";
+  }
+  renderMap();
+}
+
+function rainGaugesShowing() {
+  return mapLayerVisible("gauges") && mapZoomIndex === RAIN_GAUGE_ZOOM_INDEX;
+}
+
+// The one line of text under the layer toggles — what to do next, how
+// many are chosen, and the EA attribution. Hidden when the layer is off.
+function updateRainGaugeHint() {
+  const el = document.getElementById("mapGaugeHint");
+  if (!el) return;
+  if (!mapLayerVisible("gauges")) {
+    el.hidden = true;
+    // Switching the layer back on after a failed load tries again.
+    if (rainGaugesLoadState === "failed") rainGaugesLoadState = "idle";
+    return;
+  }
+  let message;
+  if (mapZoomIndex !== RAIN_GAUGE_ZOOM_INDEX) {
+    message = "Zoom right in to see rain gauges.";
+  } else if (rainGaugesLoadState === "failed") {
+    message = "Couldn't load the rain gauge list.";
+  } else if (rainGaugesLoadState !== "loaded") {
+    message = "Loading rain gauges…";
+  } else {
+    const chosen = loadChosenRainGauges();
+    message = chosen.length
+      ? `Tap a gauge to choose or unchoose it. Chosen (${chosen.length}): ${chosen.join(", ")}. Saved on this device for now.`
+      : "Tap a gauge to choose it. None chosen yet, so every gauge within 10 km of home is used.";
+  }
+  const text = `${message} ${RAIN_GAUGE_ATTRIBUTION}`;
+  if (el.textContent !== text) el.textContent = text;
+  el.hidden = false;
+}
+
+registerMapLayer({
+  id: "rain-gauges",
+  draw(ctx, view) {
+    mapRainGaugeHitboxes = [];
+    if (!rainGaugesShowing()) return;
+    if (rainGaugesLoadState !== "loaded") {
+      if (rainGaugesLoadState === "idle") loadRainGauges();
+      return;
+    }
+    const p = mapPalette();
+    const chosen = new Set(loadChosenRainGauges());
+    mapRainGauges.forEach(g => {
+      const x = view.x(g.lon), y = view.y(g.lat);
+      if (x < -20 || x > view.w + 20 || y < -20 || y > view.h + 20) return;
+      const isChosen = chosen.has(g.id);
+      // A small upright cylinder — the shape of a real rain gauge — so
+      // it can't be mistaken for a town (dot), a saved place (triangle)
+      // or a tide spot (circle with a wave). Hollow = available,
+      // filled = chosen; told apart by fill, not colour alone, so it
+      // still works on the High contrast palette.
+      const w = 10, h = 13, top = y - h / 2, left = x - w / 2;
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = isChosen ? p.ink : p.marker;
+      ctx.fillStyle = isChosen ? p.marker : p.land;
+      ctx.beginPath();
+      ctx.moveTo(left, top);
+      ctx.lineTo(left, top + h - 2);
+      ctx.quadraticCurveTo(left, top + h, left + 2, top + h);
+      ctx.lineTo(left + w - 2, top + h);
+      ctx.quadraticCurveTo(left + w, top + h, left + w, top + h - 2);
+      ctx.lineTo(left + w, top);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // Open rim across the top, so it reads as a container.
+      ctx.beginPath();
+      ctx.ellipse(x, top, w / 2, 2, 0, 0, Math.PI * 2);
+      ctx.fillStyle = isChosen ? p.ink : p.land;
+      ctx.fill();
+      ctx.stroke();
+
+      mapRainGaugeHitboxes.push({ x, y, radius: 20, id: g.id });
+    });
+  }
+});
+
 registerMapLayer({
   id: "saved-places",
   draw(ctx, view) {
@@ -2810,6 +2965,8 @@ function updateMapChrome() {
   const hourLabel = document.getElementById("mapHourLabel");
   if (hourLabel) hourLabel.textContent = mapHourClock(mapHourValue());
 
+  updateRainGaugeHint();
+
   const adopt = document.getElementById("mapAdopt");
   if (adopt) {
     // Plain label, no distance. It used to append "(N km out)" so that
@@ -2999,6 +3156,22 @@ if (mapCanvas) {
       // falling through to the ordinary drag-end handling below.
       const rect = mapCanvas.getBoundingClientRect();
       const tapX = e.clientX - rect.left, tapY = e.clientY - rect.top;
+      // Rain gauges checked FIRST, and only while they're showing at
+      // all (closest zoom, layer on): with the layer switched on, the
+      // point of tapping is choosing gauges, so a gauge sitting near a
+      // saved place shouldn't lose the tap to it. Nearest hit wins,
+      // since gauges can sit close together.
+      let hitGauge = null;
+      mapRainGaugeHitboxes.forEach(m => {
+        const d = Math.hypot(m.x - tapX, m.y - tapY);
+        if (d <= m.radius && (!hitGauge || d < hitGauge.d)) hitGauge = { id: m.id, d };
+      });
+      if (hitGauge) {
+        toggleChosenRainGauge(hitGauge.id);
+        renderMap();
+        saveMapCentre(mapCentre);
+        return;
+      }
       const hitMarker = mapSavedPlaceHitboxes.find(m => Math.hypot(m.x - tapX, m.y - tapY) <= m.radius);
       if (hitMarker) {
         goTo(hitMarker.place, { remember: true });

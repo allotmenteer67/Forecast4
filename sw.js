@@ -341,7 +341,14 @@
 // This is also the app's VERSION NUMBER. The number after "-v" is what
 // Settings shows at the bottom ("Cloude version 63"), so bumping it here
 // on every deploy - as always - is the only place it ever needs changing.
-const SHELL_CACHE_NAME = "cloude-shell-v67";
+// Bumped to v68: map.js/map.html gain the Environment Agency rain gauge
+// picker (a "Rain gauges" toggle; markers at the closest zoom; tap to
+// choose, saved on this device for now). data/rain-gauges.json is NOT
+// added to the precache list on purpose — it's written by the daily
+// collector and changes on its own schedule, so it's left to the
+// ordinary stale-while-revalidate fetch handler below, which caches it
+// the first time the layer is switched on.
+const SHELL_CACHE_NAME = "cloude-shell-v68";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

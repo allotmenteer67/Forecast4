@@ -207,7 +207,15 @@
       <label class="check"><input type="checkbox" id="mapLayer_temperature"><span>Temperature</span></label>
       <label class="check"><input type="checkbox" id="mapLayer_pressure"><span>Pressure</span></label>
       <label class="check"><input type="checkbox" id="mapLayer_cloud"><span>Cloud</span></label>
+      <!-- Environment Agency rain gauges — not a weather layer, a picker
+           for which gauges count as "actual" rain. Markers only appear
+           at the closest zoom; see the rain-gauges layer in map.js. -->
+      <label class="check"><input type="checkbox" id="mapLayer_gauges"><span>Rain gauges</span></label>
     </div>
+    <!-- What to do next, how many gauges are chosen, and the EA's
+         required attribution line. Filled in by updateRainGaugeHint()
+         in map.js; hidden whenever the gauge layer is off. -->
+    <p id="mapGaugeHint" hidden style="margin:0.4em 0 0;font-size:0.85em;line-height:1.4;opacity:0.8"></p>
 
     <!-- One row per active colour-wash layer, built by renderMapLegends()
          in map.js — reads the exact same threshold/ramp arrays the
