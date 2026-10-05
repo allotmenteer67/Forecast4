@@ -4810,6 +4810,10 @@ function sheetRenderSunStrip(hourTimes, lowSeries, midSeries, highSeries) {
 // readout lives in the fixed bar above the graph rather than under the
 // finger — the one place guaranteed not to get covered by the hand doing
 // the dragging.
+// Undoes the previous graph's sheet-wide scrub listeners - see the end
+// of attachSheetScrubber.
+let activeSheetScrubCleanup = null;
+
 function attachSheetScrubber({ svg, pts, extraHeight, formatReadout, defaultReadout }) {
   const touchArea = sheetSvgEl("rect", { x: 0, y: 0, width: SHEET_W, height: SHEET_H + extraHeight, class: "graph-touch-area" });
   svg.appendChild(touchArea);
@@ -4849,23 +4853,57 @@ function attachSheetScrubber({ svg, pts, extraHeight, formatReadout, defaultRead
     readoutValue.textContent = defaultReadout.value;
   }
 
+  // The finger can now scrub from anywhere between the top of the graph
+  // and the bottom of the screen, not just on the graph itself - so a
+  // finger held BELOW the graph leaves the whole graph, its times and the
+  // readout bar above it in view. Only sideways movement scrubs: up/down
+  // still scrolls the sheet (touch-action pan-y, set on the sheet while
+  // this graph is showing), exactly as the graph area already behaved.
+  // Buttons and links are left alone. Listeners live on the sheet itself
+  // and remove themselves the moment this graph is replaced - another
+  // condition, or the tide/fishing sheets, which reuse the same sheet
+  // without knowing anything about this.
+  if (activeSheetScrubCleanup) activeSheetScrubCleanup();
+  const sheetEl = svg.closest(".sheet") || svg;
+  const bodyEl = svg.closest("#sheetBody") || sheetEl;
   let dragging = false;
-  touchArea.addEventListener("pointerdown", e => {
+
+  const onDown = e => {
+    if (!svg.isConnected) { cleanup(); return; }
+    if (e.target.closest && e.target.closest("button, a, input, select, textarea, label")) return;
+    if (e.clientY < svg.getBoundingClientRect().top) return;
     dragging = true;
-    touchArea.setPointerCapture(e.pointerId);
+    try { sheetEl.setPointerCapture(e.pointerId); } catch { /* fine without it */ }
     showAt(hourFromClientX(e.clientX));
-  });
-  touchArea.addEventListener("pointermove", e => {
+  };
+  const onMove = e => {
     if (!dragging) return;
     showAt(hourFromClientX(e.clientX));
-  });
-  ["pointerup", "pointercancel", "pointerleave"].forEach(evt => {
-    touchArea.addEventListener(evt, () => {
-      if (!dragging) return;
-      dragging = false;
-      reset();
-    });
-  });
+  };
+  const onEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+    reset();
+  };
+  const endEvents = ["pointerup", "pointercancel", "lostpointercapture"];
+
+  sheetEl.addEventListener("pointerdown", onDown);
+  sheetEl.addEventListener("pointermove", onMove);
+  endEvents.forEach(evt => sheetEl.addEventListener(evt, onEnd));
+  sheetEl.style.touchAction = "pan-y";
+
+  const observer = new MutationObserver(() => { if (!svg.isConnected) cleanup(); });
+  observer.observe(bodyEl, { childList: true, subtree: true });
+
+  function cleanup() {
+    sheetEl.removeEventListener("pointerdown", onDown);
+    sheetEl.removeEventListener("pointermove", onMove);
+    endEvents.forEach(evt => sheetEl.removeEventListener(evt, onEnd));
+    sheetEl.style.touchAction = "";
+    observer.disconnect();
+    if (activeSheetScrubCleanup === cleanup) activeSheetScrubCleanup = null;
+  }
+  activeSheetScrubCleanup = cleanup;
 
   reset();
 }
