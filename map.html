@@ -216,6 +216,10 @@
          required attribution line. Filled in by updateRainGaugeHint()
          in map.js; hidden whenever the gauge layer is off. -->
     <p id="mapGaugeHint" hidden style="margin:0.4em 0 0;font-size:0.85em;line-height:1.4;opacity:0.8"></p>
+    <!-- Shown only when this device's gauge choice differs from what it
+         last saved — sends the whole list through the favourite relay
+         (see saveRainGaugeChoice in map.js). -->
+    <button id="mapGaugeSave" type="button" class="map-adopt map-adopt-compact" hidden style="margin-top:0.4em">Save gauge choice</button>
 
     <!-- One row per active colour-wash layer, built by renderMapLegends()
          in map.js — reads the exact same threshold/ramp arrays the

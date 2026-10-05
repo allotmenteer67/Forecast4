@@ -348,7 +348,9 @@
 // collector and changes on its own schedule, so it's left to the
 // ordinary stale-while-revalidate fetch handler below, which caches it
 // the first time the layer is switched on.
-const SHELL_CACHE_NAME = "cloude-shell-v68";
+// Bumped to v69: "Save gauge choice" on the map sends the chosen rain
+// gauges through the favourite relay to data/rain-gauge-choice.json.
+const SHELL_CACHE_NAME = "cloude-shell-v69";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

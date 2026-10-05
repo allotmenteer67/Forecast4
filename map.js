@@ -2384,7 +2384,7 @@ async function refreshSavedPlacesForMap() {
 // ---------------------------------------------------------------------
 // Rain gauges (Environment Agency) — choosing which ones count
 //
-// Step 2 of the "real rain actuals" plan (HANDOVER-precis-5.md). The
+// Part of the "real rain actuals" plan (HANDOVER-precis-5.md). The
 // daily collector (scripts/collect-ea-rain.mjs) keeps
 // data/rain-gauges.json up to date: every EA rainfall gauge in England,
 // ID and position only. This layer draws them so you can pick, by eye,
@@ -2395,26 +2395,40 @@ async function refreshSavedPlacesForMap() {
 // England would be clutter at any wider view, and the closest view is
 // the only one where valleys and ridges are readable anyway.
 //
-// For now the choice is saved on THIS device only. Sending it to
-// GitHub (so the collector uses it) is the next step, through the
-// favourite relay. The gauge list itself is a same-site file, cached by
-// sw.js's ordinary stale-while-revalidate handler like everything else.
+// Choosing happens on this device first (taps are instant, no network),
+// then "Save gauge choice" sends the complete list through the favourite
+// relay Worker, which writes data/rain-gauge-choice.json in the repo —
+// the file the collector reads. Sending once per decision rather than
+// once per tap keeps it to one commit, not one per tap. An empty list
+// means "back to the default": every gauge within 10 km of home.
+//
+// "Sent" is remembered per device (RAIN_GAUGES_SENT_KEY), and the button
+// only appears when this device's choice differs from what it last
+// sent. It doesn't read the shared file back, so a change saved from a
+// different device won't show here — fine while it's one person's job.
 //
 // Attribution, required for this Open Government Licence data, is shown
 // under the layer toggles whenever the layer is on (updateRainGaugeHint).
 // ---------------------------------------------------------------------
 const RAIN_GAUGES_URL = "data/rain-gauges.json";
 const RAIN_GAUGES_CHOSEN_KEY = "forecast-compare:rainGauges:chosen";
+const RAIN_GAUGES_SENT_KEY = "forecast-compare:rainGauges:sent";
 const RAIN_GAUGE_ZOOM_INDEX = 0;
+// Matches the relay Worker's own limit (GAUGE_CHOICE_MAX).
+const RAIN_GAUGE_CHOICE_MAX = 12;
 const RAIN_GAUGE_ATTRIBUTION = "This uses Environment Agency rainfall data from the real-time data API (Beta).";
 
 let mapRainGauges = null;          // [{ id, lat, lon }] once loaded
 let rainGaugesLoadState = "idle";  // idle | loading | loaded | failed
 let mapRainGaugeHitboxes = [];
+// One-off message from the last tap or save ("Saved…", "At most 12…"),
+// cleared by the next tap so it never lingers past what it describes.
+let rainGaugeNotice = "";
+let rainGaugeSaving = false;
 
-function loadChosenRainGauges() {
+function readGaugeList(key) {
   try {
-    const raw = localStorage.getItem(RAIN_GAUGES_CHOSEN_KEY);
+    const raw = localStorage.getItem(key);
     const list = raw ? JSON.parse(raw) : [];
     return Array.isArray(list) ? list.map(String) : [];
   } catch {
@@ -2422,14 +2436,64 @@ function loadChosenRainGauges() {
   }
 }
 
-function saveChosenRainGauges(ids) {
-  try { localStorage.setItem(RAIN_GAUGES_CHOSEN_KEY, JSON.stringify(ids)); } catch {}
+function writeGaugeList(key, ids) {
+  try { localStorage.setItem(key, JSON.stringify([...ids].sort())); } catch {}
+}
+
+function loadChosenRainGauges() {
+  return readGaugeList(RAIN_GAUGES_CHOSEN_KEY);
+}
+
+function rainGaugeChoicePending() {
+  return JSON.stringify(loadChosenRainGauges()) !== JSON.stringify(readGaugeList(RAIN_GAUGES_SENT_KEY));
 }
 
 function toggleChosenRainGauge(id) {
   const chosen = loadChosenRainGauges();
-  const next = chosen.includes(id) ? chosen.filter(x => x !== id) : [...chosen, id];
-  saveChosenRainGauges(next.sort());
+  if (chosen.includes(id)) {
+    writeGaugeList(RAIN_GAUGES_CHOSEN_KEY, chosen.filter(x => x !== id));
+    rainGaugeNotice = "";
+  } else if (chosen.length >= RAIN_GAUGE_CHOICE_MAX) {
+    rainGaugeNotice = `At most ${RAIN_GAUGE_CHOICE_MAX} gauges can be chosen — unchoose one first.`;
+  } else {
+    writeGaugeList(RAIN_GAUGES_CHOSEN_KEY, [...chosen, id]);
+    rainGaugeNotice = "";
+  }
+}
+
+// Sends the complete choice to the relay. Never throws — the outcome
+// goes into rainGaugeNotice for the hint line to show.
+async function saveRainGaugeChoice() {
+  if (rainGaugeSaving) return;
+  const gauges = loadChosenRainGauges();
+  if (typeof FAVOURITE_RELAY_URL === "undefined" || !FAVOURITE_RELAY_URL) {
+    rainGaugeNotice = "Saving isn't set up — the relay address is missing from app.js.";
+    updateRainGaugeHint();
+    return;
+  }
+  rainGaugeSaving = true;
+  rainGaugeNotice = "";
+  updateRainGaugeHint();
+  try {
+    const res = await fetchWithTimeout(FAVOURITE_RELAY_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(typeof FAVOURITE_RELAY_SECRET !== "undefined" && FAVOURITE_RELAY_SECRET ? { "X-Cloude-App": FAVOURITE_RELAY_SECRET } : {})
+      },
+      body: JSON.stringify({ type: "rainGauges", gauges })
+    }, 15000);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    writeGaugeList(RAIN_GAUGES_SENT_KEY, gauges);
+    rainGaugeNotice = gauges.length
+      ? "Saved. The daily collection uses these from its next run."
+      : "Saved. Back to every gauge within 10 km of home from the next run.";
+  } catch (err) {
+    rainGaugeNotice = `Couldn't save: ${err.message || "no connection"}. Your choice is kept here — try again later.`;
+  }
+  rainGaugeSaving = false;
+  updateRainGaugeHint();
 }
 
 async function loadRainGauges() {
@@ -2457,34 +2521,54 @@ function rainGaugesShowing() {
   return mapLayerVisible("gauges") && mapZoomIndex === RAIN_GAUGE_ZOOM_INDEX;
 }
 
-// The one line of text under the layer toggles — what to do next, how
-// many are chosen, and the EA attribution. Hidden when the layer is off.
+// The text under the layer toggles — what to do next, what's chosen,
+// whether it's been saved, and the EA attribution — plus the Save
+// button, shown only when there's something unsaved. Both hidden when
+// the layer is off.
 function updateRainGaugeHint() {
   const el = document.getElementById("mapGaugeHint");
+  const saveButton = document.getElementById("mapGaugeSave");
   if (!el) return;
   if (!mapLayerVisible("gauges")) {
     el.hidden = true;
+    if (saveButton) saveButton.hidden = true;
     // Switching the layer back on after a failed load tries again.
     if (rainGaugesLoadState === "failed") rainGaugesLoadState = "idle";
     return;
   }
-  let message;
+  const chosen = loadChosenRainGauges();
+  const pending = rainGaugeChoicePending();
+  const parts = [];
   if (mapZoomIndex !== RAIN_GAUGE_ZOOM_INDEX) {
-    message = "Zoom right in to see rain gauges.";
+    parts.push("Zoom right in to see rain gauges.");
   } else if (rainGaugesLoadState === "failed") {
-    message = "Couldn't load the rain gauge list.";
+    parts.push("Couldn't load the rain gauge list.");
   } else if (rainGaugesLoadState !== "loaded") {
-    message = "Loading rain gauges…";
+    parts.push("Loading rain gauges…");
   } else {
-    const chosen = loadChosenRainGauges();
-    message = chosen.length
-      ? `Tap a gauge to choose or unchoose it. Chosen (${chosen.length}): ${chosen.join(", ")}. Saved on this device for now.`
-      : "Tap a gauge to choose it. None chosen yet, so every gauge within 10 km of home is used.";
+    parts.push(chosen.length ? "Tap a gauge to choose or unchoose it." : "Tap a gauge to choose it.");
   }
-  const text = `${message} ${RAIN_GAUGE_ATTRIBUTION}`;
+  parts.push(chosen.length
+    ? `Chosen (${chosen.length}): ${chosen.join(", ")}.`
+    : "None chosen, so every gauge within 10 km of home is used.");
+  if (rainGaugeNotice) parts.push(rainGaugeNotice);
+  else if (pending && !rainGaugeSaving) parts.push("Not saved yet.");
+  parts.push(RAIN_GAUGE_ATTRIBUTION);
+  const text = parts.join(" ");
   if (el.textContent !== text) el.textContent = text;
   el.hidden = false;
+
+  if (saveButton) {
+    saveButton.hidden = !pending && !rainGaugeSaving;
+    saveButton.disabled = rainGaugeSaving;
+    saveButton.textContent = rainGaugeSaving ? "Saving…" : "Save gauge choice";
+  }
 }
+
+document.getElementById("mapGaugeSave")?.addEventListener("click", e => {
+  e.currentTarget.blur(); // same iOS stuck-focus habit as the zoom buttons
+  saveRainGaugeChoice();
+});
 
 registerMapLayer({
   id: "rain-gauges",
