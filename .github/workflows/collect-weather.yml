@@ -32,5 +32,15 @@ jobs:
           git config user.name "forecast-compare-bot"
           git config user.email "actions@users.noreply.github.com"
           git add data/history.json
-          git diff --staged --quiet || git commit -m "Update weather history"
-          git push
+          # Only exists once the EA gauge list has been fetched successfully.
+          if [ -f data/rain-gauges.json ]; then git add data/rain-gauges.json; fi
+          git diff --staged --quiet && exit 0
+          git commit -m "Update weather history"
+          # Precache now pushes every 20 minutes, so this push can collide
+          # with it — pull the latest and try again rather than fail.
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase && git push; then exit 0; fi
+            echo "Push attempt $attempt failed, retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
