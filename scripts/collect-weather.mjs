@@ -65,6 +65,7 @@ const MODELS = [
 // out at the top of build-elevation.mjs.
 import fs from "node:fs/promises";
 import { fetchAviationActual } from "./collect-aviation.mjs";
+import { fetchGaugeRain, mergeGaugesIntoHistory } from "./collect-ea-rain.mjs";
 
 function isoDate(date) {
   return date.toISOString().slice(0, 10);
@@ -307,6 +308,18 @@ async function main() {
     console.warn(`Aviation collection failed, continuing without it: ${err}`);
   }
 
+  // Environment Agency rain gauges — measured rain from real gauges near
+  // home (and any chosen on the map), stored alongside the archive's
+  // model-based rain. Collection only: nothing scores against it yet. See
+  // collect-ea-rain.mjs for the full reasoning. Own try/catch, same as
+  // aviation above: an EA outage must never break the daily collection.
+  let gaugeByDate = {};
+  try {
+    ({ byDate: gaugeByDate } = await fetchGaugeRain(lat, lon, start, end));
+  } catch (err) {
+    console.warn(`Rain gauge collection failed, continuing without it: ${err}`);
+  }
+
   const history = await loadExistingHistory();
 
   for (const date of Object.keys(actualByDate)) {
@@ -326,6 +339,9 @@ async function main() {
       history.days[date].aviation = aviationByDate[date];
     }
   }
+
+  // After the loop above, so every date in this window already exists.
+  mergeGaugesIntoHistory(history, gaugeByDate);
 
   // Roll off anything older than the cap.
   const allDates = Object.keys(history.days).sort();
