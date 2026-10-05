@@ -39,14 +39,14 @@ jobs:
   precache:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Check out the CURRENT tip of main, not the commit that existed
           # when this run was queued - matters when this run had to wait
           # behind another one (see concurrency above).
           ref: main
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
 

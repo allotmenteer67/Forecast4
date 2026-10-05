@@ -50,11 +50,11 @@ jobs:
     # trigger (no workflow_run info attached) always proceeds normally.
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Build forecast.json
         run: node scripts/build-forecast-feed.mjs

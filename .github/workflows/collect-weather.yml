@@ -14,11 +14,15 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v5 of checkout and setup-node run on Node 24 themselves, which
+      # clears GitHub's "Node.js 20 is deprecated" warning. node-version
+      # below is separate: it's the Node our own scripts run on (24, the
+      # current long-term-support line).
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Fetch and merge weather data
         env:
