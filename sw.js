@@ -352,7 +352,10 @@
 // gauges through the favourite relay to data/rain-gauge-choice.json.
 // Bumped to v70: help.html gains a "Rain gauges" section, and its Map
 // section is corrected (no double-tap zoom any more; Cloud listed).
-const SHELL_CACHE_NAME = "cloude-shell-v70";
+// Bumped to v71: style.css stops the tide/fishing cards (and headline
+// cells) staying in their "hovered" colour after a tap, swipe or refresh
+// on iPhone/iPad — hover styles now only apply to real pointers.
+const SHELL_CACHE_NAME = "cloude-shell-v71";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

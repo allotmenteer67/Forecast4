@@ -755,9 +755,28 @@ header p {
    both go back to the plain native click handling every other
    headline cell already uses. */
 
-.tide-row:hover,
+/* Press feedback only while a finger is actually down (:active), plus
+   a hover look ONLY on devices with a real pointer. iOS treats the last
+   tapped element as "hovered" and keeps it that way until something
+   else is tapped — so a plain :hover rule left whichever card had just
+   been tapped, swiped or refreshed stuck in this cream colour, and the
+   cream L/H badges (.tide-event-type) vanished into it. Same fix for
+   the headline cells below. */
+/* Explicitly cancels the generic button:hover colour (dark accent) for
+   touch screens, which would otherwise take over now that the rule
+   below no longer applies there. */
+.tide-row:hover {
+  background: none;
+}
+
 .tide-row:active {
   background: var(--accent-light);
+}
+
+@media (hover: hover) {
+  .tide-row:hover {
+    background: var(--accent-light);
+  }
 }
 
 /* Kept for the Loading / Not available states, which are still a single
@@ -852,9 +871,21 @@ header p {
   font-weight: 800;
 }
 
-.headline-cell:hover,
+/* Explicitly cancels the generic button:hover colour (dark accent) for
+   touch screens, which would otherwise take over now that the rule
+   below no longer applies there. */
+.headline-cell:hover {
+  background: var(--accent-light);
+}
+
 .headline-cell:active {
   background: rgba(255, 255, 255, .5);
+}
+
+@media (hover: hover) {
+  .headline-cell:hover {
+    background: rgba(255, 255, 255, .5);
+  }
 }
 
 /* Frost risk — a plain colour tint, deliberately no icon or text (see
@@ -864,9 +895,18 @@ header p {
   background: #e3f0fa;
 }
 
-.headline-cell-frost:hover,
+.headline-cell-frost:hover {
+  background: #e3f0fa;
+}
+
 .headline-cell-frost:active {
   background: #d3e6f5;
+}
+
+@media (hover: hover) {
+  .headline-cell-frost:hover {
+    background: #d3e6f5;
+  }
 }
 
 .headline-label {
