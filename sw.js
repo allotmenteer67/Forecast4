@@ -388,7 +388,12 @@
 // Bumped to v83: no code change — forces phones to fetch fresh copies of
 // every file, so a re-uploaded sunvis.js (missed from v81) is picked up
 // rather than the old copy staying in the cache.
-const SHELL_CACHE_NAME = "cloude-shell-v83";
+// Bumped to v84: new Coast map page (coast.html/coast.js, added to
+// SHELL_FILES below), opened from the callout screen's Coast map button.
+// The coast data under data/coast/ goes in the long-lived geo cache (see
+// isGeoDataRequest) so a map viewed once stays available offline across
+// app updates.
+const SHELL_CACHE_NAME = "cloude-shell-v84";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -406,6 +411,8 @@ const SHELL_FILES = [
   "callout.html",
   "callout.js",
   "sunvis.js",
+  "coast.html",
+  "coast.js",
   "mapstrip3.js",
   "app.js",
   "settings.js",
@@ -441,6 +448,10 @@ const GEO_DATA_FILES = [
 ];
 
 function isGeoDataRequest(pathname) {
+  // Coast map data (LIDAR tiles, names, ways off) changes only when the
+  // coast workflows are re-run, so it lives with the geo data and
+  // survives app updates. Still refreshed in the background when online.
+  if (pathname.includes("/data/coast/")) return true;
   return GEO_DATA_FILES.some(file => pathname.endsWith("/" + file));
 }
 
