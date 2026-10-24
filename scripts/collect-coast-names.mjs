@@ -42,12 +42,22 @@ import os from "node:os";
 // ---- The stretch of coast ----
 const COAST_AREA = {
   id: "stbrides",
-  label: "St Brides Bay — Skomer to Newgale",
+  label: "St Brides Bay — Newgale to Dale, with Skomer and Skokholm",
   south: 51.70,
   west: -5.36,
   north: 51.87,
   east: -5.05
 };
+// The download box above is a simple rectangle, which also catches the
+// north side of the bay (Solva to Ramsey, St Davids' patch) and the
+// inside of Milford Haven east of Dale. Everything is trimmed to this
+// outline instead: Newgale round the bay, Skomer and Skokholm, the
+// Marloes peninsula, and down to Dale. [lat, lon] corners.
+const COAST_OUTLINE = [
+  [51.875, -5.140], [51.875, -5.050], [51.735, -5.050], [51.735, -5.150],
+  [51.690, -5.150], [51.690, -5.360], [51.835, -5.360], [51.835, -5.140]
+];
+
 // Names further than this from the coastline are left out (farms and
 // inland hamlets aren't useful for describing a position at sea).
 const MAX_DISTANCE_FROM_COAST_M = 800;
@@ -105,6 +115,46 @@ function distanceToLinesM(lat, lon, lines) {
 function insideBox(lat, lon) {
   return lat >= COAST_AREA.south && lat <= COAST_AREA.north && lon >= COAST_AREA.west && lon <= COAST_AREA.east;
 }
+
+// Inside COAST_OUTLINE (standard ray-casting test).
+function insideArea(lat, lon) {
+  if (!insideBox(lat, lon)) return false;
+  let inside = false;
+  for (let i = 0, j = COAST_OUTLINE.length - 1; i < COAST_OUTLINE.length; j = i++) {
+    const [yi, xi] = COAST_OUTLINE[i], [yj, xj] = COAST_OUTLINE[j];
+    if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+const lineInsideArea = line => line.some(p => insideArea(p.lat, p.lon));
+
+// Many coastal features come from OS as a catch-all type ("Other
+// landform", "Other"), and some OSM rocks and headlands are tagged as
+// a "locality". Their names usually say what they are, in English or
+// Welsh, so the name decides the group in those cases. Checked in this
+// order, so "Ynys" wins over "Pen", "Rock" over "Head" and so on.
+const NAME_HINTS = [
+  [/\b(ynys|island|isle|holm)\b|holm$/i, "Islands and islets"],
+  [/\b(ogof|cave|caves|twll|hole|holes|leap|arch)\b/i, "Arches, caves and chasms"],
+  [/\b(landing|dock|slip|quay|jetty)\b/i, "Landing places"],
+  [/\b(rock|rocks|rk|carreg|careg|maen|meini|stack|stacks|stacen|stone|stones|ledge|ledges|llech|bitches|reef)\b/i, "Rocks and reefs"],
+  [/\b(point|head|nab|ness|trwyn|trwynmynachdy|pen|pentir|penrhyn|chins?|horn|nose)\b|^trwyn|^pen/i, "Headlands and points"],
+  [/\b(bay|haven|cove|porth|wick|pwll|pill|sound|roads|reach|mouth|gully|inlet|harbour|cwm)\b/i, "Bays, coves and sounds"],
+  [/\b(sands|beach|traeth)\b/i, "Beaches"],
+  [/\b(cliff|cliffs|clogwyn)\b/i, "Cliffs"]
+];
+const CATCH_ALL_KINDS = new Set(["Other", "Other landforms", "Water features"]);
+function hintedKind(name, baseKind) {
+  for (const [re, kind] of NAME_HINTS) if (re.test(name)) return kind;
+  return baseKind;
+}
+
+// OS names that aren't useful for describing a position on the coast.
+// OS_SKIP is matched against OS's own type for the name; OS_SKIP_NAME
+// against the name itself (kept short so "Driftwood Beach" or the
+// hamlet "Wood" aren't caught).
+const OS_SKIP = /school|education|college|hospital|surgery|cemetery|police|fire station|leisure|sport|golf|retail|business|industrial|terminal|woodland|forest/i;
+const OS_SKIP_NAME = /\b(school|college|hospital|terminal)\b/i;
 
 function round5(x) { return Math.round(x * 1e5) / 1e5; }
 
@@ -265,12 +315,13 @@ function osmKind(tags) {
   if (nat === "bay" || nat === "strait") return "Bays, coves and sounds";
   if (nat === "beach" || nat === "sand" || nat === "shingle") return "Beaches";
   if (["rock", "stone", "bare_rock", "reef", "shoal"].includes(nat)) return "Rocks and reefs";
-  if (nat === "arch" || nat === "cave_entrance") return "Arches and caves";
+  if (nat === "arch" || nat === "cave_entrance") return "Arches, caves and chasms";
   if (nat === "cliff") return "Cliffs";
   if (place === "island" || place === "islet") return "Islands and islets";
   if (["village", "hamlet", "locality", "isolated_dwelling"].includes(place)) return "Villages and places";
   if (mm) return "Landmarks";
-  if (tags["seamark:type"]) return "Rocks and reefs";
+  const sm = tags["seamark:type"];
+  if (sm) return /^(rock|obstruction|wreck)$/.test(sm) ? "Rocks and reefs" : "Landmarks";
   return "Other";
 }
 
@@ -331,17 +382,21 @@ async function fetchOsNames() {
       const f = parseCsvLine(line);
       if (f[0] === "ID") continue; // in case a header row is ever added
       const type = f[OS_COLS.TYPE];
-      if (type === "transportNetwork" || type === "other" && /postcode/i.test(f[OS_COLS.LOCAL_TYPE])) continue;
+      const localType = f[OS_COLS.LOCAL_TYPE] || "";
+      if (type === "transportNetwork" || type === "landcover") continue;
+      if (type === "other" && /postcode/i.test(localType)) continue;
+      if (OS_SKIP.test(localType) || OS_SKIP_NAME.test(f[OS_COLS.NAME1])) continue;
       const E = Number(f[OS_COLS.X]), N = Number(f[OS_COLS.Y]);
       if (!Number.isFinite(E) || !Number.isFinite(N)) continue;
       const { lat, lon } = bngToWgs84(E, N);
-      if (!insideBox(lat, lon)) continue;
+      if (!insideArea(lat, lon)) continue;
       const alt = [];
       if (f[OS_COLS.NAME2]) alt.push(f[OS_COLS.NAME2]);
+      const baseKind = osKind(type, localType);
       results.push({
         name: f[OS_COLS.NAME1],
         alt,
-        kind: osKind(type, f[OS_COLS.LOCAL_TYPE]),
+        kind: CATCH_ALL_KINDS.has(baseKind) ? hintedKind(f[OS_COLS.NAME1], baseKind) : baseKind,
         detail: f[OS_COLS.LOCAL_TYPE] || type,
         lat, lon,
         sources: ["OS"]
@@ -377,13 +432,13 @@ async function main() {
 
   // Coastline, beaches, cliffs
   const coastline = osm.filter(e => e.type === "way" && e.tags && e.tags.natural === "coastline").flatMap(elementLines);
-  const beachEls = osm.filter(e => e.tags && e.tags.natural === "beach" && e.type !== "node");
+  const beachEls = osm.filter(e => e.tags && e.tags.natural === "beach" && e.type !== "node" && elementLines(e).some(lineInsideArea));
   const beaches = beachEls.map(e => ({
     name: e.tags.name || null,
     outline: elementLines(e).map(l => l.map(p => [round5(p.lat), round5(p.lon)]))
   })).filter(b => b.outline.length);
   const beachLines = beachEls.flatMap(elementLines);
-  const cliffs = osm.filter(e => e.type === "way" && e.tags && e.tags.natural === "cliff")
+  const cliffs = osm.filter(e => e.type === "way" && e.tags && e.tags.natural === "cliff" && lineInsideArea(e.geometry.filter(Boolean)))
     .map(e => ({ name: e.tags.name || null, line: e.geometry.filter(Boolean).map(p => [round5(p.lat), round5(p.lon)]) }));
 
   if (!coastline.length) problems.push("No coastline found in OpenStreetMap, so names couldn't be filtered by distance from the shore — every name in the area is listed.");
@@ -397,13 +452,18 @@ async function main() {
     if (!name) continue;
     if (t.highway) continue; // named paths/tracks aren't positions
     const pt = elementPoint(el);
-    if (!pt || !insideBox(pt.lat, pt.lon)) continue;
+    if (!pt || !insideArea(pt.lat, pt.lon)) continue;
     const alt = [t["name:cy"], t["name:en"], t.alt_name, t.old_name, t.loc_name, t["seamark:name"]]
       .filter(Boolean).flatMap(v => String(v).split(";")).map(s => s.trim()).filter(s => s && s !== name);
     osmNames.push({
       name,
       alt: [...new Set(alt)],
-      kind: osmKind(t),
+      kind: (() => {
+        const base = osmKind(t);
+        // OSM "locality" is often a rock or headland; let the name decide.
+        if (t.place === "locality" || t.place === "isolated_dwelling" || base === "Other") return hintedKind(name, base);
+        return base;
+      })(),
       detail: t.natural || t.place || t.man_made || t["seamark:type"] || t.leisure || "",
       lat: pt.lat, lon: pt.lon,
       sources: ["OSM"]
@@ -463,7 +523,7 @@ async function main() {
     const t = el.tags || {};
     if (t.leisure === "slipway") {
       const pt = elementPoint(el);
-      if (pt) access.push({ kind: "slipway", name: t.name || null, lat: round5(pt.lat), lon: round5(pt.lon) });
+      if (pt && insideArea(pt.lat, pt.lon)) access.push({ kind: "slipway", name: t.name || null, lat: round5(pt.lat), lon: round5(pt.lon) });
       continue;
     }
     if (el.type !== "way" || !t.highway || !beachLines.length) continue;
@@ -473,7 +533,7 @@ async function main() {
       const d = distanceToLinesM(p.lat, p.lon, beachLines);
       if (d < bestD) { bestD = d; best = p; }
     }
-    if (best && bestD <= PATH_TO_BEACH_M) {
+    if (best && bestD <= PATH_TO_BEACH_M && insideArea(best.lat, best.lon)) {
       access.push({
         kind: t.highway === "steps" ? "steps" : "path",
         name: t.name || null,
@@ -507,7 +567,7 @@ async function main() {
   const groups = {};
   for (const n of names) (groups[n.kind] ||= []).push(n);
   const order = ["Headlands and points", "Bays, coves and sounds", "Beaches", "Rocks and reefs", "Islands and islets",
-    "Arches and caves", "Cliffs", "Landmarks", "Villages and places", "Other landforms", "Water features", "Local names", "Other"];
+    "Landing places", "Arches, caves and chasms", "Cliffs", "Landmarks", "Villages and places", "Other landforms", "Water features", "Local names", "Other"];
   const kinds = [...order.filter(k => groups[k]), ...Object.keys(groups).filter(k => !order.includes(k))];
   let md = `# ${COAST_AREA.label} — names found\n\n`;
   md += `Built ${new Date().toISOString().slice(0, 10)}. ${names.length} names, north to south within each group. `;
