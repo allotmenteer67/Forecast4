@@ -324,12 +324,16 @@ function importBackupText(jsonText) {
 // (Cloud's three bands/Sunshine/UV are unitless/universal either way, so
 // they're left out rather than offering a toggle that does nothing).
 const CONDITION_UNITS_KEY = "forecast-compare:conditionUnits";
-const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure"];
+// visibility added v81: km or miles. It has no CONFIG.conditions entry
+// (it isn't a scored condition), so Settings names its row from
+// UNIT_ROW_NAMES in settings.js instead.
+const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure", "visibility"];
 const DEFAULT_CONDITION_UNITS = {
   rain: "metric", // mm
   temperature: "metric", // °C
   wind: "imperial", // mph
-  pressure: "metric" // hPa
+  pressure: "metric", // hPa
+  visibility: "metric" // km
   // soilTemperature and dewPoint deliberately not listed — see
   // conditionUnit(), which redirects them to Temperature's own setting.
 };
@@ -341,6 +345,7 @@ const CONDITION_UNIT_LABELS = {
   wind: { metric: "km/h", imperial: "mph" },
   temperature: { metric: "°C", imperial: "°F" },
   pressure: { metric: "hPa", imperial: "inHg" },
+  visibility: { metric: "km", imperial: "miles" },
   sunshine: { metric: "hrs", imperial: "hrs" },
   uv: { metric: "index", imperial: "index" },
   soilTemperature: { metric: "°C", imperial: "°F" },
@@ -3376,6 +3381,10 @@ function median(values) {
 const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Press", feelsLike: "Feels" };
 
 const HEADLINE_CELL_ICONS = {
+  // Half sun on the horizon with up/down ticks: sunrise and sunset.
+  sun: '<svg viewBox="0 0 18 18" fill="none"><path d="M4.5 12 a4.5 4.5 0 0 1 9 0" stroke="currentColor" stroke-width="1.4"/><line x1="1.5" y1="12" x2="16.5" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M7 15 L9 16.5 L11 15" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 4 L9 2.5 L11 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  // An eye: visibility.
+  visibility: '<svg viewBox="0 0 18 18" fill="none"><path d="M1.5 9 C4 4.5 14 4.5 16.5 9 C14 13.5 4 13.5 1.5 9 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="9" cy="9" r="2.3" stroke="currentColor" stroke-width="1.4"/></svg>',
   rain: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
   temperature: '<svg viewBox="0 0 18 18" fill="none"><line x1="9" y1="3" x2="9" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13" r="2.3" stroke="currentColor" stroke-width="1.4"/></svg>',
   wind: '<svg viewBox="0 0 18 18" fill="none"><path d="M2 6 h8 a2 2 0 1 0 -2 -2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 10 h11 a2 2 0 1 1 -2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 14 h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
@@ -3392,7 +3401,10 @@ const HEADLINE_CELL_ICONS = {
 };
 
 const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
-const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "feelsLike", "tide", "fishing"];
+// "sun" (sunrise / sunset) and "visibility" added v81 — like tide and
+// fishing they aren't scored weather conditions; their cells are built by
+// sunvis.js (see the branch in renderHeadline).
+const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "feelsLike", "sun", "visibility", "tide", "fishing"];
 const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
 const DEFAULT_HEADLINE_TOGGLES = {
   pressure: true,
@@ -3400,6 +3412,8 @@ const DEFAULT_HEADLINE_TOGGLES = {
   soilTemperature: false,
   dewPoint: false,
   feelsLike: false,
+  sun: false,
+  visibility: false,
   tide: false,
   fishing: false
 };
@@ -4190,6 +4204,17 @@ function renderHeadline() {
     // no entry for either one, and reaching the CONFIG.conditions[...]
     // lookup below for either would throw and break this entire loop.
     if (conditionName === "tide" || conditionName === "fishing") return;
+
+    // Sunrise/sunset and Visibility: own data, own cell builder in
+    // sunvis.js (loaded after this file, hence the guard). Same reason as
+    // tide/fishing above: no CONFIG.conditions entry to look up.
+    if (conditionName === "sun" || conditionName === "visibility") {
+      if (typeof buildSunVisHeadlineCell === "function") {
+        const extraCell = buildSunVisHeadlineCell(conditionName);
+        if (extraCell) headlineGrid.appendChild(extraCell);
+      }
+      return;
+    }
 
     const cell = document.createElement("button");
     cell.type = "button";

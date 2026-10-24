@@ -226,11 +226,17 @@ if (importButton) {
 // one). Laid out as short rows in a 2-column grid rather than a full
 // bordered fieldset per condition, so this doesn't turn into a long
 // scroll as more conditions gain a unit choice.
+// Unit choices for things that aren't scored weather conditions (and so
+// have no CONFIG.conditions entry to take a name from).
+const UNIT_ROW_NAMES = {
+  visibility: "Visibility"
+};
 const unitFieldsets = document.getElementById("conditionUnits");
 if (unitFieldsets) {
   const units = loadConditionUnits();
   CONDITION_UNIT_TOGGLES.forEach(conditionName => {
     const conditionData = CONFIG.conditions[conditionName];
+    const rowName = UNIT_ROW_NAMES[conditionName] || (conditionData && conditionData.name) || conditionName;
     const current = units[conditionName] || DEFAULT_CONDITION_UNITS[conditionName];
 
     const row = document.createElement("div");
@@ -238,7 +244,7 @@ if (unitFieldsets) {
 
     const name = document.createElement("span");
     name.className = "unit-row-name";
-    name.textContent = conditionData.name;
+    name.textContent = rowName;
     row.appendChild(name);
 
     const toggle = document.createElement("div");
@@ -288,7 +294,9 @@ if (unitFieldsets) {
 const HEADLINE_TOGGLE_LABELS = {
   tide: "Tide",
   fishing: "Fishing",
-  cloud: "Cloud"
+  cloud: "Cloud",
+  sun: "Sunrise & sunset",
+  visibility: "Visibility"
 };
 
 const headlineToggleList = document.getElementById("headlineToggles");
