@@ -363,7 +363,13 @@
 // layer checkboxes and hour slider stay visible on an iPad.
 // Bumped to v75: fixes v74's map fitting setting off a chain of
 // "ResizeObserver loop" notices in the red crash banner on iPad.
-const SHELL_CACHE_NAME = "cloude-shell-v75";
+// Bumped to v76: the install step now fetches every shell file fresh
+// from the server (cache: "reload"), bypassing the browser's own HTTP
+// cache. GitHub Pages tells browsers they may reuse a file for up to
+// 10 minutes, so an update opened soon after uploading could install
+// the NEW version number with some OLD files still inside it — which
+// is how v75 showed in Settings while still running v74's map.js.
+const SHELL_CACHE_NAME = "cloude-shell-v76";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -420,7 +426,7 @@ self.addEventListener("install", event => {
   event.waitUntil(
     (async () => {
       const shellCache = await caches.open(SHELL_CACHE_NAME);
-      await shellCache.addAll(SHELL_FILES);
+      await shellCache.addAll(SHELL_FILES.map(file => new Request(file, { cache: "reload" })));
 
       // Only populate the geo cache if it doesn't exist yet under its
       // current name — a plain shell deploy (GEO_CACHE_NAME unchanged)
@@ -432,7 +438,7 @@ self.addEventListener("install", event => {
       const hasGeoCache = await caches.has(GEO_CACHE_NAME);
       if (!hasGeoCache) {
         const geoCache = await caches.open(GEO_CACHE_NAME);
-        await geoCache.addAll(GEO_DATA_FILES);
+        await geoCache.addAll(GEO_DATA_FILES.map(file => new Request(file, { cache: "reload" })));
       }
 
       await self.skipWaiting();
