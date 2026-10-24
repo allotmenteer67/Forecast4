@@ -166,6 +166,21 @@ function saveCachePart(spot, part, data) {
   writeJson(CALLOUT_CACHE_KEY, { [key]: entry });
 }
 
+// ---- Beaufort scale ----
+// Mean wind (not gusts), standard UK Met Office bands in mph.
+const BEAUFORT = [
+  [1, "Calm"], [4, "Light air"], [8, "Light breeze"], [13, "Gentle breeze"],
+  [19, "Moderate breeze"], [25, "Fresh breeze"], [32, "Strong breeze"],
+  [39, "Near gale"], [47, "Gale"], [55, "Severe gale"], [64, "Storm"],
+  [73, "Violent storm"], [Infinity, "Hurricane force"]
+];
+function beaufortFor(mph) {
+  for (let force = 0; force < BEAUFORT.length; force++) {
+    if (mph < BEAUFORT[force][0]) return { force, name: BEAUFORT[force][1] };
+  }
+  return { force: 12, name: "Hurricane force" };
+}
+
 // ---- Wind box ----
 function renderWind(entry, units) {
   const box = calloutEl("calloutWind");
@@ -196,7 +211,11 @@ function renderWind(entry, units) {
 
   const gustMph = h.wind_gusts_10m[idx];
   const gustClass = gustMph >= 30 ? "hot" : gustMph >= 20 ? "warm" : "";
-  box.innerHTML = boxHtml("Wind",
+  // Force 6 (strong breeze) and up in amber, gale force and up in red.
+  const bf = beaufortFor(h.wind_speed_10m[idx]);
+  const bfClass = bf.force >= 8 ? "hot" : bf.force >= 6 ? "warm" : "";
+  const windLabel = `Wind<span class="label-right ${bfClass}">Force ${bf.force} · ${bf.name}</span>`;
+  box.innerHTML = boxHtml(windLabel,
     `<span class="big">${speed}</span><span class="unit">${unit} ${dir}</span>` +
     `<span class="push unit">Gusts</span><span class="big ${gustClass}">${gust}</span>`,
     trend);

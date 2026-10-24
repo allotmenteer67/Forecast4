@@ -375,7 +375,9 @@
 // SHELL_FILES below), a "Show Callout button" tick box in Settings, the
 // Callout button and callout-mode redirect on the front page, and a
 // Callout section in Help.
-const SHELL_CACHE_NAME = "cloude-shell-v78";
+// Bumped to v79: callout screen box titles larger; Beaufort force and
+// name added to the Wind box; Help updated to match.
+const SHELL_CACHE_NAME = "cloude-shell-v79";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
