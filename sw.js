@@ -377,7 +377,9 @@
 // Callout section in Help.
 // Bumped to v79: callout screen box titles larger; Beaufort force and
 // name added to the Wind box; Help updated to match.
-const SHELL_CACHE_NAME = "cloude-shell-v79";
+// Bumped to v80: sunrise, sunset and visibility line on the front page
+// under the headline cells (new sunvis.js, added to SHELL_FILES below).
+const SHELL_CACHE_NAME = "cloude-shell-v80";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -394,6 +396,7 @@ const SHELL_FILES = [
   "map.js",
   "callout.html",
   "callout.js",
+  "sunvis.js",
   "mapstrip3.js",
   "app.js",
   "settings.js",
