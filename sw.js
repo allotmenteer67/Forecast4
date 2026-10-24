@@ -355,7 +355,11 @@
 // Bumped to v71: style.css stops the tide/fishing cards (and headline
 // cells) staying in their "hovered" colour after a tap, swipe or refresh
 // on iPhone/iPad — hover styles now only apply to real pointers.
-const SHELL_CACHE_NAME = "cloude-shell-v71";
+// Bumped to v72: larger arrowhead on the front page pressure trend arrow.
+// Bumped to v73: map wind arrows graded by colour (near-black calm to
+// red gale) as well as size, with thicker shafts, proportional heads
+// and an outline; the wind key matches.
+const SHELL_CACHE_NAME = "cloude-shell-v73";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

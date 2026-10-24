@@ -1863,10 +1863,83 @@ const MAP_WIND_ARROW_SPACING_PX = 46;
 // whole point of banding rather than a continuous scale) and covers
 // everything from calm to a genuine severe gale.
 const MAP_WIND_SPEED_THRESHOLDS = [0, 10, 20, 30, 40, 50]; // mph, lower bound per band
-const MAP_WIND_ARROW_LENGTHS = [8, 12, 16, 20, 24, 28]; // px, one per band above
 
-function windArrowLength(speedMph) {
-  return MAP_WIND_ARROW_LENGTHS[bandIndexFor(speedMph, MAP_WIND_SPEED_THRESHOLDS)];
+// Redesigned on request: speed now reads through colour as well as
+// size — near-black for calm, shading through brown-red to bright red
+// for a gale — and every part of the arrow grows with the band, not
+// just its length. Previously every arrow had the same thin shaft and
+// a fixed 8px head, so calm arrows were nearly all head.
+//
+// The size range was then deliberately compressed, also on request:
+// the 50+ band is no bigger than an earlier draft's 40 mph arrow,
+// because big heads on every strong-wind arrow clogged the screen at
+// 46px spacing. Colour does more of the work at the top end instead.
+//
+// One entry per band above. len = whole arrow, tail to tip; shaft =
+// line width; head = head length; half = half the head's width.
+const MAP_WIND_ARROW_STYLES = [
+  { len: 18,   shaft: 1.6,  head: 8,    half: 5 },
+  { len: 22.4, shaft: 1.92, head: 9.2,  half: 5.8 },
+  { len: 26.8, shaft: 2.24, head: 10.4, half: 6.6 },
+  { len: 31.2, shaft: 2.56, head: 11.6, half: 7.4 },
+  { len: 35.6, shaft: 2.88, head: 12.8, half: 8.2 },
+  { len: 40,   shaft: 3.2,  head: 14,   half: 9 }
+];
+
+// Colours per palette. Paper: dark to red on light land. Slate is a
+// dark theme, so its ramp runs the other way in brightness — pale to
+// bright red — with a dark outline instead of a light one. High
+// contrast stays black throughout: that palette exists for anyone who
+// can't rely on colour, so size and thickness carry the speed there.
+const MAP_WIND_COLOURS = {
+  paper: { ramp: ["#3a3632", "#5c3a2c", "#7e3424", "#a32d2d", "#c8271f", "#e81f15"], halo: "rgba(255, 255, 255, 0.75)" },
+  slate: { ramp: ["#d8d6cf", "#e8c0a8", "#f09a7a", "#f47358", "#f8513c", "#ff3b2a"], halo: "rgba(0, 0, 0, 0.45)" },
+  mono:  { ramp: ["#111111", "#111111", "#111111", "#111111", "#111111", "#111111"], halo: "rgba(255, 255, 255, 0.85)" }
+};
+
+function windColours(palette) {
+  return MAP_WIND_COLOURS[palette.id] || MAP_WIND_COLOURS.paper;
+}
+
+function windBand(speedMph) {
+  return bandIndexFor(speedMph, MAP_WIND_SPEED_THRESHOLDS);
+}
+
+// Draws one arrow centred on (cx, cy), pointing along `angle` (radians,
+// clockwise from north). Two passes when a halo colour is given: a
+// wider pale (or dark) copy first as an outline, then the arrow itself,
+// so it stays readable over the rain wash and the hill-shading.
+function drawWindArrow(ctx, cx, cy, angle, style, colour, halo) {
+  const dx = Math.sin(angle), dy = -Math.cos(angle);
+  const px = -dy, py = dx; // perpendicular, for the head's width
+  const tipX = cx + dx * style.len / 2, tipY = cy + dy * style.len / 2;
+  const tailX = cx - dx * style.len / 2, tailY = cy - dy * style.len / 2;
+  const baseX = tipX - dx * style.head, baseY = tipY - dy * style.head;
+  // Shaft stops just inside the head so its round cap doesn't show.
+  const shaftEndX = baseX + dx, shaftEndY = baseY + dy;
+  const headPath = () => {
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(baseX + px * style.half, baseY + py * style.half);
+    ctx.lineTo(baseX - px * style.half, baseY - py * style.half);
+    ctx.closePath();
+  };
+  const passes = halo ? [[halo, 3], [colour, 0]] : [[colour, 0]];
+  passes.forEach(([c, extra]) => {
+    ctx.strokeStyle = c;
+    ctx.fillStyle = c;
+    ctx.lineWidth = style.shaft + extra;
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(shaftEndX, shaftEndY);
+    ctx.stroke();
+    headPath();
+    ctx.fill();
+    if (extra) {
+      ctx.lineWidth = extra;
+      ctx.stroke();
+    }
+  });
 }
 
 // Downwind, not meteorological "from" — matches the headline wind
@@ -1881,49 +1954,22 @@ registerMapLayer({
   id: "wind",
   draw(ctx, view) {
     if (!mapGrid || !mapLayerVisible("wind")) return;
-    const p = mapPalette();
+    const colours = windColours(mapPalette());
     const hour = mapHourValue();
-    ctx.strokeStyle = p.ink;
-    ctx.fillStyle = p.ink;
-    ctx.lineWidth = 1.8;
+    ctx.save();
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     for (let px = MAP_WIND_ARROW_SPACING_PX / 2; px < view.w; px += MAP_WIND_ARROW_SPACING_PX) {
       for (let py = MAP_WIND_ARROW_SPACING_PX / 2; py < view.h; py += MAP_WIND_ARROW_SPACING_PX) {
         const lat = view.lat(py), lon = view.lon(px);
         const speed = sampleGrid(mapGrid, "windSpeed", hour, lat, lon);
         const dir = sampleWindDir(mapGrid, hour, lat, lon);
         if (speed === null || dir === null) continue;
-        const angle = windArrowAngleRad(dir);
-        const len = windArrowLength(speed);
-        const dx = Math.sin(angle), dy = -Math.cos(angle);
-        const x0 = px - dx * len * 0.5, y0 = py - dy * len * 0.5;
-        const x1 = px + dx * len * 0.5, y1 = py + dy * len * 0.5;
-
-        ctx.globalAlpha = 0.8;
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-        ctx.stroke();
-
-        // Bigger head than a typical arrowhead so the direction reads
-        // clearly at map size, even for the shortest (calm) arrows.
-        const headLen = 8;
-        const headAngle = Math.PI / 6;
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(
-          x1 - Math.sin(angle - headAngle) * headLen,
-          y1 + Math.cos(angle - headAngle) * headLen
-        );
-        ctx.lineTo(
-          x1 - Math.sin(angle + headAngle) * headLen,
-          y1 + Math.cos(angle + headAngle) * headLen
-        );
-        ctx.closePath();
-        ctx.fill();
-        ctx.globalAlpha = 1;
+        const band = windBand(speed);
+        drawWindArrow(ctx, px, py, windArrowAngleRad(dir), MAP_WIND_ARROW_STYLES[band], colours.ramp[band], colours.halo);
       }
     }
+    ctx.restore();
   }
 });
 
@@ -2089,7 +2135,6 @@ function renderMapLegends() {
 
     const strip = document.createElement("div");
     strip.className = "map-legend";
-    const svgNS = "http://www.w3.org/2000/svg";
     // Horizontal, not the map's own vertical arrows — a vertical arrow
     // tall enough to show the longest band's real length was taller
     // than the icon box, clipping its own point off. Horizontal gives
@@ -2097,29 +2142,26 @@ function renderMapLegends() {
     // of, and doesn't need to match the compass-direction arrows on the
     // map itself (this key is about relative LENGTH = speed, not
     // direction).
-    const svgW = 44, svgH = 20, cy = 10, startX = 4;
+    // Each key arrow is drawn with the same drawWindArrow() as the map,
+    // at the same size and colour, pointing right — so the key matches
+    // what's on the map exactly. 2x canvas for a crisp result on retina.
+    const keyW = 48, keyH = 22;
+    const colours = windColours(p);
     MAP_WIND_SPEED_THRESHOLDS.forEach((threshold, i) => {
-      const len = MAP_WIND_ARROW_LENGTHS[i];
-      const tipX = startX + len;
       const item = document.createElement("span");
       item.className = "map-legend-item";
 
-      const svg = document.createElementNS(svgNS, "svg");
-      svg.setAttribute("width", String(svgW));
-      svg.setAttribute("height", String(svgH));
-      svg.setAttribute("viewBox", `0 0 ${svgW} ${svgH}`);
-      const line = document.createElementNS(svgNS, "line");
-      line.setAttribute("x1", String(startX)); line.setAttribute("y1", String(cy));
-      line.setAttribute("x2", String(tipX)); line.setAttribute("y2", String(cy));
-      line.setAttribute("stroke", p.ink);
-      line.setAttribute("stroke-width", "1.8");
-      line.setAttribute("stroke-linecap", "round");
-      svg.appendChild(line);
-      const head = document.createElementNS(svgNS, "polygon");
-      head.setAttribute("points", `${tipX + 6},${cy} ${tipX - 1},${cy - 4} ${tipX - 1},${cy + 4}`);
-      head.setAttribute("fill", p.ink);
-      svg.appendChild(head);
-      item.appendChild(svg);
+      const canvas = document.createElement("canvas");
+      canvas.width = keyW * 2;
+      canvas.height = keyH * 2;
+      canvas.style.width = `${keyW}px`;
+      canvas.style.height = `${keyH}px`;
+      const kctx = canvas.getContext("2d");
+      kctx.scale(2, 2);
+      kctx.lineCap = "round";
+      kctx.lineJoin = "round";
+      drawWindArrow(kctx, keyW / 2, keyH / 2, Math.PI / 2, MAP_WIND_ARROW_STYLES[i], colours.ramp[i], null);
+      item.appendChild(canvas);
 
       const label = document.createElement("span");
       label.className = "map-legend-label";

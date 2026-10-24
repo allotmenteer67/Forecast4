@@ -4012,10 +4012,19 @@ function pressureTrendArrowSvg({ delta, hours }) {
   const angle = 15 + (magnitude / 4) * 75; // 15°(barely inclined) .. 90°(vertical)
   const weight = 1.8 + (magnitude / 4) * 2.2; // 1.8 (thin) .. 4 (bold)
   const rotation = per3h >= 0 ? -angle : angle; // negative (CCW) = up-right when rising, positive (CW) = down-right when falling
+  // Arrowhead enlarged on request (was a fixed 5 long x 7.5 tall, which
+  // looked small next to the bolder shafts). Now 8 long, and its height
+  // grows a little with the shaft weight so a bold arrow still has a
+  // head in proportion: 10 tall on the thinnest arrow, 12 on the boldest.
+  // The shaft stops just inside the head's base so its round cap
+  // doesn't poke out either side of the point.
+  const headLen = 8;
+  const headHalf = 4.2 + weight * 0.45; // 5.0 .. 6.0
+  const baseX = 24 - headLen;
   return (
     `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" style="transform: rotate(${rotation}deg)">` +
-    `<line x1="3" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="${weight.toFixed(1)}" stroke-linecap="round"/>` +
-    `<polygon points="19,8.25 24,12 19,15.75" fill="currentColor"/>` +
+    `<line x1="2" y1="12" x2="${baseX + 1}" y2="12" stroke="currentColor" stroke-width="${weight.toFixed(1)}" stroke-linecap="round"/>` +
+    `<polygon points="${baseX},${(12 - headHalf).toFixed(1)} 24,12 ${baseX},${(12 + headHalf).toFixed(1)}" fill="currentColor"/>` +
     `</svg>`
   );
 }
