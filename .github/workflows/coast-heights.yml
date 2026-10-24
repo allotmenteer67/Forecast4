@@ -1,0 +1,57 @@
+# Coast map data, step 2 — run by hand from the Actions tab ("Run
+# workflow"), after coast-data (step 1) has run at least once.
+# Reads the Welsh Government 1 m LIDAR terrain model for St Brides Bay
+# (only the parts needed, straight from its online copy) and saves
+# compact height-and-steepness tiles under data/coast/stbrides/heights/,
+# plus a preview picture. Also checks step 1's ways off the beach against
+# the ground heights. Not scheduled: the survey doesn't change.
+name: coast-heights
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coast-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install map tools
+        run: pip install rasterio numpy pillow
+
+      - name: Build height tiles
+        run: python scripts/build-coast-heights.py
+
+      - name: Commit the height tiles
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data/coast
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Coast data: LIDAR height tiles"
+          # precache-weather pushes every 20 minutes, so retry on a clash.
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase && git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push attempt $attempt failed, retrying…"
+            sleep $((attempt * 10))
+          done
+          echo "Could not push after 5 attempts."
+          exit 1
