@@ -359,7 +359,9 @@
 // Bumped to v73: map wind arrows graded by colour (near-black calm to
 // red gale) as well as size, with thicker shafts, proportional heads
 // and an outline; the wind key matches.
-const SHELL_CACHE_NAME = "cloude-shell-v73";
+// Bumped to v74: the expanded map fits its height to the screen, so the
+// layer checkboxes and hour slider stay visible on an iPad.
+const SHELL_CACHE_NAME = "cloude-shell-v74";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

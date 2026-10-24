@@ -3643,7 +3643,107 @@ mapHourInput?.addEventListener("input", () => {
   });
 });
 
-window.addEventListener("resize", () => { sizeMapCanvas(); renderMap(); });
+// ---------------------------------------------------------------------
+// Fit the map to the screen
+//
+// The map is square by default (aspect-ratio: 1/1 in style.css), which
+// suits a phone held upright. On a wide screen — an iPad, especially
+// in landscape — square meant a map as tall as the page is wide, which
+// pushed the layer checkboxes and the hour slider off the bottom of the
+// screen. So the map's HEIGHT is now fitted: as tall as it can be while
+// everything from the top of the page down to the bottom of the hour
+// slider still fits on one screen — never taller than square, and
+// never shorter than MAP_FIT_MIN_HEIGHT, below which the map itself
+// would be too squashed to use (on a very short screen it scrolls
+// instead, as before).
+//
+// Only the height changes. The map's scale comes from its WIDTH (see
+// makeView), so a shorter map shows the same distance left to right,
+// just less to the north and south — nothing moves or rescales.
+//
+// Re-fitted when the window changes size or the phone/iPad is turned,
+// and whenever something between the map and the slider changes height
+// (a layer's key appearing, the gauge hint, a status line), since that
+// changes how much room is left. Small height-only changes are ignored:
+// iOS Safari's toolbars sliding in and out while scrolling fire resize
+// events too, and refitting on every one of those would make the map
+// twitch as you scroll.
+// ---------------------------------------------------------------------
+const MAP_FIT_MIN_HEIGHT = 300;
+const MAP_FIT_BOTTOM_GAP = 12; // breathing room under the slider, px
+const MAP_FIT_IGNORE_HEIGHT_CHANGE = 120; // px — toolbar slide, not a real resize
+let mapFitLastViewport = { w: 0, h: 0 };
+
+function mapFitBottomElement() {
+  return document.getElementById("mapHour")?.closest(".controls") || null;
+}
+
+function fitMapHeight() {
+  if (!mapCanvas) return false;
+  const bottomEl = mapFitBottomElement();
+  const rect = mapCanvas.getBoundingClientRect();
+  const width = rect.width;
+  if (!width) return false;
+  let target = width; // square, the default
+  if (bottomEl) {
+    const bottom = bottomEl.getBoundingClientRect().bottom;
+    // Everything above the map plus everything below it, down to the
+    // slider — page-scroll-independent, since both rects share an origin.
+    const above = rect.top + window.scrollY;
+    const below = bottom - rect.bottom;
+    const available = window.innerHeight - above - below - MAP_FIT_BOTTOM_GAP;
+    target = Math.max(Math.min(MAP_FIT_MIN_HEIGHT, width), Math.min(width, Math.floor(available)));
+  }
+  const current = rect.height;
+  if (Math.abs(current - target) < 2) return false;
+  // Square needs no override — clearing it hands control back to the
+  // stylesheet's aspect-ratio, exactly as before this existed.
+  mapCanvas.style.height = target >= width ? "" : `${target}px`;
+  return true;
+}
+
+// Fit, then (only if the size actually changed) resize the canvas's
+// pixel buffer and redraw. Skips the redraw while Play is running —
+// same reasoning as the layer toggles below: Play's own next tick
+// redraws at the new size anyway, without competing with it.
+function refitMap() {
+  if (!fitMapHeight()) return;
+  sizeMapCanvas();
+  if (!mapHourPlayTimer) renderMap();
+}
+
+window.addEventListener("resize", () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  const widthChanged = w !== mapFitLastViewport.w;
+  const bigHeightChange = Math.abs(h - mapFitLastViewport.h) >= MAP_FIT_IGNORE_HEIGHT_CHANGE;
+  if (!widthChanged && !bigHeightChange) return;
+  mapFitLastViewport = { w, h };
+  fitMapHeight();
+  sizeMapCanvas();
+  renderMap();
+});
+
+// Everything above the map and everything between it and the slider,
+// watched for size changes — the page header and the buttons row above
+// can change height after the first fit too (a long place name
+// wrapping, for one), not just the keys and hint lines below.
+// ResizeObserver only reports real size changes, and fitMapHeight() is
+// a no-op when the map is already the right height, so a redraw that
+// doesn't change any of these can't set off a loop.
+if (typeof ResizeObserver !== "undefined") {
+  const stage = mapCanvas?.closest(".map-stage");
+  const bottomEl = mapFitBottomElement();
+  if (stage && bottomEl) {
+    const watched = [...stage.parentElement.children].filter(el => el !== stage);
+    const cut = watched.indexOf(bottomEl);
+    const observer = new ResizeObserver(() => refitMap());
+    (cut >= 0 ? watched.slice(0, cut + 1) : watched).forEach(el => observer.observe(el));
+    // Plus the whole page body, for anything outside this column that
+    // shifts the map down after the first fit (a notice banner added
+    // above the page, for instance — seen in testing).
+    observer.observe(document.body);
+  }
+}
 
 // Layer toggle checkboxes — built once from MAP_LAYER_IDS rather than
 // four near-identical listeners, so adding a fifth layer later is one
@@ -3676,6 +3776,8 @@ MAP_LAYER_IDS.forEach(id => {
 });
 
 (async function initMap() {
+  mapFitLastViewport = { w: window.innerWidth, h: window.innerHeight };
+  fitMapHeight();
   sizeMapCanvas();
   renderMap();
 
