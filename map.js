@@ -3724,24 +3724,38 @@ window.addEventListener("resize", () => {
 });
 
 // Everything above the map and everything between it and the slider,
-// watched for size changes — the page header and the buttons row above
-// can change height after the first fit too (a long place name
-// wrapping, for one), not just the keys and hint lines below.
-// ResizeObserver only reports real size changes, and fitMapHeight() is
-// a no-op when the map is already the right height, so a redraw that
-// doesn't change any of these can't set off a loop.
+// watched for size changes — the header and buttons row above can change
+// height after the first fit too, not just the keys and hint lines below.
+//
+// The refit is deferred to the next animation frame rather than done
+// inside the observer callback. Resizing the map from inside the
+// callback changes the layout the observer is in the middle of
+// reporting on, which the browser flags as "ResizeObserver loop
+// completed with undelivered notifications" — harmless in itself, but
+// this page's crash banner (map.html) caught it and displayed it, and
+// the banner pushing the page down made the map refit again, and so on.
+// One refit per frame at most, after layout has settled, avoids that.
+//
+// The page body is deliberately NOT watched: the map's own height
+// change resizes the body, which would just ask for another refit.
+let mapRefitQueued = false;
+function queueRefitMap() {
+  if (mapRefitQueued) return;
+  mapRefitQueued = true;
+  requestAnimationFrame(() => {
+    mapRefitQueued = false;
+    refitMap();
+  });
+}
+
 if (typeof ResizeObserver !== "undefined") {
   const stage = mapCanvas?.closest(".map-stage");
   const bottomEl = mapFitBottomElement();
   if (stage && bottomEl) {
     const watched = [...stage.parentElement.children].filter(el => el !== stage);
     const cut = watched.indexOf(bottomEl);
-    const observer = new ResizeObserver(() => refitMap());
+    const observer = new ResizeObserver(queueRefitMap);
     (cut >= 0 ? watched.slice(0, cut + 1) : watched).forEach(el => observer.observe(el));
-    // Plus the whole page body, for anything outside this column that
-    // shifts the map down after the first fit (a notice banner added
-    // above the page, for instance — seen in testing).
-    observer.observe(document.body);
   }
 }
 

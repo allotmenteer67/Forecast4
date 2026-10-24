@@ -361,7 +361,9 @@
 // and an outline; the wind key matches.
 // Bumped to v74: the expanded map fits its height to the screen, so the
 // layer checkboxes and hour slider stay visible on an iPad.
-const SHELL_CACHE_NAME = "cloude-shell-v74";
+// Bumped to v75: fixes v74's map fitting setting off a chain of
+// "ResizeObserver loop" notices in the red crash banner on iPad.
+const SHELL_CACHE_NAME = "cloude-shell-v75";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

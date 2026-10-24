@@ -18,6 +18,9 @@
     // running either way — it stays invisible unless something genuinely
     // throws.
     window.addEventListener("error", function (e) {
+      // "ResizeObserver loop ..." is a browser notice, not a crash — the
+      // layout simply took more than one pass to settle. Not shown.
+      if (/ResizeObserver loop/.test(e.message || "")) return;
       showPageCrashBanner((e.error && e.error.stack) || e.message || String(e));
     });
     window.addEventListener("unhandledrejection", function (e) {
