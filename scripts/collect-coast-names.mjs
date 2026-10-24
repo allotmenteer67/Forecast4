@@ -471,7 +471,17 @@ async function main() {
   }
 
   // Merge: same name (ignoring case/punctuation) within SAME_FEATURE_M.
-  const norm = s => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  // Ignores case, punctuation, a leading "The", a trailing "Island" and
+  // anything in brackets, so "The Nab Head" / "Nab Head", "Gateholm
+  // Island" / "Gateholm" and "Huntsman's Leap (St Bride's)" /
+  // "Huntsman's Leap" count as the same name when they're close together.
+  const norm = s => s.toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/^the /, "")
+    .replace(/ island$/, "");
   const merged = [];
   for (const item of [...osNames, ...osmNames]) {
     if (!item.name || !nearCoast(item.lat, item.lon)) continue;
