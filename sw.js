@@ -393,7 +393,12 @@
 // The coast data under data/coast/ goes in the long-lived geo cache (see
 // isGeoDataRequest) so a map viewed once stays available offline across
 // app updates.
-const SHELL_CACHE_NAME = "cloude-shell-v84";
+// Bumped to v85: coast map — slider moved to the bottom, big time and
+// tide drawn on the map, Back moved top right, unsurveyed foreshore
+// hatched grey, plain-land shade matched to detailed land.
+// Bumped to v86: coast map laid out like the weather map — buttons
+// above the map, time pill top right, Time slider section below.
+const SHELL_CACHE_NAME = "cloude-shell-v86";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

@@ -42,8 +42,11 @@
       -webkit-text-size-adjust: 100%;
     }
     header { padding: 8px 12px 6px; background: #14161a; }
-    .top { display: flex; align-items: center; gap: 8px; }
-    .title { font-size: 17px; font-weight: 600; }
+    /* Title centred and buttons on the right: on an iPad in a window the
+       system's window dots sit over the top-left corner. */
+    .top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+    .title { font-size: 17px; font-weight: 600; grid-column: 2; }
+    .top-right { grid-column: 3; justify-self: end; }
     button {
       font: inherit; color: #d3d1c7; background: transparent;
       border: 1px solid #5f5e5a; border-radius: 10px; padding: 7px 12px; font-size: 15px;
@@ -51,18 +54,35 @@
     }
     button:active { background: #2a2e34; }
     .push { margin-left: auto; }
-    .tide { font-size: 17px; font-weight: 600; color: #85b7eb; margin-top: 6px; }
-    .tide-sub { font-size: 13px; color: #b4b2a9; }
-    .time-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
-    .time { font-size: 15px; font-weight: 600; min-width: 9.5em; font-variant-numeric: tabular-nums; }
-    input[type=range] { flex: 1; accent-color: #85b7eb; height: 28px; }
-    .map-wrap { position: relative; flex: 1; min-height: 0; }
+    /* Time and tide drawn over the map's top-left corner, large, so the
+       time is part of the picture (and of any screenshot). */
+    /* Laid out like the weather map (map.html): buttons in a row above
+       the map, time pill in the map's top-right corner (where the weather
+       map's readout pill sits), Time slider in its own section below. */
+    .clock-box {
+      position: absolute; right: 8px; top: 8px; text-align: right; background: rgba(14,17,22,0.86);
+      border-radius: 10px; padding: 6px 10px 7px; pointer-events: none; max-width: calc(100% - 16px);
+    }
+    .clock { font-size: 30px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+    .ahead { font-size: 14px; font-weight: 600; color: #b4b2a9; }
+    .ahead.future { color: #fac775; }
+    .tide { font-size: 16px; font-weight: 600; color: #85b7eb; margin-top: 4px; }
+    .tide-sub { font-size: 12px; color: #b4b2a9; }
+    /* Slider below the map, so a hand on it doesn't cover the map. */
+    .time-section { padding: 6px 12px 2px; background: #14161a; }
+    .time-title { display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 2px; }
+    .time-title strong { font-weight: 600; }
+    .time-title .time { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .time-title button { padding: 3px 10px; font-size: 13px; }
+    input[type=range] { width: 100%; accent-color: #85b7eb; height: 34px; margin: 0; }
+    .range-labels { display: flex; justify-content: space-between; color: #888780; font-size: 12px; margin-top: -6px; }
+    .map-controls { display: flex; gap: 8px; padding: 0 12px 8px; background: #14161a; }
+    .map-controls button { height: 40px; min-width: 44px; }
+    .map-controls .zoom-btn { font-size: 22px; padding: 0 12px; line-height: 1; }
+    .map-wrap { position: relative; flex: 1; min-height: 0; margin: 0 8px; border-radius: 14px; overflow: hidden; }
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
-    .zoom { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 8px; }
-    .zoom button { width: 44px; height: 44px; padding: 0; font-size: 22px; background: rgba(20,22,26,0.85); }
-    .legend-btn { position: absolute; right: 10px; bottom: 10px; background: rgba(20,22,26,0.85); }
     .legend {
-      display: none; position: absolute; right: 10px; bottom: 58px; background: rgba(20,22,26,0.94);
+      display: none; position: absolute; left: 8px; top: 8px; background: rgba(20,22,26,0.94);
       border: 1px solid #3a3d42; border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.9; max-width: 260px;
     }
     .legend.open { display: block; }
@@ -77,25 +97,25 @@
 <body>
   <header>
     <div class="top">
-      <button id="coastBack" type="button">‹ Back</button>
       <span class="title">Coast map</span>
-      <button id="coastNow" class="push" type="button">Now</button>
-    </div>
-    <div id="coastTide" class="tide">Loading…</div>
-    <div id="coastTideSub" class="tide-sub">&nbsp;</div>
-    <div class="time-row">
-      <span id="coastTime" class="time">Now</span>
-      <input id="coastSlider" type="range" aria-label="Time ahead">
+      <button id="coastBack" class="top-right" type="button">‹ Back</button>
     </div>
   </header>
 
+  <div class="map-controls">
+    <button id="coastZoomIn" class="zoom-btn" type="button" aria-label="Zoom in">+</button>
+    <button id="coastZoomOut" class="zoom-btn" type="button" aria-label="Zoom out">−</button>
+    <button id="coastLegendToggle" type="button" aria-expanded="false">Key</button>
+  </div>
+
   <div class="map-wrap">
     <canvas id="coastCanvas"></canvas>
-    <div class="zoom">
-      <button id="coastZoomIn" type="button" aria-label="Zoom in">+</button>
-      <button id="coastZoomOut" type="button" aria-label="Zoom out">−</button>
+    <div class="clock-box" aria-live="polite">
+      <div id="coastClock" class="clock">--:--</div>
+      <div id="coastAhead" class="ahead">Now</div>
+      <div id="coastTide" class="tide">Loading…</div>
+      <div id="coastTideSub" class="tide-sub">&nbsp;</div>
     </div>
-    <button id="coastLegendToggle" class="legend-btn" type="button">Key</button>
     <div id="coastLegend" class="legend">
       <div><span class="sw" style="background:rgb(43,95,138)"></span>Covered by the tide</div>
       <div><span class="sw" style="background:rgb(63,200,215)"></span>Covered within 30 min (rising)</div>
@@ -103,10 +123,21 @@
       <div><span class="sw" style="background:rgb(104,136,92)"></span>Land</div>
       <div><span class="sw" style="background:rgb(222,156,58)"></span>Steep ground (30° and over)</div>
       <div><span class="sw" style="background:rgb(205,70,60)"></span>Cliff (55° and over)</div>
-      <div><span class="sw" style="background:rgb(22,34,52);border:1px solid #555"></span>Sea, or foreshore not surveyed</div>
+      <div><span class="sw" style="background:repeating-linear-gradient(135deg,rgb(122,126,138) 0 2px,rgb(92,96,108) 2px 6px)"></span>Foreshore not surveyed (height unknown)</div>
+      <div><span class="sw" style="background:rgb(22,34,52);border:1px solid #555"></span>Sea</div>
     </div>
     <div id="coastMessage" class="message" hidden></div>
   </div>
+
+  <section class="time-section">
+    <div class="time-title">
+      <strong>Time</strong>
+      <button id="coastNow" type="button">Now</button>
+      <span id="coastTime" class="time">Now</span>
+    </div>
+    <input id="coastSlider" type="range" aria-label="Time ahead">
+    <div class="range-labels"><span>Now</span><span>+12h</span><span>+24h</span></div>
+  </section>
 
   <footer>Quick picture only — not for safety-critical decisions. Tide is a prediction: wind and pressure can raise or lower the real sea level. Ground: Welsh Government LiDAR 2020–23 (OGL). Names: OS Open Names (Crown copyright) and © OpenStreetMap contributors.</footer>
 

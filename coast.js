@@ -54,8 +54,14 @@ const C = {
   land: [104, 136, 92],
   steep: [222, 156, 58],
   cliff: [205, 70, 60],
-  maskLand: [104, 136, 92] // same as land, so detailed and plain land match
+  unsurveyed: [92, 96, 108],      // foreshore the survey couldn't see
+  unsurveyedHatch: [122, 126, 138],
+  // Plain land (inland, and the coarse outline) is drawn at the shade
+  // typical of gently sloping fields, so the joins with detailed land
+  // don't show as lighter rectangles.
+  maskLand: [96, 125, 85]
 };
+const PLAIN_LAND_SHADE = 0.92;
 
 // Fixed east-west scale for the whole bay, so the map doesn't stretch
 // as you pan north or south.
@@ -174,9 +180,15 @@ function setTideText(main, sub) {
 
 function updateTimeLabel() {
   const t = slideTime();
-  const when = coast.offsetMin === 0 ? `Now · ${clockTime(t)}` :
-    `+${Math.floor(coast.offsetMin / 60)} h ${String(coast.offsetMin % 60).padStart(2, "0")} · ${clockTime(t)}`;
-  $("coastTime").textContent = when;
+  const h = Math.floor(coast.offsetMin / 60), m = coast.offsetMin % 60;
+  const span = h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${String(m).padStart(2, "0")}`;
+  const ahead = coast.offsetMin === 0 ? "Now" : `In ${span}`;
+  // Big clock time on the map itself (so it's in any screenshot), and a
+  // short version next to the slider.
+  $("coastClock").textContent = clockTime(t);
+  $("coastAhead").textContent = ahead;
+  $("coastTime").textContent = coast.offsetMin === 0 ? `Now · ${clockTime(t)}` : `${clockTime(t)} (in ${span})`;
+  $("coastAhead").classList.toggle("future", coast.offsetMin !== 0);
   const lv = levelsForSlider();
   if (!lv) return;
   const shown = coast.tide.cdOffset !== null ? lv.now - coast.tide.cdOffset : lv.now;
@@ -255,7 +267,8 @@ async function decodeTile(e) {
     const n = c.width * c.height;
     e.codes = new Uint8Array(n);
     e.slopes = new Uint8Array(n);
-    for (let i = 0, j = 0; i < n; i++, j += 4) { e.codes[i] = p[j]; e.slopes[i] = p[j + 1]; }
+    e.flags = new Uint8Array(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) { e.codes[i] = p[j]; e.slopes[i] = p[j + 1]; e.flags[i] = p[j + 2]; }
     e.size = c.width;
     e.canvas = c; // reused as the coloured tile
     e.renderKey = null;
@@ -274,7 +287,7 @@ function trimDecoded() {
   if (decoded.length <= DECODED_TILE_LIMIT) return;
   decoded.sort((a, b) => a.used - b.used);
   for (const e of decoded.slice(0, decoded.length - DECODED_TILE_LIMIT)) {
-    e.codes = null; e.slopes = null; e.canvas = null; e.renderKey = null;
+    e.codes = null; e.slopes = null; e.flags = null; e.canvas = null; e.renderKey = null;
   }
 }
 
@@ -313,20 +326,31 @@ function renderTile(e, lv) {
   const coverCode = lv ? codeFor(lv.now) : -1;
   const soonCode = lv && lv.later > lv.now ? codeFor(lv.later) : coverCode;
   const sandCode = codeFor(5); // up to 5 m OD: the beach and foreshore
+  const size = e.size;
   for (let i = 0, j = 0; i < n; i++, j += 4) {
     const code = e.codes[i];
     let col;
-    if (code === 0) col = C.sea;
+    if (code === 0) {
+      // Foreshore the survey couldn't see (blue channel 1): grey with a
+      // fine diagonal hatch, so it can't be mistaken for open sea.
+      if (e.flags && e.flags[i]) {
+        const x = i % size, y = (i / size) | 0;
+        col = ((x + y) % 6) < 2 ? C.unsurveyedHatch : C.unsurveyed;
+      } else col = C.sea;
+    }
     else if (code !== 255 && code <= coverCode) col = C.covered;
     else if (code !== 255 && code <= soonCode) col = C.soon;
     else {
       const s = e.slopes[i];
       if (s >= CLIFF_DEG) col = C.cliff;
       else if (s >= STEEP_DEG) col = C.steep;
-      else {
+      else if (code === 255 && s === 0) {
+        col = C.maskLand; // plain land, same shade as the coarse outline
+      } else {
         col = code !== 255 && code <= sandCode ? C.sand : C.land;
         // Gentle relief shading from steepness, so dunes and slopes read.
-        const k = 1 - Math.min(s, 30) / 90;
+        // Flat ground sits at PLAIN_LAND_SHADE to match plain land.
+        const k = PLAIN_LAND_SHADE - Math.min(s, 30) / 120;
         p[j] = col[0] * k; p[j + 1] = col[1] * k; p[j + 2] = col[2] * k; p[j + 3] = 255;
         continue;
       }
@@ -552,7 +576,10 @@ async function initCoast() {
     if (document.referrer && history.length > 1) history.back();
     else window.location.href = "callout.html";
   });
-  $("coastLegendToggle").addEventListener("click", () => $("coastLegend").classList.toggle("open"));
+  $("coastLegendToggle").addEventListener("click", () => {
+    const open = $("coastLegend").classList.toggle("open");
+    $("coastLegendToggle").setAttribute("aria-expanded", String(open));
+  });
 
   try {
     await loadIndex();
