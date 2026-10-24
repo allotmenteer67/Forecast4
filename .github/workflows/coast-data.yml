@@ -1,0 +1,53 @@
+# Coast map data — run by hand from the Actions tab ("Run workflow").
+# Step 1: named coastal features, ways off the beach, cliffs and beaches
+# for St Brides Bay (scripts/collect-coast-names.mjs), saved under
+# data/coast/stbrides/. Not scheduled: this data hardly ever changes, so
+# it only needs running again after a fix, or after local names are
+# added to data/coast/stbrides/aliases.json.
+name: coast-data
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coast-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Collect names, ways off, cliffs and beaches
+        run: node scripts/collect-coast-names.mjs
+
+      - name: Commit the coast data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/coast
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Coast data: names, ways off, cliffs, beaches"
+          # precache-weather pushes every 20 minutes, so retry on a clash.
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase && git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push attempt $attempt failed, retrying…"
+            sleep $((attempt * 10))
+          done
+          echo "Could not push after 5 attempts."
+          exit 1
