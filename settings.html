@@ -103,6 +103,16 @@
 
     <section class="controls">
       <fieldset>
+        <legend>Callout</legend>
+        <label class="check">
+          <input type="checkbox" id="calloutShowButton">
+          <span>Show Callout button on the front page</span>
+        </label>
+        <p class="note">For lifeboat crew: one tap switches the front page to a single dark screen of wind, sea, tide, light and visibility for St Brides Bay. It stays on until you tap "Back to normal". A quick picture only — not for safety-critical decisions.</p>
+      </fieldset>
+    </section>
+    <section class="controls">
+      <fieldset>
         <legend>Backup &amp; restore</legend>
         <p class="note">Everything Cloude knows — FFV history, saved places, settings, and tide data (locations, TFV, your Admiralty key and proxy URL, learned corrections) — lives only on this device. Copy a backup here before switching phones or clearing site data. To hand your learned forecaster accuracy for one place to someone else (rather than your whole device), use "Share accuracy data" below instead — it merges in without touching their own places or settings.</p>
         <button id="exportButton" type="button">Copy backup to clipboard</button>
@@ -198,6 +208,27 @@
   <script src="fishing.js"></script>
   <script src="fishing-ui.js"></script>
   <script src="settings.js"></script>
+  <script>
+    // Callout tick box. Kept here rather than in settings.js since it's
+    // one self-contained setting. Turning it off also ends callout mode,
+    // so the front page can never get stuck redirecting.
+    (function () {
+      var box = document.getElementById("calloutShowButton");
+      if (!box) return;
+      try { box.checked = localStorage.getItem("cloude-callout:showButton") === "1"; } catch {}
+      box.addEventListener("change", function () {
+        try {
+          if (box.checked) {
+            localStorage.setItem("cloude-callout:showButton", "1");
+          } else {
+            localStorage.removeItem("cloude-callout:showButton");
+            localStorage.removeItem("cloude-callout:active");
+            localStorage.removeItem("cloude-callout:spot");
+          }
+        } catch {}
+      });
+    })();
+  </script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));

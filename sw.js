@@ -371,7 +371,11 @@
 // is how v75 showed in Settings while still running v74's map.js.
 // Bumped to v77: bolder, haloed coastline on the map whenever a weather
 // layer is showing, so it isn't lost among the rain and wind arrows.
-const SHELL_CACHE_NAME = "cloude-shell-v77";
+// Bumped to v78: new Callout screen (callout.html/callout.js, added to
+// SHELL_FILES below), a "Show Callout button" tick box in Settings, the
+// Callout button and callout-mode redirect on the front page, and a
+// Callout section in Help.
+const SHELL_CACHE_NAME = "cloude-shell-v78";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -386,6 +390,8 @@ const SHELL_FILES = [
   // afterthought.
   "map.html",
   "map.js",
+  "callout.html",
+  "callout.js",
   "mapstrip3.js",
   "app.js",
   "settings.js",

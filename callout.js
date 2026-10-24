@@ -1,0 +1,526 @@
+// ==== Callout screen ====
+//
+// A fixed, one-screen summary for an inshore lifeboat callout: wind and
+// gusts, sea state, tide, light and visibility, in that order of
+// importance. Opened from the front page's Callout button (only shown
+// when "Show Callout button" is ticked in Settings) and stays on until
+// "Back to normal" is tapped — there is deliberately no automatic
+// turn-off, because long callouts happen.
+//
+// This page does NOT load app.js. It needs none of the forecast
+// comparison machinery, and keeping it separate means nothing here can
+// upset the front page. It does load tide.js, so the tide box uses the
+// exact same gauge, harmonic fit, TFV correction and (where one has been
+// learned) Admiralty correction as the tide card — the two can never
+// disagree.
+//
+// Data: Open-Meteo forecast (wind, gusts, visibility), Open-Meteo
+// Marine (waves, swell, sea temperature), Environment Agency tide gauge
+// via tide.js. Sunrise, sunset and civil twilight are worked out here
+// from the date and position, so they still show with no signal.
+//
+// The last successful download of each is kept on the phone and shown
+// straight away on opening, with its time, before fresh data arrives.
+
+// ---- Where the callout screen looks by default ----
+// Roughly 4 km offshore in St Brides Bay, so the marine forecast lands
+// on a sea grid square rather than a land one. Stage 3 (the Coast map)
+// will let a pin replace this; that pin will be stored under
+// CALLOUT_SPOT_KEY and cleared by "Back to normal".
+const CALLOUT_DEFAULT_SPOT = { lat: 51.79, lon: -5.17, label: "St Brides Bay" };
+
+const CALLOUT_SHOW_BUTTON_KEY = "cloude-callout:showButton"; // "1" = Settings tick box on
+const CALLOUT_ACTIVE_KEY = "cloude-callout:active";          // "1" = callout mode on
+const CALLOUT_SPOT_KEY = "cloude-callout:spot";              // pinned spot (stage 3)
+const CALLOUT_CACHE_KEY = "cloude-callout:cache";            // last good downloads
+const CONDITION_UNITS_KEY_CALLOUT = "forecast-compare:conditionUnits"; // same key app.js uses
+
+const CALLOUT_REFRESH_MS = 10 * 60000; // fresh data every 10 minutes while open
+const CALLOUT_STALE_MS = 45 * 60000;   // older than this = flagged in amber
+const CALLOUT_TIME_ZONE = "Europe/London";
+
+// tide.js calls fetchWithTimeout, which normally comes from app.js.
+// This page doesn't load app.js, so it gets the same small helper here.
+async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("Timed out — check your connection and try again");
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ---- Small helpers ----
+function calloutEl(id) { return document.getElementById(id); }
+
+function readJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or off */ }
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+}
+
+function clockTime(date) {
+  return date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: CALLOUT_TIME_ZONE });
+}
+
+function durationText(ms) {
+  const totalMin = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h === 0) return `${m} min`;
+  return `${h} h ${String(m).padStart(2, "0")}`;
+}
+
+const COMPASS_16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+function compassPoint(deg) {
+  if (typeof deg !== "number" || Number.isNaN(deg)) return "";
+  return COMPASS_16[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+}
+
+function currentSpot() {
+  const pinned = readJson(CALLOUT_SPOT_KEY, null);
+  if (pinned && typeof pinned.lat === "number" && typeof pinned.lon === "number") {
+    return { lat: pinned.lat, lon: pinned.lon, label: "Selected spot", pinned: true };
+  }
+  return { ...CALLOUT_DEFAULT_SPOT, pinned: false };
+}
+
+function spotKey(spot) { return `${spot.lat.toFixed(3)},${spot.lon.toFixed(3)}`; }
+
+// Follows the Units choices in Settings, so the callout screen matches
+// the rest of the app. Wind defaults to mph, temperature to °C.
+function unitChoices() {
+  const stored = readJson(CONDITION_UNITS_KEY_CALLOUT, {});
+  return {
+    windKmh: stored.wind === "metric",
+    tempF: stored.temperature === "imperial"
+  };
+}
+
+function windValue(mph, units) {
+  if (typeof mph !== "number") return null;
+  return Math.round(units.windKmh ? mph * 1.60934 : mph);
+}
+
+// Index of the hour that "now" falls in (Open-Meteo hourly, unixtime).
+function hourIndexForNow(times) {
+  const nowSec = Date.now() / 1000;
+  let idx = -1;
+  for (let i = 0; i < times.length; i++) {
+    if (times[i] <= nowSec) idx = i; else break;
+  }
+  return idx;
+}
+
+// ---- Downloads ----
+async function fetchForecast(spot) {
+  const url = "https://api.open-meteo.com/v1/forecast" +
+    `?latitude=${spot.lat}&longitude=${spot.lon}` +
+    "&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m,visibility" +
+    "&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC&forecast_days=2";
+  const res = await fetchWithTimeout(url, {}, 20000);
+  if (!res.ok) throw new Error(`Forecast download failed (${res.status})`);
+  return res.json();
+}
+
+async function fetchMarine(spot) {
+  const base = "https://marine-api.open-meteo.com/v1/marine" +
+    `?latitude=${spot.lat}&longitude=${spot.lon}` +
+    "&timeformat=unixtime&timezone=UTC&forecast_days=2&hourly=";
+  const withSeaTemp = "wave_height,wave_direction,wave_period,swell_wave_height,wind_wave_height,sea_surface_temperature";
+  let res = await fetchWithTimeout(base + withSeaTemp, {}, 20000);
+  // If the supplier ever rejects the sea temperature field, still get
+  // the waves rather than losing the whole sea box.
+  if (res.status === 400) res = await fetchWithTimeout(base + withSeaTemp.replace(",sea_surface_temperature", ""), {}, 20000);
+  if (!res.ok) throw new Error(`Sea download failed (${res.status})`);
+  return res.json();
+}
+
+function loadCache(spot) {
+  const all = readJson(CALLOUT_CACHE_KEY, {});
+  return all[spotKey(spot)] || {};
+}
+
+function saveCachePart(spot, part, data) {
+  const all = readJson(CALLOUT_CACHE_KEY, {});
+  const key = spotKey(spot);
+  // Only ever keep the current spot — this is a "last seen" store, not
+  // a history, and it should never grow.
+  const entry = all[key] || {};
+  entry[part] = { fetchedAt: Date.now(), data };
+  writeJson(CALLOUT_CACHE_KEY, { [key]: entry });
+}
+
+// ---- Wind box ----
+function renderWind(entry, units) {
+  const box = calloutEl("calloutWind");
+  const h = entry && entry.data && entry.data.hourly;
+  const idx = h ? hourIndexForNow(h.time) : -1;
+  if (idx < 0 || typeof h.wind_speed_10m[idx] !== "number") {
+    box.innerHTML = boxHtml("Wind", `<span class="big">—</span>`, "Not available right now");
+    return;
+  }
+  const unit = units.windKmh ? "km/h" : "mph";
+  const speed = windValue(h.wind_speed_10m[idx], units);
+  const gust = windValue(h.wind_gusts_10m[idx], units);
+  const dir = compassPoint(h.wind_direction_10m[idx]);
+
+  // Trend over the next six hours, judged on gusts (what actually knocks
+  // a small boat about). A change of under 5 mph counts as steady.
+  const step = units.windKmh ? 8 : 5;
+  let maxG = gust, maxAt = null, minG = gust, minAt = null;
+  for (let i = idx + 1; i <= idx + 6 && i < h.time.length; i++) {
+    const g = windValue(h.wind_gusts_10m[i], units);
+    if (g === null) continue;
+    if (g > maxG) { maxG = g; maxAt = h.time[i]; }
+    if (g < minG) { minG = g; minAt = h.time[i]; }
+  }
+  let trend = "Steady for the next 6 hours";
+  if (maxAt && maxG - gust >= step) trend = `Rising — gusts ${maxG} by ${clockTime(new Date(maxAt * 1000))}`;
+  else if (minAt && gust - minG >= step) trend = `Easing — gusts ${minG} by ${clockTime(new Date(minAt * 1000))}`;
+
+  const gustMph = h.wind_gusts_10m[idx];
+  const gustClass = gustMph >= 30 ? "hot" : gustMph >= 20 ? "warm" : "";
+  box.innerHTML = boxHtml("Wind",
+    `<span class="big">${speed}</span><span class="unit">${unit} ${dir}</span>` +
+    `<span class="push unit">Gusts</span><span class="big ${gustClass}">${gust}</span>`,
+    trend);
+}
+
+// ---- Sea box ----
+function renderSea(entry, units) {
+  const box = calloutEl("calloutSea");
+  const h = entry && entry.data && entry.data.hourly;
+  const idx = h ? hourIndexForNow(h.time) : -1;
+  if (idx < 0 || typeof h.wave_height[idx] !== "number") {
+    box.innerHTML = boxHtml("Sea", `<span class="big">—</span>`, "No sea forecast for this spot");
+    return;
+  }
+  const wave = h.wave_height[idx];
+  const period = h.wave_period ? h.wave_period[idx] : null;
+  const dir = compassPoint(h.wave_direction ? h.wave_direction[idx] : null);
+  const swell = h.swell_wave_height ? h.swell_wave_height[idx] : null;
+  const windWave = h.wind_wave_height ? h.wind_wave_height[idx] : null;
+
+  let mix = "";
+  if (typeof swell === "number" && typeof windWave === "number") {
+    if (swell >= windWave * 1.5) mix = "Mostly swell";
+    else if (windWave >= swell * 1.5) mix = "Mostly wind waves";
+    else mix = "Swell and wind waves";
+  }
+
+  // Building or easing over the next six hours: at least 0.3 m and 15%.
+  let trend = "";
+  let maxW = wave, maxAt = null, minW = wave, minAt = null;
+  for (let i = idx + 1; i <= idx + 6 && i < h.time.length; i++) {
+    const w = h.wave_height[i];
+    if (typeof w !== "number") continue;
+    if (w > maxW) { maxW = w; maxAt = h.time[i]; }
+    if (w < minW) { minW = w; minAt = h.time[i]; }
+  }
+  if (maxAt && maxW - wave >= 0.3 && maxW >= wave * 1.15) trend = `Building to ${maxW.toFixed(1)} m by ${clockTime(new Date(maxAt * 1000))}`;
+  else if (minAt && wave - minW >= 0.3 && minW <= wave * 0.85) trend = `Easing to ${minW.toFixed(1)} m by ${clockTime(new Date(minAt * 1000))}`;
+
+  const sstC = h.sea_surface_temperature ? h.sea_surface_temperature[idx] : null;
+  const sst = typeof sstC === "number"
+    ? `sea ${Math.round(units.tempF ? sstC * 9 / 5 + 32 : sstC)}°`
+    : "";
+  const line = [trend || mix, sst].filter(Boolean).join(" · ");
+
+  box.innerHTML = boxHtml("Sea",
+    `<span class="big">${wave.toFixed(1)}</span><span class="unit">m${dir ? " from " + dir : ""}</span>` +
+    (typeof period === "number" ? `<span class="push unit">Period</span><span class="big">${Math.round(period)}</span><span class="unit">s</span>` : ""),
+    line || "&nbsp;");
+}
+
+// ---- Visibility box ----
+// Uses the same words as the shipping forecast: Good over 10 km,
+// Moderate 4–10 km, Poor 1–4 km, Very poor under 1 km.
+function visibilityWord(metres) {
+  if (metres < 1000) return "Very poor";
+  if (metres < 4000) return "Poor";
+  if (metres < 10000) return "Moderate";
+  return "Good";
+}
+const VIS_RANK = { "Good": 0, "Moderate": 1, "Poor": 2, "Very poor": 3 };
+
+function renderVisibility(entry) {
+  const box = calloutEl("calloutVis");
+  const h = entry && entry.data && entry.data.hourly;
+  const idx = h ? hourIndexForNow(h.time) : -1;
+  if (idx < 0 || typeof h.visibility[idx] !== "number") {
+    box.innerHTML = smallBoxHtml("Visibility", "—", "Not available");
+    return;
+  }
+  const now = visibilityWord(h.visibility[idx]);
+  // First time in the next 12 hours that it gets a category worse.
+  let line = `${Math.round(h.visibility[idx] / 1000)} km now`;
+  for (let i = idx + 1; i <= idx + 12 && i < h.time.length; i++) {
+    if (typeof h.visibility[i] !== "number") continue;
+    const later = visibilityWord(h.visibility[i]);
+    if (VIS_RANK[later] > VIS_RANK[now]) {
+      line = `${later} after ${clockTime(new Date(h.time[i] * 1000))}`;
+      break;
+    }
+  }
+  const cls = VIS_RANK[now] >= 2 ? "warm" : "";
+  box.innerHTML = smallBoxHtml("Visibility", now, line, cls);
+}
+
+// ---- Light box (worked out on the phone — no download needed) ----
+// Standard sunrise equation. altitudeDeg -0.833 = sunrise/sunset,
+// -6 = civil twilight (the usual meaning of "dark" for being outdoors).
+function sunEvent(dayUtcNoon, lat, lon, altitudeDeg) {
+  const rad = Math.PI / 180;
+  const J2000 = 2451545.0;
+  const jd = dayUtcNoon.getTime() / 86400000 + 2440587.5;
+  const n = Math.round(jd - J2000 + 0.0008);
+  const jStar = n - lon / 360;
+  const M = (357.5291 + 0.98560028 * jStar) % 360;
+  const C = 1.9148 * Math.sin(M * rad) + 0.02 * Math.sin(2 * M * rad) + 0.0003 * Math.sin(3 * M * rad);
+  const lambda = (M + C + 180 + 102.9372) % 360;
+  const jTransit = J2000 + jStar + 0.0053 * Math.sin(M * rad) - 0.0069 * Math.sin(2 * lambda * rad);
+  const decl = Math.asin(Math.sin(lambda * rad) * Math.sin(23.4397 * rad));
+  const cosH = (Math.sin(altitudeDeg * rad) - Math.sin(lat * rad) * Math.sin(decl)) / (Math.cos(lat * rad) * Math.cos(decl));
+  if (cosH > 1 || cosH < -1) return null; // never rises/sets — not a UK concern, but safe
+  const H = Math.acos(cosH) / rad;
+  const toDate = j => new Date((j - 2440587.5) * 86400000);
+  return { rise: toDate(jTransit - H / 360), set: toDate(jTransit + H / 360) };
+}
+
+function renderLight(spot) {
+  const box = calloutEl("calloutLight");
+  const now = new Date();
+  const noonToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12));
+  const noonTomorrow = new Date(noonToday.getTime() + 86400000);
+  const sunToday = sunEvent(noonToday, spot.lat, spot.lon, -0.833);
+  const civilToday = sunEvent(noonToday, spot.lat, spot.lon, -6);
+  const sunTomorrow = sunEvent(noonTomorrow, spot.lat, spot.lon, -0.833);
+  const civilTomorrow = sunEvent(noonTomorrow, spot.lat, spot.lon, -6);
+  if (!sunToday || !civilToday || !sunTomorrow || !civilTomorrow) {
+    box.innerHTML = smallBoxHtml("Light", "—", "");
+    return;
+  }
+  if (now < civilToday.rise) {
+    box.innerHTML = smallBoxHtml("Light in", durationText(civilToday.rise - now), `Sunrise ${clockTime(sunToday.rise)}`, "warm");
+  } else if (now < civilToday.set) {
+    const line = now < sunToday.set ? `Sunset ${clockTime(sunToday.set)}` : `Sunset was ${clockTime(sunToday.set)}`;
+    box.innerHTML = smallBoxHtml("Dark in", durationText(civilToday.set - now), line, "warm");
+  } else {
+    box.innerHTML = smallBoxHtml("Light in", durationText(civilTomorrow.rise - now), `Sunrise ${clockTime(sunTomorrow.rise)}`, "warm");
+  }
+}
+
+// ---- Tide box ----
+// Same correction chain as the tide card (tide-ui.js applyLocationCorrection),
+// copied here because tide-ui.js expects the front page's elements.
+function calloutLocationCorrection(location, fit, hours, odLevel) {
+  const secondary = location.discoveryStation ? loadSecondaryOffset(location.discoveryStation.id) : null;
+  if (secondary) {
+    const result = applySecondaryOffset(fit, hours, odLevel, location.station, secondary);
+    if (result) return { hours: result.hours, level: result.levelCD, isCD: true };
+  }
+  if (typeof location.station.cdOffsetOD === "number") {
+    return { hours, level: odLevel - location.station.cdOffsetOD, isCD: true };
+  }
+  return { hours, level: odLevel, isCD: false };
+}
+
+// The nearest gauge to the callout spot (Milford Haven for St Brides
+// Bay). If the phone already has a saved tide place that uses the same
+// gauge and lies within 20 km of the spot, its learned Admiralty
+// correction is used too and the box is labelled with its name.
+function calloutTideLocation(spot) {
+  if (typeof nearestTideStation !== "function") return null;
+  const station = nearestTideStation(spot.lat, spot.lon);
+  if (!station) return null;
+  let best = null, bestKm = 20;
+  (loadTideLocations() || []).forEach(loc => {
+    if (!loc || !loc.station || loc.station.id !== station.id) return;
+    if (typeof loc.lat !== "number" || typeof loc.lon !== "number") return;
+    const km = haversineKm(spot.lat, spot.lon, loc.lat, loc.lon);
+    if (km < bestKm) { bestKm = km; best = loc; }
+  });
+  if (best) return { ...best, station: best.station };
+  return { label: station.label, station };
+}
+
+let calloutTideToken = 0;
+async function renderTide(spot) {
+  const box = calloutEl("calloutTide");
+  const location = calloutTideLocation(spot);
+  if (!location) {
+    box.innerHTML = boxHtml("Tide", `<span class="big">—</span>`, "No tide gauge found");
+    return;
+  }
+  const title = `Tide · ${escapeHtml(String(location.label).split(",")[0])}`;
+  if (!box.dataset.filled) box.innerHTML = boxHtml(title, `<span class="big dim">Loading…</span>`, "First time can take a minute");
+  const myToken = ++calloutTideToken;
+
+  let built = null;
+  try {
+    built = await getOrBuildTideFit(location.station);
+  } catch {
+    built = null;
+  }
+  if (myToken !== calloutTideToken) return;
+  if (!built) {
+    box.innerHTML = boxHtml(title, `<span class="big">—</span>`, "Not available right now");
+    return;
+  }
+
+  const epochMs = Date.parse(built.epochIso);
+  const nowHours = (Date.now() - epochMs) / 3600000;
+  const fudge = loadTideFudge(location.station.id);
+  const levelAt = hrs => calloutLocationCorrection(location, built.fit, hrs, applyTideFudge(predictTideLevel(built.fit, hrs), fudge));
+
+  // Rate of rise or fall over the next half hour, in metres per hour.
+  const a = levelAt(nowHours);
+  const b = levelAt(nowHours + 0.5);
+  const rate = (b.level - a.level) * 2;
+  const abs = Math.abs(rate);
+  let state;
+  if (abs < 0.25) state = "Turning";
+  else state = (rate > 0 ? "Rising" : "Falling") + (abs >= 0.9 ? " fast" : "");
+
+  const events = findTideExtremes(built.fit, nowHours - 1, nowHours + 30)
+    .map(e => {
+      const r = calloutLocationCorrection(location, built.fit, e.hours, applyTideFudge(e.level, fudge));
+      return { type: e.type, hours: r.hours, level: r.level, isCD: r.isCD };
+    })
+    .sort((x, y) => x.hours - y.hours)
+    .filter(e => e.hours >= nowHours)
+    .slice(0, 2);
+
+  const datumNote = a.isCD ? "" : " (gauge datum)";
+  const eventText = e => `${e.type === "high" ? "High" : "Low"} ${clockTime(new Date(epochMs + e.hours * 3600000))} (${e.level.toFixed(1)} m${datumNote})`;
+  const sign = rate >= 0 ? "+" : "−";
+  const line1 = [abs >= 0.05 ? `${sign}${abs.toFixed(1)} m per hour` : "", events[0] ? eventText(events[0]) : ""].filter(Boolean).join(" · ");
+  const line2 = events[1] ? `Then ${eventText(events[1]).replace(/^High/, "high").replace(/^Low/, "low")}` : "";
+
+  box.dataset.filled = "1";
+  box.innerHTML =
+    `<div class="label">${title}</div>` +
+    `<div class="row"><span class="big tide">${state}</span><span class="push unit">now ${a.level.toFixed(1)} m</span></div>` +
+    `<div class="line strong">${line1}</div>` +
+    (line2 ? `<div class="line">${line2}</div>` : "");
+}
+
+// ---- Shared box markup ----
+function boxHtml(label, rowHtml, line) {
+  return `<div class="label">${label}</div><div class="row">${rowHtml}</div><div class="line">${line}</div>`;
+}
+function smallBoxHtml(label, value, line, cls = "") {
+  return `<div class="label">${label}</div><div class="mid ${cls}">${escapeHtml(value)}</div><div class="line">${escapeHtml(line)}</div>`;
+}
+
+// ---- Updated line ----
+function renderUpdated(cache, errors) {
+  const el = calloutEl("calloutUpdated");
+  const spot = currentSpot();
+  const times = [cache.forecast, cache.marine].filter(Boolean).map(p => p.fetchedAt);
+  let text = spot.label;
+  let stale = false;
+  if (times.length) {
+    const oldest = Math.min(...times);
+    stale = Date.now() - oldest > CALLOUT_STALE_MS;
+    text += ` · updated ${clockTime(new Date(oldest))}`;
+  } else {
+    text += " · no data yet";
+  }
+  if (errors.length) text += " · no signal?";
+  el.textContent = text;
+  el.classList.toggle("stale", stale || errors.length > 0);
+}
+
+// ---- Main refresh ----
+let calloutRefreshing = false;
+async function refreshCallout() {
+  if (calloutRefreshing) return;
+  calloutRefreshing = true;
+  const spot = currentSpot();
+  const units = unitChoices();
+  const errors = [];
+  const refreshBtn = calloutEl("calloutRefresh");
+  if (refreshBtn) refreshBtn.classList.add("spinning");
+
+  renderLight(spot);
+  renderTide(spot); // runs on its own; never waits on the weather
+
+  const [forecastResult, marineResult] = await Promise.allSettled([fetchForecast(spot), fetchMarine(spot)]);
+  if (forecastResult.status === "fulfilled") saveCachePart(spot, "forecast", forecastResult.value);
+  else errors.push(forecastResult.reason);
+  if (marineResult.status === "fulfilled") saveCachePart(spot, "marine", marineResult.value);
+  else errors.push(marineResult.reason);
+
+  const cache = loadCache(spot);
+  renderWind(cache.forecast, units);
+  renderSea(cache.marine, units);
+  renderVisibility(cache.forecast);
+  renderUpdated(cache, errors);
+
+  if (refreshBtn) refreshBtn.classList.remove("spinning");
+  calloutRefreshing = false;
+}
+
+// Shows whatever was last downloaded, straight away, before any fetch.
+function renderFromCache() {
+  const spot = currentSpot();
+  const units = unitChoices();
+  const cache = loadCache(spot);
+  renderWind(cache.forecast, units);
+  renderSea(cache.marine, units);
+  renderVisibility(cache.forecast);
+  renderLight(spot);
+  renderUpdated(cache, []);
+}
+
+function backToNormal() {
+  try {
+    localStorage.removeItem(CALLOUT_ACTIVE_KEY);
+    localStorage.removeItem(CALLOUT_SPOT_KEY); // the pin ends with the callout
+  } catch { /* nothing to clear */ }
+  window.location.href = "index.html";
+}
+
+function initCallout() {
+  try { localStorage.setItem(CALLOUT_ACTIVE_KEY, "1"); } catch { /* still works this visit */ }
+
+  calloutEl("calloutBack").addEventListener("click", backToNormal);
+  calloutEl("calloutRefresh").addEventListener("click", refreshCallout);
+
+  renderFromCache();
+  refreshCallout();
+
+  setInterval(() => {
+    if (document.visibilityState === "visible") refreshCallout();
+  }, CALLOUT_REFRESH_MS);
+  // Coming back to the phone after kitting up: refresh straight away if
+  // what's on screen is more than a few minutes old.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const cache = loadCache(currentSpot());
+    const last = cache.forecast ? cache.forecast.fetchedAt : 0;
+    if (Date.now() - last > 3 * 60000) refreshCallout();
+    else renderLight(currentSpot());
+  });
+  // The light countdown ticks over every minute even with no download.
+  setInterval(() => renderLight(currentSpot()), 60000);
+}
+
+initCallout();

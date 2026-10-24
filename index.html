@@ -15,6 +15,19 @@
       } catch {}
     })();
   </script>
+  <script>
+    // Callout mode stays on until "Back to normal" is tapped on the
+    // callout screen. While it's on (and the Settings tick box is still
+    // ticked), opening Cloude goes straight to the callout screen.
+    (function () {
+      try {
+        if (localStorage.getItem("cloude-callout:showButton") === "1" &&
+            localStorage.getItem("cloude-callout:active") === "1") {
+          location.replace("callout.html");
+        }
+      } catch {}
+    })();
+  </script>
   <!-- viewport-fit=cover lets the page draw into the notch/status-bar
        strip instead of iOS reserving it and leaving it blank — that blank
        strip was the stubborn gap above "Cloude". Drawing there makes the
@@ -58,6 +71,23 @@
         </div>
       </div>
     </header>
+
+    <!-- Callout button: only shown when "Show Callout button" is ticked
+         in Settings, so nobody else sees any change. Styled inline so it
+         looks the same in every Appearance theme. -->
+    <a id="calloutButton" href="callout.html" hidden
+       style="display:none;margin:0 0 0.8em;padding:0.7em 1em;border-radius:12px;background:#a32d2d;color:#fff;font-weight:600;font-size:1.05em;text-align:center;text-decoration:none;-webkit-tap-highlight-color:transparent;">Callout</a>
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("cloude-callout:showButton") === "1") {
+            var b = document.getElementById("calloutButton");
+            b.hidden = false;
+            b.style.display = "block";
+          }
+        } catch {}
+      })();
+    </script>
 
     <!-- Static preview, not a mini pannable map — tap opens map.html for
          real interaction. Centred on wherever the front page is
