@@ -1,22 +1,29 @@
-// ==== Sunrise, sunset and visibility on the front page ====
+// ==== Sunrise / sunset and Visibility headline cells ====
 //
-// One slim line under the headline cells, following the same place, Date
-// slider and hour slider as everything else on the front page:
-//   Sunrise 07:51 · Sunset 18:07 · Visibility Good, 14 km
+// Two optional front page cells, ticked in Settings → Front page cells
+// ("Sunrise & sunset", "Visibility"). app.js's renderHeadline calls
+// buildSunVisHeadlineCell() for each one that's ticked, in the same
+// place in the grid as the other optional cells.
 //
-// Sunrise and sunset are worked out on the phone from the date and
-// position (same method as the callout screen), so they need no download.
-// Visibility comes from Open-Meteo's forecast for the hour the slider is
-// on, in shipping-forecast words. It's only shown for today's forecast
-// (Date slider on today): there's no visibility history to look back on.
+// Sun: sunrise / sunset for the day the front page is showing, worked
+// out on the phone from the date and position (no download, works with
+// no signal). Times are this device's local time, like the rest of the
+// app.
 //
-// Kept in its own file so it can't disturb app.js. It only reads
-// state.lat/lon, state.rollback and the hour slider.
+// Visibility: Open-Meteo's forecast for the hour on the hour slider, in
+// shipping-forecast words (Good over 10 km, Moderate 4–10 km, Poor
+// 1–4 km, Very poor under 1 km) with the distance beside it in the unit
+// chosen in Settings → Units (km or miles). Forecast only, so it shows
+// "—" when the Date slider is off today.
+//
+// Kept in its own file so it can't disturb app.js.
 
-const SUNVIS_LINE_ID = "sunVisLine";
-const SUNVIS_CACHE_MS = 30 * 60000;
-let sunVisCache = null; // { key, fetchedAt, times, vis }
-let sunVisFetching = null;
+const SUNVIS_CACHE_MS = 30 * 60000;   // fresh visibility every 30 minutes
+const SUNVIS_RETRY_MS = 5 * 60000;    // after a failed download, wait before trying again
+let sunVisCache = null;               // { key, fetchedAt, times, vis }
+let sunVisInFlight = null;            // key being downloaded
+let sunVisLastAttempt = { key: null, at: 0 };
+const SUNVIS_SUN_FONT = "clamp(14px, 4.5vw, 22px)"; // as large as the cell width allows
 
 function sunVisEvent(dayUtcNoon, lat, lon, altitudeDeg) {
   const rad = Math.PI / 180;
@@ -47,97 +54,153 @@ function sunVisClock(date) {
   return date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
-function sunVisSliderHours() {
-  const slider = document.getElementById("hourSlider");
-  return slider ? Math.round(Number(slider.value) || 0) : 0;
+function sunVisUsesMiles() {
+  return typeof conditionUnit === "function" && conditionUnit("visibility") === "imperial";
 }
 
-// The moment the front page is showing: now, moved by the Date slider
-// (days) and the hour slider (hours).
+function sunVisDistanceText(metres) {
+  if (sunVisUsesMiles()) {
+    const miles = metres / 1609.344;
+    return miles < 1 ? `${miles.toFixed(1)} mi` : `${Math.round(miles)} mi`;
+  }
+  const km = metres / 1000;
+  return km < 1 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+}
+
+// The moment the front page is showing: the hour slider's hour when the
+// hourly figures are up, otherwise now moved by the Date slider.
 function sunVisTargetMoment() {
-  const rollback = (typeof state !== "undefined" && state.rollback) ? state.rollback : 0;
-  return new Date(Date.now() - rollback * 86400000 + sunVisSliderHours() * 3600000);
+  const rollback = state.rollback || 0;
+  if (rollback === 0 && typeof currentHourDate === "function" && state.hourly && state.hourly.status === "ready") {
+    return currentHourDate();
+  }
+  return new Date(Date.now() - rollback * 86400000);
 }
 
-async function sunVisFetch(lat, lon) {
-  const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
-  if (sunVisCache && sunVisCache.key === key && Date.now() - sunVisCache.fetchedAt < SUNVIS_CACHE_MS) return sunVisCache;
-  if (sunVisFetching && sunVisFetching.key === key) return sunVisFetching.promise;
+function sunVisKey() { return `${state.lat.toFixed(2)},${state.lon.toFixed(2)}`; }
+
+function sunVisMaybeFetch() {
+  const key = sunVisKey();
+  const fresh = sunVisCache && sunVisCache.key === key && Date.now() - sunVisCache.fetchedAt < SUNVIS_CACHE_MS;
+  if (fresh || sunVisInFlight === key) return;
+  if (sunVisLastAttempt.key === key && Date.now() - sunVisLastAttempt.at < SUNVIS_RETRY_MS) return;
+  sunVisInFlight = key;
+  sunVisLastAttempt = { key, at: Date.now() };
+  const lat = state.lat, lon = state.lon;
   const url = "https://api.open-meteo.com/v1/forecast" +
     `?latitude=${lat}&longitude=${lon}&hourly=visibility&timeformat=unixtime&timezone=UTC&forecast_days=3`;
-  const promise = (async () => {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (!data.hourly || !data.hourly.time) return null;
-      sunVisCache = { key, fetchedAt: Date.now(), times: data.hourly.time, vis: data.hourly.visibility };
-      return sunVisCache;
-    } catch {
-      return null; // no signal — the line just shows sunrise and sunset
-    } finally {
-      sunVisFetching = null;
-    }
-  })();
-  sunVisFetching = { key, promise };
-  return promise;
+  fetch(url)
+    .then(res => (res.ok ? res.json() : null))
+    .then(data => {
+      if (data && data.hourly && data.hourly.time) {
+        sunVisCache = { key, fetchedAt: Date.now(), times: data.hourly.time, vis: data.hourly.visibility };
+      }
+    })
+    .catch(() => { /* no signal: the cell shows "—" until the next try */ })
+    .finally(() => {
+      sunVisInFlight = null;
+      // Repaint the cells now there's data. Only if the place hasn't
+      // changed meanwhile, and only once per download.
+      if (sunVisCache && sunVisCache.key === key && typeof renderHeadline === "function" && typeof state !== "undefined" && typeof state.lat === "number" && sunVisKey() === key) {
+        renderHeadline();
+      }
+    });
 }
 
-function sunVisVisibilityText(cache, moment) {
-  if (!cache) return "";
+function sunVisVisibilityMetres(moment) {
+  if (!sunVisCache || sunVisCache.key !== sunVisKey()) return null;
   const sec = moment.getTime() / 1000;
   let idx = -1;
-  for (let i = 0; i < cache.times.length; i++) {
-    if (cache.times[i] <= sec) idx = i; else break;
+  for (let i = 0; i < sunVisCache.times.length; i++) {
+    if (sunVisCache.times[i] <= sec) idx = i; else break;
   }
-  if (idx < 0 || typeof cache.vis[idx] !== "number") return "";
-  const m = cache.vis[idx];
-  const km = m < 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m / 1000)} km`;
-  return `Visibility ${sunVisWord(m)}, ${km}`;
+  if (idx < 0) return null;
+  const m = sunVisCache.vis[idx];
+  return typeof m === "number" ? m : null;
 }
 
-function renderSunVis() {
-  const line = document.getElementById(SUNVIS_LINE_ID);
-  if (!line) return;
-  if (typeof state === "undefined" || typeof state.lat !== "number" || typeof state.lon !== "number") {
-    line.hidden = true;
-    return;
-  }
+// These cells have no graph behind them yet, so they mustn't show the
+// little ">" that tells you a cell opens one. Added once, here, rather
+// than in style.css, to keep this feature in one file.
+(function () {
+  const style = document.createElement("style");
+  style.textContent = ".headline-label.sunvis-no-chevron::after { display: none; }";
+  document.head.appendChild(style);
+})();
+
+// Builds one cell with the same structure and classes as app.js's own
+// headline cells, so it picks up exactly the same look in every theme.
+function sunVisCellShell(conditionName, labelText) {
+  const cell = document.createElement("button");
+  cell.type = "button";
+  cell.className = "headline-cell";
+  cell.style.cursor = "default"; // no graph behind these yet
+
+  const icon = document.createElement("span");
+  icon.className = "headline-cell-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = (typeof HEADLINE_CELL_ICONS !== "undefined" && HEADLINE_CELL_ICONS[conditionName]) || "";
+
+  const label = document.createElement("span");
+  label.className = "headline-label sunvis-no-chevron";
+  label.textContent = labelText;
+
+  const valueRow = document.createElement("div");
+  valueRow.className = "headline-value-row";
+  const valueEl = document.createElement("span");
+  valueEl.className = "headline-value";
+  valueRow.appendChild(valueEl);
+
+  const textWrap = document.createElement("div");
+  textWrap.className = "headline-cell-text";
+  textWrap.append(label, valueRow);
+  cell.append(icon, textWrap);
+  return { cell, valueEl, valueRow };
+}
+
+function buildSunVisHeadlineCell(conditionName) {
+  if (typeof state === "undefined" || typeof state.lat !== "number" || typeof state.lon !== "number") return null;
   const moment = sunVisTargetMoment();
-  const noon = new Date(Date.UTC(moment.getUTCFullYear(), moment.getUTCMonth(), moment.getUTCDate(), 12));
-  const sun = sunVisEvent(noon, state.lat, state.lon, -0.833);
-  const parts = [];
-  if (sun) parts.push(`Sunrise ${sunVisClock(sun.rise)}`, `Sunset ${sunVisClock(sun.set)}`);
 
-  const rollback = state.rollback || 0;
-  if (rollback === 0) {
-    const cached = sunVisCache && sunVisCache.key === `${state.lat.toFixed(2)},${state.lon.toFixed(2)}` ? sunVisCache : null;
-    const visText = sunVisVisibilityText(cached, moment);
-    if (visText) parts.push(visText);
-    if (!cached || Date.now() - cached.fetchedAt >= SUNVIS_CACHE_MS) {
-      sunVisFetch(state.lat, state.lon).then(result => { if (result) renderSunVisText(); });
-    }
+  if (conditionName === "sun") {
+    const { cell, valueEl } = sunVisCellShell("sun", "Sunrise / set");
+    const noon = new Date(Date.UTC(moment.getFullYear(), moment.getMonth(), moment.getDate(), 12));
+    const sun = sunVisEvent(noon, state.lat, state.lon, -0.833);
+    valueEl.textContent = sun ? `${sunVisClock(sun.rise)}/${sunVisClock(sun.set)}` : "—";
+    // Two times are wider than one number: a touch smaller so they fit
+    // the half-width cell on a phone without wrapping.
+    valueEl.style.fontSize = SUNVIS_SUN_FONT;
+    valueEl.style.whiteSpace = "nowrap";
+    return cell;
   }
-  line.textContent = parts.join(" · ");
-  line.hidden = parts.length === 0;
+
+  if (conditionName === "visibility") {
+    const { cell, valueEl, valueRow } = sunVisCellShell("visibility", "Visibility");
+    if ((state.rollback || 0) !== 0) {
+      valueEl.textContent = "—";
+      return cell;
+    }
+    sunVisMaybeFetch();
+    const metres = sunVisVisibilityMetres(moment);
+    if (metres === null) {
+      valueEl.textContent = "—";
+      return cell;
+    }
+    valueEl.textContent = sunVisWord(metres);
+    valueEl.style.whiteSpace = "nowrap";
+    if (metres >= 0) {
+      const dist = document.createElement("span");
+      dist.textContent = sunVisDistanceText(metres);
+      dist.style.cssText = "font-size:0.8em;font-weight:600;opacity:0.75;white-space:nowrap;";
+      valueRow.appendChild(dist);
+    }
+    return cell;
+  }
+  return null;
 }
 
-// Re-render without starting another download (used after one finishes).
-function renderSunVisText() {
-  renderSunVis();
-}
-
+// New place: the old place's visibility mustn't be shown for it.
 document.addEventListener("cloude:location-ready", () => {
-  sunVisCache = null; // new place: new visibility
-  renderSunVis();
+  sunVisCache = null;
+  sunVisLastAttempt = { key: null, at: 0 };
 });
-document.addEventListener("input", e => {
-  if (e.target && (e.target.id === "hourSlider" || e.target.type === "range")) renderSunVis();
-});
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") renderSunVis();
-});
-// The Date slider and anything else that changes state without an event
-// this file hears: a cheap check once a minute keeps the line honest.
-setInterval(renderSunVis, 60000);
-renderSunVis();
