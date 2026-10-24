@@ -2190,9 +2190,40 @@ registerMapLayer({
     // 1 -> 1.5 on top of that second chance — still reported as too
     // faint to read clearly against a heavy rain band even once
     // redrawn on top of it.
-    drawGeoJson(ctx, mapVectorData.coastline, view, { stroke: p.coast, lineWidth: 1.5 });
+    //
+    // Strengthened again once the wind arrows gained colour and size:
+    // with rain AND wind on, the grey-tan line all but vanished between
+    // blue washes and red arrows (confirmed from an iPad screenshot).
+    // Whenever any weather layer is showing, the coast is now drawn in
+    // two passes like the wind arrows — a wide pale halo, then a dark
+    // core — so it reads as a continuous edge against blue, red or
+    // anything else. With every weather layer off there's nothing to
+    // compete with, so the plain original line is kept.
+    const weatherShowing = ["rain", "wind", "temperature", "pressure", "cloud"].some(mapLayerVisible);
+    if (!weatherShowing) {
+      drawGeoJson(ctx, mapVectorData.coastline, view, { stroke: p.coast, lineWidth: 1.5 });
+      return;
+    }
+    const style = MAP_COAST_EMPHASIS[p.id] || MAP_COAST_EMPHASIS.paper;
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    drawGeoJson(ctx, mapVectorData.coastline, view, { stroke: style.halo, lineWidth: 4.5 });
+    drawGeoJson(ctx, mapVectorData.coastline, view, { stroke: style.core, lineWidth: 2 });
+    ctx.restore();
   }
 });
+
+// The emphasised coastline's colours, per palette (see the
+// coastline-outline layer above). Paper: near-black core on a white
+// halo — distinct from the red-brown wind arrows by being a continuous
+// line rather than by colour alone. Slate (dark theme): the reverse.
+// High contrast: pure black on white.
+const MAP_COAST_EMPHASIS = {
+  paper: { core: "#1f2a24", halo: "rgba(255, 255, 255, 0.85)" },
+  slate: { core: "#f1efe8", halo: "rgba(0, 0, 0, 0.55)" },
+  mono:  { core: "#000000", halo: "rgba(255, 255, 255, 0.9)" }
+};
 
 registerMapLayer({
   id: "rings",

@@ -369,7 +369,9 @@
 // 10 minutes, so an update opened soon after uploading could install
 // the NEW version number with some OLD files still inside it — which
 // is how v75 showed in Settings while still running v74's map.js.
-const SHELL_CACHE_NAME = "cloude-shell-v76";
+// Bumped to v77: bolder, haloed coastline on the map whenever a weather
+// layer is showing, so it isn't lost among the rain and wind arrows.
+const SHELL_CACHE_NAME = "cloude-shell-v77";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
