@@ -379,7 +379,13 @@
 // name added to the Wind box; Help updated to match.
 // Bumped to v80: sunrise, sunset and visibility line on the front page
 // under the headline cells (new sunvis.js, added to SHELL_FILES below).
-const SHELL_CACHE_NAME = "cloude-shell-v80";
+// Bumped to v81: sunrise/sunset and visibility become optional front
+// page cells (Settings → Front page cells) instead of a fixed line;
+// Visibility gets its own km/miles choice in Settings → Units, which the
+// callout screen follows too.
+// Bumped to v82: callout Sea box shows the official sea state (WMO /
+// Douglas sea scale) and swell (Douglas swell scale) in words.
+const SHELL_CACHE_NAME = "cloude-shell-v82";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

@@ -108,7 +108,8 @@ function unitChoices() {
   const stored = readJson(CONDITION_UNITS_KEY_CALLOUT, {});
   return {
     windKmh: stored.wind === "metric",
-    tempF: stored.temperature === "imperial"
+    tempF: stored.temperature === "imperial",
+    visMiles: stored.visibility === "imperial"
   };
 }
 
@@ -142,7 +143,7 @@ async function fetchMarine(spot) {
   const base = "https://marine-api.open-meteo.com/v1/marine" +
     `?latitude=${spot.lat}&longitude=${spot.lon}` +
     "&timeformat=unixtime&timezone=UTC&forecast_days=2&hourly=";
-  const withSeaTemp = "wave_height,wave_direction,wave_period,swell_wave_height,wind_wave_height,sea_surface_temperature";
+  const withSeaTemp = "wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_period,wind_wave_height,sea_surface_temperature";
   let res = await fetchWithTimeout(base + withSeaTemp, {}, 20000);
   // If the supplier ever rejects the sea temperature field, still get
   // the waves rather than losing the whole sea box.
@@ -222,6 +223,35 @@ function renderWind(entry, units) {
 }
 
 // ---- Sea box ----
+// ---- Official sea and swell words ----
+// Sea state: WMO sea state code (the Douglas sea scale), from the
+// significant wave height — the same words the Met Office shipping and
+// inshore waters forecasts use.
+const SEA_STATES = [
+  [0.1, "Calm"], [0.5, "Smooth"], [1.25, "Slight"], [2.5, "Moderate"],
+  [4, "Rough"], [6, "Very rough"], [9, "High"], [14, "Very high"], [Infinity, "Phenomenal"]
+];
+function seaStateFor(metres) {
+  for (let i = 0; i < SEA_STATES.length; i++) {
+    if (metres < SEA_STATES[i][0]) return { rank: i, name: SEA_STATES[i][1] };
+  }
+  return { rank: SEA_STATES.length - 1, name: "Phenomenal" };
+}
+
+// Swell: the Douglas swell scale. Height: low under 2 m, moderate
+// 2–4 m, heavy over 4 m. Length: short under 100 m, average 100–200 m,
+// long over 200 m. Length comes from the swell period using the
+// deep-water rule wavelength = 1.56 × period², so short is under about
+// 8 seconds and long is over about 11.3 seconds.
+function swellWords(heightM, periodS) {
+  if (typeof heightM !== "number" || heightM < 0.1) return "No swell";
+  if (typeof periodS !== "number") return "";
+  const height = heightM < 2 ? "low" : heightM <= 4 ? "moderate" : "heavy";
+  const wavelength = 1.56 * periodS * periodS;
+  const length = wavelength < 100 ? "Short" : wavelength <= 200 ? "Average" : "Long";
+  return `${length} ${height} swell`;
+}
+
 function renderSea(entry, units) {
   const box = calloutEl("calloutSea");
   const h = entry && entry.data && entry.data.hourly;
@@ -233,15 +263,14 @@ function renderSea(entry, units) {
   const wave = h.wave_height[idx];
   const period = h.wave_period ? h.wave_period[idx] : null;
   const dir = compassPoint(h.wave_direction ? h.wave_direction[idx] : null);
-  const swell = h.swell_wave_height ? h.swell_wave_height[idx] : null;
-  const windWave = h.wind_wave_height ? h.wind_wave_height[idx] : null;
+  const swellH = h.swell_wave_height ? h.swell_wave_height[idx] : null;
+  // Swell length needs the swell's own period; the overall wave period
+  // is only used if the supplier didn't send it.
+  const swellT = h.swell_wave_period && typeof h.swell_wave_period[idx] === "number" ? h.swell_wave_period[idx] : period;
 
-  let mix = "";
-  if (typeof swell === "number" && typeof windWave === "number") {
-    if (swell >= windWave * 1.5) mix = "Mostly swell";
-    else if (windWave >= swell * 1.5) mix = "Mostly wind waves";
-    else mix = "Swell and wind waves";
-  }
+  const state = seaStateFor(wave);
+  const stateClass = state.rank >= 5 ? "hot" : state.rank >= 4 ? "warm" : ""; // Very rough+ red, Rough amber
+  const seaLabel = `Sea<span class="label-right ${stateClass}">${state.name}</span>`;
 
   // Building or easing over the next six hours: at least 0.3 m and 15%.
   let trend = "";
@@ -252,19 +281,25 @@ function renderSea(entry, units) {
     if (w > maxW) { maxW = w; maxAt = h.time[i]; }
     if (w < minW) { minW = w; minAt = h.time[i]; }
   }
-  if (maxAt && maxW - wave >= 0.3 && maxW >= wave * 1.15) trend = `Building to ${maxW.toFixed(1)} m by ${clockTime(new Date(maxAt * 1000))}`;
-  else if (minAt && wave - minW >= 0.3 && minW <= wave * 0.85) trend = `Easing to ${minW.toFixed(1)} m by ${clockTime(new Date(minAt * 1000))}`;
+  if (maxAt && maxW - wave >= 0.3 && maxW >= wave * 1.15) {
+    trend = `Building to ${maxW.toFixed(1)} m (${seaStateFor(maxW).name.toLowerCase()}) by ${clockTime(new Date(maxAt * 1000))}`;
+  } else if (minAt && wave - minW >= 0.3 && minW <= wave * 0.85) {
+    trend = `Easing to ${minW.toFixed(1)} m by ${clockTime(new Date(minAt * 1000))}`;
+  }
 
   const sstC = h.sea_surface_temperature ? h.sea_surface_temperature[idx] : null;
   const sst = typeof sstC === "number"
     ? `sea ${Math.round(units.tempF ? sstC * 9 / 5 + 32 : sstC)}°`
     : "";
-  const line = [trend || mix, sst].filter(Boolean).join(" · ");
+  const line1 = [swellWords(swellH, swellT), sst].filter(Boolean).join(" · ");
 
-  box.innerHTML = boxHtml("Sea",
-    `<span class="big">${wave.toFixed(1)}</span><span class="unit">m${dir ? " from " + dir : ""}</span>` +
-    (typeof period === "number" ? `<span class="push unit">Period</span><span class="big">${Math.round(period)}</span><span class="unit">s</span>` : ""),
-    line || "&nbsp;");
+  box.innerHTML =
+    `<div class="label">${seaLabel}</div>` +
+    `<div class="row"><span class="big">${wave.toFixed(1)}</span><span class="unit">m${dir ? " from " + dir : ""}</span>` +
+    (typeof period === "number" ? `<span class="push unit">Period</span><span class="big">${Math.round(period)}</span><span class="unit">s</span>` : "") +
+    `</div>` +
+    `<div class="line strong">${line1 || "&nbsp;"}</div>` +
+    (trend ? `<div class="line">${trend}</div>` : "");
 }
 
 // ---- Visibility box ----
@@ -278,7 +313,16 @@ function visibilityWord(metres) {
 }
 const VIS_RANK = { "Good": 0, "Moderate": 1, "Poor": 2, "Very poor": 3 };
 
-function renderVisibility(entry) {
+function visibilityDistance(metres, units) {
+  if (units && units.visMiles) {
+    const miles = metres / 1609.344;
+    return miles < 1 ? `${miles.toFixed(1)} miles` : `${Math.round(miles)} miles`;
+  }
+  const km = metres / 1000;
+  return km < 1 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+}
+
+function renderVisibility(entry, units) {
   const box = calloutEl("calloutVis");
   const h = entry && entry.data && entry.data.hourly;
   const idx = h ? hourIndexForNow(h.time) : -1;
@@ -288,7 +332,7 @@ function renderVisibility(entry) {
   }
   const now = visibilityWord(h.visibility[idx]);
   // First time in the next 12 hours that it gets a category worse.
-  let line = `${Math.round(h.visibility[idx] / 1000)} km now`;
+  let line = `${visibilityDistance(h.visibility[idx], units)} now`;
   for (let i = idx + 1; i <= idx + 12 && i < h.time.length; i++) {
     if (typeof h.visibility[i] !== "number") continue;
     const later = visibilityWord(h.visibility[i]);
@@ -490,7 +534,7 @@ async function refreshCallout() {
   const cache = loadCache(spot);
   renderWind(cache.forecast, units);
   renderSea(cache.marine, units);
-  renderVisibility(cache.forecast);
+  renderVisibility(cache.forecast, units);
   renderUpdated(cache, errors);
 
   if (refreshBtn) refreshBtn.classList.remove("spinning");
@@ -504,7 +548,7 @@ function renderFromCache() {
   const cache = loadCache(spot);
   renderWind(cache.forecast, units);
   renderSea(cache.marine, units);
-  renderVisibility(cache.forecast);
+  renderVisibility(cache.forecast, units);
   renderLight(spot);
   renderUpdated(cache, []);
 }
