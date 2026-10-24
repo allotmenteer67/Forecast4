@@ -385,7 +385,10 @@
 // callout screen follows too.
 // Bumped to v82: callout Sea box shows the official sea state (WMO /
 // Douglas sea scale) and swell (Douglas swell scale) in words.
-const SHELL_CACHE_NAME = "cloude-shell-v82";
+// Bumped to v83: no code change — forces phones to fetch fresh copies of
+// every file, so a re-uploaded sunvis.js (missed from v81) is picked up
+// rather than the old copy staying in the cache.
+const SHELL_CACHE_NAME = "cloude-shell-v83";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
