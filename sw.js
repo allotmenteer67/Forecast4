@@ -413,7 +413,11 @@
 // and bearings shown magnetic (WMM2025).
 // Bumped to v93: coast map — hatched foreshore now from Ordnance Survey
 // (dries at low tide, height unknown); key, credits and Help updated.
-// Bumped to v96: Callout screen "Can't do pickup" button (pickup.js,
+// Bumped to v98: Coast map's time box puts "Now" / "In 2 h" beside the
+// time instead of on its own line.
+// v97: Coast map's time box shows the next high or low water
+// after the time shown, as a small bar (coast.js renderNextTide).
+// v96: Callout screen "Can't do pickup" button (pickup.js,
 // added to SHELL_FILES): saved wording plus a pickup time, handed to the
 // "Cloude Pickup" iPhone Shortcut which sends it by text and email.
 // v95: asks the browser to keep Cloude's data when space is
@@ -423,7 +427,7 @@
 // v94: coast map — Ordnance Survey mean low water line drawn
 // as a white dotted line (data/coast/stbrides/low-water.json, made by
 // the coast-heights workflow); key and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v96";
+const SHELL_CACHE_NAME = "cloude-shell-v98";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

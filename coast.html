@@ -64,10 +64,18 @@
       border-radius: 10px; padding: 6px 10px 7px; pointer-events: none; max-width: calc(100% - 16px);
     }
     .clock { font-size: 30px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
-    .ahead { font-size: 14px; font-weight: 600; color: #b4b2a9; }
+    /* "Now" (or "In 2 h") sits beside the time, not under it. */
+    .clock-row { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; }
+    .ahead { font-size: 15px; font-weight: 600; color: #b4b2a9; white-space: nowrap; }
     .ahead.future { color: #fac775; }
     .tide { font-size: 16px; font-weight: 600; color: #85b7eb; margin-top: 4px; }
     .tide-sub { font-size: 12px; color: #b4b2a9; }
+    /* Next high or low water after the time shown: a small bar. */
+    .next-tide {
+      display: inline-block; margin-top: 5px; padding: 3px 9px; border-radius: 7px;
+      background: #16273a; border: 1px solid #234566; color: #b5d4f4;
+      font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+    }
     /* Slider below the map, so a hand on it doesn't cover the map. */
     .time-section { padding: 6px 12px 2px; background: #14161a; }
     .time-title { display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 2px; }
@@ -170,10 +178,13 @@
   <div class="map-wrap">
     <canvas id="coastCanvas"></canvas>
     <div class="clock-box" aria-live="polite">
-      <div id="coastClock" class="clock">--:--</div>
-      <div id="coastAhead" class="ahead">Now</div>
+      <div class="clock-row">
+        <div id="coastClock" class="clock">--:--</div>
+        <div id="coastAhead" class="ahead">Now</div>
+      </div>
       <div id="coastTide" class="tide">Loading…</div>
       <div id="coastTideSub" class="tide-sub">&nbsp;</div>
+      <div id="coastNextTide" class="next-tide" hidden></div>
     </div>
     <div id="coastLegend" class="legend">
       <div><span class="sw" style="background:rgb(43,95,138)"></span>Covered by the tide</div>

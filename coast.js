@@ -281,6 +281,30 @@ function updateTimeLabel() {
   const state = abs < 0.25 ? "Turning" : (lv.rate > 0 ? "Rising" : "Falling") + (abs >= 0.9 ? " fast" : "");
   setTideText(`Tide ${shown.toFixed(1)} m${datum} · ${state}`,
     `${lv.rate >= 0 ? "+" : "−"}${abs.toFixed(1)} m per hour · ${coast.tide.label}`);
+  renderNextTide(t);
+}
+
+// The next high or low water after the time shown (now, or wherever the
+// slider is), as a small bar in the time box: "Next high 16:42 · 5.9 m".
+// Heights on the same datum as the tide line above it.
+function renderNextTide(t) {
+  const el = $("coastNextTide");
+  if (!el) return;
+  const tide = coast.tide;
+  if (!tide || typeof findTideExtremes !== "function") { el.hidden = true; return; }
+  const hours = (t.getTime() - tide.epochMs) / 3600000;
+  let next = null;
+  try {
+    next = findTideExtremes(tide.fit, hours - 1, hours + 15)
+      .filter(e => e.hours > hours)
+      .sort((a, b) => a.hours - b.hours)[0] || null;
+  } catch { next = null; }
+  if (!next) { el.hidden = true; return; }
+  const od = applyTideFudge(next.level, tide.fudge);
+  const level = tide.cdOffset !== null ? od - tide.cdOffset : od;
+  const when = clockTime(new Date(tide.epochMs + next.hours * 3600000));
+  el.textContent = `Next ${next.type === "high" ? "high" : "low"} ${when} · ${level.toFixed(1)} m`;
+  el.hidden = false;
 }
 
 // ---- Distances, bearings and positions ----
