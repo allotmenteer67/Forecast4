@@ -99,6 +99,37 @@
     .pc-tap.way { border-left-color: #5fe08a; }
     .pc-tap.on { background: rgba(255,255,255,0.08); }
     .pc-show { margin-left: auto; font-size: 12px; color: #b4b2a9; text-decoration: underline; }
+    .pc-clear { float: right; pointer-events: auto; padding: 4px 10px; font-size: 13px; margin: 0 0 4px 8px; }
+    .pc-line { display: inline-block; width: 14px; height: 4px; border-radius: 2px; background: #ff9a3c; margin-right: 6px; vertical-align: 3px; }
+    /* Rescue position entry, over the map. */
+    /* Full screen, so everything fits above an on-screen keyboard and the
+       Set button is always reachable. */
+    .entry {
+      position: fixed; inset: 0; background: #14161a; overflow-y: auto; z-index: 50;
+      padding: calc(env(safe-area-inset-top, 0px) + 12px) 14px calc(env(safe-area-inset-bottom, 0px) + 16px);
+      font-size: 15px;
+    }
+    .ent-body { max-width: 520px; margin: 0 auto; }
+    .entry h2 { font-size: 17px; margin: 0; flex: 1; }
+    .ent-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .ent-tabs, .ent-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .ent-tabs button, .ent-row button { flex: 1; }
+    .entry button.on { background: #185fa5; border-color: #185fa5; color: #fff; }
+    .entry label { display: block; font-size: 13px; color: #b4b2a9; margin: 10px 0 4px; }
+    .entry input[type=text], .entry input[type=number] {
+      width: 100%; font: inherit; font-size: 17px; color: #e8e6df; background: #1e2126;
+      border: 1px solid #5f5e5a; border-radius: 10px; padding: 9px 11px;
+    }
+    .ent-dirs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+    .ent-dirs button { padding: 8px 0; }
+    .ent-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+    .ent-list button { text-align: left; border-color: #3a3d42; }
+    .ent-dim { color: #888780; font-size: 13px; }
+    .ent-preview { margin: 14px 0 10px; font-weight: 600; color: #85b7eb; min-height: 1.4em; }
+    .ent-preview.bad { color: #fac775; }
+    .ent-go { width: 100%; padding: 12px; font-size: 17px; font-weight: 600; background: #185fa5; border-color: #185fa5; color: #fff; }
+    .ent-units button { padding: 7px 4px; }
+    .ent-note { font-size: 12px; color: #888780; margin-top: 12px; line-height: 1.45; }
     .pc-pin, .pc-me { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
     .pc-pin { background: #e5484d; }
     .pc-me { background: #3d8bff; border: 2px solid #fff; width: 11px; height: 11px; vertical-align: -1px; }
@@ -132,7 +163,7 @@
     <button id="coastLegendToggle" type="button" aria-expanded="false">Key</button>
     <span class="spacer"></span>
     <button id="coastPinBtn" type="button">Pin</button>
-    <button id="coastPinClear" type="button" hidden>Clear</button>
+    <button id="coastPosBtn" type="button">Position</button>
     <button id="coastMeBtn" type="button" aria-label="Show my position">Me</button>
   </div>
 
@@ -157,6 +188,46 @@
       <div><span class="sw" style="background:#2f9e55;border-radius:50%"></span>Way off the beach (grey once cut)</div>
     </div>
     <div id="coastPinCard" class="pin-card" hidden></div>
+    <div id="coastEntry" class="entry" hidden>
+      <div class="ent-body">
+      <div class="ent-top">
+        <h2>Rescue position</h2>
+        <button id="entClose" type="button">Close</button>
+      </div>
+      <div class="ent-tabs">
+        <button id="entTabLatLon" type="button">Lat / long</button>
+        <button id="entTabPlace" type="button">From a place</button>
+      </div>
+      <div id="entLatLon">
+        <label for="entLatLonInput">Latitude and longitude, any usual way</label>
+        <input id="entLatLonInput" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="51 46.2N 5 08.7W">
+      </div>
+      <div id="entPlace" hidden>
+        <label for="entPlaceInput">From</label>
+        <input id="entPlaceInput" type="text" autocomplete="off" spellcheck="false" placeholder="Place name, e.g. Broad Haven">
+        <div id="entPlaceChosen" class="ent-dim"></div>
+        <div id="entPlaceList" class="ent-list"></div>
+        <label>Direction from there</label>
+        <div id="entDirs" class="ent-dirs">
+          <button type="button" data-dir="NW">NW</button><button type="button" data-dir="N">N</button><button type="button" data-dir="NE">NE</button><button type="button" data-dir="E">E</button>
+          <button type="button" data-dir="W">W</button><button type="button" data-dir="SW">SW</button><button type="button" data-dir="S">S</button><button type="button" data-dir="SE">SE</button>
+        </div>
+        <label for="entBearing">… or a bearing in degrees</label>
+        <div class="ent-row">
+          <input id="entBearing" type="number" inputmode="decimal" min="0" max="360" placeholder="e.g. 240" style="flex:2">
+          <div id="entBType" class="ent-row" style="flex:1;margin:0"><button type="button" data-bt="M">°M</button><button type="button" data-bt="T">°T</button></div>
+        </div>
+        <label for="entDist">Distance (leave empty to draw a line)</label>
+        <div class="ent-row">
+          <input id="entDist" type="number" inputmode="decimal" min="0" step="0.1" placeholder="e.g. 2" style="flex:2">
+          <div id="entUnits" class="ent-row ent-units" style="flex:3;margin:0;flex-wrap:nowrap"><button type="button" data-unit="nm">nm</button><button type="button" data-unit="mi">miles</button><button type="button" data-unit="m">m</button></div>
+        </div>
+      </div>
+      <div id="entPreview" class="ent-preview"></div>
+      <button id="entGo" class="ent-go" type="button">Set pin</button>
+      <p class="ent-note">Compass points (SW, NE…) are map directions. A bearing in degrees is magnetic unless you pick °T. "Miles" means land miles (as someone on shore might say); at sea, use nm. <span id="entVariation"></span> A quick picture only — check positions against the coastguard's own.</p>
+      </div>
+    </div>
     <div id="coastMessage" class="message" hidden></div>
   </div>
 

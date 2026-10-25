@@ -515,6 +515,11 @@ function renderUpdated(cache, errors) {
 // coast.js saves the pin with the distance and bearing (true) to the
 // nearest dry ground and the nearest way off, worked out when it was
 // placed. Shown here in a red-edged line with a Clear button.
+// Bearings saved from step 3d on are magnetic (bearingM); older pins
+// only have the true bearing.
+function pinBearingText(o) {
+  return typeof o.bearingM === "number" ? `${String(o.bearingM).padStart(3, "0")}°M` : `${String(o.bearing).padStart(3, "0")}°T`;
+}
 function pinDistText(m) {
   return m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1852).toFixed(2)} nm`;
 }
@@ -523,12 +528,13 @@ function renderPinLine() {
   const pin = readJson(CALLOUT_SPOT_KEY, null);
   if (!pin || typeof pin.lat !== "number") { el.hidden = true; el.innerHTML = ""; return; }
   const parts = [];
-  if (pin.shore) parts.push(`dry ground <b>${pinDistText(pin.shore.distM)}</b> ${String(pin.shore.bearing).padStart(3, "0")}°T`);
-  if (pin.wayOff) parts.push(`way off <b>${pinDistText(pin.wayOff.distM)}</b> ${String(pin.wayOff.bearing).padStart(3, "0")}°T${pin.wayOff.cut ? ` (${pin.wayOff.cut})` : ""}`);
+  if (pin.shore) parts.push(`dry ground <b>${pinDistText(pin.shore.distM)}</b> ${pinBearingText(pin.shore)}`);
+  if (pin.wayOff) parts.push(`way off <b>${pinDistText(pin.wayOff.distM)}</b> ${pinBearingText(pin.wayOff)}${pin.wayOff.cut ? ` (${pin.wayOff.cut})` : ""}`);
+  if (pin.source) parts.unshift(`reported ${escapeHtml(pin.source)}`);
   el.innerHTML = `<span class="dot"></span><span class="pin-text">Pin set on the Coast map: weather and sea are for the pin${parts.length ? "<br>" + parts.join(" · ") : ""}</span><button id="calloutPinClear" type="button">Clear</button>`;
   el.hidden = false;
   calloutEl("calloutPinClear").addEventListener("click", () => {
-    try { localStorage.removeItem(CALLOUT_SPOT_KEY); } catch { /* ignore */ }
+    try { localStorage.removeItem(CALLOUT_SPOT_KEY); localStorage.removeItem("cloude-coast:line"); } catch { /* ignore */ }
     renderPinLine();
     renderFromCache();
     refreshCallout();
@@ -582,6 +588,7 @@ function backToNormal() {
   try {
     localStorage.removeItem(CALLOUT_ACTIVE_KEY);
     localStorage.removeItem(CALLOUT_SPOT_KEY); // the pin ends with the callout
+    localStorage.removeItem("cloude-coast:line"); // and so does a reported bearing line
   } catch { /* nothing to clear */ }
   window.location.href = "index.html";
 }

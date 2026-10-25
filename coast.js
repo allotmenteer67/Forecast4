@@ -44,12 +44,23 @@
 //     the callout screen can show them without loading the map data.
 //   - "Me": the phone's own position (GPS), live, with its accuracy, and
 //     the distance and bearing from you to the pin. Handy in fog.
-//   Bearings are true (°T) for now; magnetic comes with step 3d.
+//   Bearings were true (°T) in 3c; from 3d they're shown magnetic (°M).
 //
 // Double-tap zoom has been removed, as on the weather map: a tap now
 // places the pin, and the + / − buttons zoom.
 //
-// Coming in a later part: rescue position entry (3d).
+// Step 3d adds rescue position entry ("Position" button), as positions
+// are reported to crew:
+//   - latitude/longitude, typed almost any way (decimal degrees, degrees
+//     and decimal minutes as the coastguard gives them, or degrees,
+//     minutes and seconds)
+//   - from a place: "2 miles SW of Broad Haven", or a bearing in degrees
+//     from a named point, my position or the pin. With a distance it
+//     sets the pin; with a bearing and no distance it draws a line
+//     ("somewhere along here"), and a distance can be added later.
+// and switches bearings to magnetic. Magnetic variation is from the World
+// Magnetic Model (WMM2025) for the middle of the bay; across the bay it
+// differs by under 0.1°. Distances are in nautical miles by default.
 
 const COAST_BASE = "data/coast/stbrides/";
 const COAST_TILE_DIR = COAST_BASE + "heights/";
@@ -60,6 +71,20 @@ const COAST_START = { lat: 51.775, lon: -5.11, mpp: 6 };
 const COAST_VIEW_KEY = "cloude-coast:view";
 const CALLOUT_SPOT_KEY = "cloude-callout:spot"; // shared with callout.js
 const NM = 1852;
+const STATUTE_MILE = 1609.344;
+const LINE_KEY = "cloude-coast:line"; // a bearing line with no distance yet
+// Magnetic variation (declination) for St Brides Bay (51.78°N 5.17°W)
+// from the World Magnetic Model WMM2025, which is exactly linear in time
+// over its life (2025.0-2030.0): about 0.5° west in late 2026, passing
+// through zero around the end of 2029. East is positive.
+const WMM = { epoch: 2025.0, decl: -0.872, perYear: 0.1865, validTo: 2030.0 };
+function declinationNow() {
+  const now = new Date();
+  const year = now.getUTCFullYear() + (now - Date.UTC(now.getUTCFullYear(), 0, 1)) / (365.25 * 86400000);
+  return WMM.decl + WMM.perYear * (Math.min(year, WMM.validTo) - WMM.epoch);
+}
+function trueToMag(t) { return ((t - declinationNow()) % 360 + 360) % 360; }
+function magToTrue(m) { return ((m + declinationNow()) % 360 + 360) % 360; }
 
 const STEEP_DEG = 30;
 const CLIFF_DEG = 55;
@@ -148,6 +173,8 @@ const coast = {
   pinMode: false,      // next tap on the map places the pin
   me: null,            // { lat, lon, acc } from the phone's GPS
   show: { shore: false, way: false }, // lines drawn from the pin when its card lines are tapped
+  line: null,          // { lat, lon, bearingT, label } a reported bearing with no distance
+  entry: { mode: "latlon", place: null, dir: null, unit: "nm", bearingType: "M" },
   meWatch: null,
   meError: ""
 };
@@ -268,7 +295,8 @@ function bearingT(a, b) {
 function distText(m) {
   return m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / NM).toFixed(m < 10 * NM ? 2 : 1)} nm`;
 }
-function bearingText(deg) { return `${String(deg).padStart(3, "0")}°T`; }
+// Bearings are worked out true and shown magnetic.
+function bearingText(degTrue) { return `${String(Math.round(trueToMag(degTrue)) % 360).padStart(3, "0")}°M`; }
 // Degrees and decimal minutes, as the coastguard gives positions.
 function degMin(lat, lon) {
   const f = (v, pos, neg, w) => {
@@ -286,8 +314,9 @@ function loadPin() {
   coast.pin = p && typeof p.lat === "number" && typeof p.lon === "number" ? p : null;
 }
 
-async function setPin(lat, lon) {
+async function setPin(lat, lon, source) {
   coast.pin = { lat, lon, setAt: Date.now() };
+  if (source) coast.pin.source = source;
   coast.show = { shore: false, way: false };
   writeJson(CALLOUT_SPOT_KEY, coast.pin);
   updatePinCard();
@@ -297,7 +326,8 @@ async function setPin(lat, lon) {
 
 function clearPin() {
   coast.pin = null;
-  try { localStorage.removeItem(CALLOUT_SPOT_KEY); } catch { /* ignore */ }
+  coast.line = null;
+  try { localStorage.removeItem(CALLOUT_SPOT_KEY); localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
   updatePinCard();
   queueDraw();
 }
@@ -314,11 +344,11 @@ async function describePin() {
     const d = distanceM(pin, a);
     if (!way || d < way.distM) way = { distM: d, a };
   }
-  pin.shore = shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), lat: shore.lat, lon: shore.lon } : null;
+  pin.shore = shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), bearingM: Math.round(trueToMag(bearingT(pin, shore))) % 360, lat: shore.lat, lon: shore.lon } : null;
   if (way) {
     const ct = cutTimeFromNow(way.a.foot);
     pin.wayOff = {
-      distM: Math.round(way.distM), bearing: bearingT(pin, way.a), lat: way.a.lat, lon: way.a.lon,
+      distM: Math.round(way.distM), bearing: bearingT(pin, way.a), bearingM: Math.round(trueToMag(bearingT(pin, way.a))) % 360, lat: way.a.lat, lon: way.a.lon,
       kind: way.a.kind, cut: ct ? (ct.state === "now" ? "cut now" : ct.state === "at" ? `cut ${clockTime(ct.time)}` : "above high tide") : null
     };
   } else pin.wayOff = null;
@@ -411,9 +441,13 @@ function updatePinCard() {
   const pin = coast.pin;
   if (pin) {
     lines.push(`<div class="pc-title"><span class="pc-pin"></span>Pin · ${degMin(pin.lat, pin.lon)}</div>`);
+    if (pin.source) lines.push(`<div class="pc-dim">Reported: ${escapeHtml(pin.source)}</div>`);
     // These two lines can be tapped to draw the route from the pin.
     if (pin.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(pin.shore.distM)}</b> ${bearingText(pin.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
     if (pin.wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">Nearest way off: <b>${distText(pin.wayOff.distM)}</b> ${bearingText(pin.wayOff.bearing)}${pin.wayOff.cut ? ` · ${pin.wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
+  }
+  if (coast.line) {
+    lines.push(`<div class="pc-title"><span class="pc-line"></span>Line ${escapeHtml(coast.line.label)}</div><div class="pc-dim">Somewhere along the orange line — add a distance with Position to set the pin.</div>`);
   }
   if (coast.me) {
     const acc = Math.round(coast.me.acc);
@@ -424,7 +458,11 @@ function updatePinCard() {
     lines.push(`<div class="pc-dim">${coast.meError}</div>`);
   }
   if (coast.pinMode) lines.unshift(`<div class="pc-hint">Tap the map to place the pin</div>`);
+  // Clear (pin and line) lives on the card, so the button row fits a phone.
+  if (pin || coast.line) lines.unshift(`<button class="pc-clear" type="button">Clear</button>`);
   card.innerHTML = lines.join("");
+  const clearBtn = card.querySelector(".pc-clear");
+  if (clearBtn) clearBtn.addEventListener("click", () => { coast.pinMode = false; clearPin(); });
   card.hidden = lines.length === 0;
   card.querySelectorAll(".pc-tap").forEach(el => el.addEventListener("click", () => {
     const which = el.dataset.show;
@@ -433,10 +471,201 @@ function updatePinCard() {
     if (coast.show[which] && target && typeof target.lat === "number") fitPinAnd(target);
     updatePinCard();
   }));
-  $("coastPinClear").hidden = !pin;
   $("coastPinBtn").classList.toggle("on", coast.pinMode);
   $("coastPinBtn").setAttribute("aria-label", pin ? "Move the pin" : "Place a pin");
   queueDraw();
+}
+
+// ---- Rescue position entry ----
+function escapeHtml(t) {
+  return String(t).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+}
+
+// Reads a typed latitude/longitude, as forgivingly as possible:
+//   51 46.2N 5 08.7W     51°46.2′N 5°08.7′W     N51 46.2 W005 08.7
+//   51.770 -5.145        51.77N 5.145W          51 46 12N 5 08 42W
+// With no E/W given, a positive longitude is taken as west (this map is
+// in west Wales). Returns { lat, lon } or null.
+function parseLatLon(text) {
+  const t = String(text).toUpperCase().replace(/[°º′'’″"”:,;]/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  const hasS = /S/.test(t), hasE = /E/.test(t), hasW = /W/.test(t);
+  // Split at the first longitude letter or into numbers.
+  const nums = (t.match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
+  let lat, lon;
+  const dm = (d, m, sec = 0) => Math.abs(d) + m / 60 + sec / 3600;
+  if (nums.length === 2) { lat = Math.abs(nums[0]); lon = Math.abs(nums[1]); if (nums[1] < 0) lon = -lon; if (nums[0] < 0) lat = -lat; }
+  else if (nums.length === 4) { lat = dm(nums[0], nums[1]); lon = dm(nums[2], nums[3]); if (nums[0] < 0) lat = -lat; if (nums[2] < 0) lon = -lon; }
+  else if (nums.length === 6) { lat = dm(nums[0], nums[1], nums[2]); lon = dm(nums[3], nums[4], nums[5]); if (nums[0] < 0) lat = -lat; if (nums[3] < 0) lon = -lon; }
+  else return null;
+  if (hasS && lat > 0) lat = -lat;
+  if (hasW && lon > 0) lon = -lon;
+  if (!hasE && !hasW && lon > 0) lon = -lon; // west Wales: assume west
+  if (hasE && lon < 0) lon = -lon;
+  if (!(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) return null;
+  return { lat, lon };
+}
+
+const COMPASS_POINTS = { N: 0, NNE: 22.5, NE: 45, ENE: 67.5, E: 90, ESE: 112.5, SE: 135, SSE: 157.5, S: 180, SSW: 202.5, SW: 225, WSW: 247.5, W: 270, WNW: 292.5, NW: 315, NNW: 337.5 };
+
+function normName(s) {
+  return String(s).toLowerCase().replace(/\([^)]*\)/g, " ").replace(/['’]/g, "").replace(/[^a-z0-9]+/g, " ").trim().replace(/^the /, "");
+}
+
+// Places to measure from: my position and the pin first (if set), then
+// names (with their other names) matching what's typed.
+function placeMatches(q) {
+  const out = [];
+  const nq = normName(q);
+  if (coast.me) out.push({ name: "My position", lat: coast.me.lat, lon: coast.me.lon, special: true });
+  if (coast.pin) out.push({ name: "The pin", lat: coast.pin.lat, lon: coast.pin.lon, special: true });
+  if (!nq) return out.slice(0, 2);
+  const scored = [];
+  for (const n of coast.names) {
+    const all = [n.name, ...(n.alt || [])];
+    let best = 0, via = null;
+    for (const a of all) {
+      const na = normName(a);
+      const sc = na === nq ? 3 : na.startsWith(nq) ? 2 : na.includes(nq) ? 1 : 0;
+      if (sc > best) { best = sc; via = a; }
+    }
+    if (best) scored.push({ sc: best, name: n.name, via: via !== n.name ? via : null, kind: n.kind, lat: n.lat, lon: n.lon });
+  }
+  scored.sort((a, b) => b.sc - a.sc || a.name.localeCompare(b.name));
+  return [...out.filter(p => normName(p.name).includes(nq)), ...scored.slice(0, 8)];
+}
+
+function openEntry() {
+  $("coastEntry").hidden = false;
+  coast.pinMode = false;
+  renderEntry();
+  updatePinCard();
+}
+function closeEntry() { $("coastEntry").hidden = true; }
+
+function renderEntry() {
+  const e = coast.entry;
+  $("entTabLatLon").classList.toggle("on", e.mode === "latlon");
+  $("entTabPlace").classList.toggle("on", e.mode === "place");
+  $("entLatLon").hidden = e.mode !== "latlon";
+  $("entPlace").hidden = e.mode !== "place";
+  document.querySelectorAll("#entDirs button").forEach(b => b.classList.toggle("on", b.dataset.dir === e.dir));
+  document.querySelectorAll("#entUnits button").forEach(b => b.classList.toggle("on", b.dataset.unit === e.unit));
+  document.querySelectorAll("#entBType button").forEach(b => b.classList.toggle("on", b.dataset.bt === e.bearingType));
+  $("entPlaceChosen").textContent = e.place ? `✓ ${e.place.name}` : "";
+  updateEntryPreview();
+}
+
+function renderPlaceList() {
+  const list = $("entPlaceList");
+  const q = $("entPlaceInput").value;
+  const items = placeMatches(q);
+  list.innerHTML = items.map((p, i) =>
+    `<button type="button" data-i="${i}">${escapeHtml(p.name)}${p.via ? ` <span class="ent-dim">(${escapeHtml(p.via)})</span>` : ""}${p.kind ? ` <span class="ent-dim">· ${escapeHtml(p.kind)}</span>` : ""}</button>`).join("");
+  list.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    const p = items[Number(b.dataset.i)];
+    coast.entry.place = { name: p.name, lat: p.lat, lon: p.lon };
+    $("entPlaceInput").value = p.name;
+    list.innerHTML = "";
+    renderEntry();
+  }));
+}
+
+// What the "from a place" fields add up to: a point, or a line.
+function placeResult() {
+  const e = coast.entry;
+  if (!e.place) return { error: "Choose a place to measure from" };
+  const bearingNum = parseFloat($("entBearing").value);
+  let bT = null, dirText = "";
+  if (!isNaN(bearingNum)) {
+    const b = ((bearingNum % 360) + 360) % 360;
+    bT = e.bearingType === "M" ? magToTrue(b) : b;
+    dirText = `${String(Math.round(b)).padStart(3, "0")}°${e.bearingType}`;
+  } else if (e.dir) {
+    bT = COMPASS_POINTS[e.dir];
+    dirText = e.dir;
+  }
+  if (bT === null) return { error: "Choose a direction, or type a bearing" };
+  const dist = parseFloat($("entDist").value);
+  if (isNaN(dist) || dist <= 0) {
+    return { line: { lat: e.place.lat, lon: e.place.lon, bearingT: bT, label: `${dirText} from ${e.place.name}` } };
+  }
+  const unitM = e.unit === "nm" ? NM : e.unit === "mi" ? STATUTE_MILE : 1;
+  const unitText = e.unit === "nm" ? "nm" : e.unit === "mi" ? (dist === 1 ? "mile" : "miles") : "m";
+  const pt = destination(e.place, bT, dist * unitM);
+  return { point: pt, source: `${dist} ${unitText} ${dirText} of ${e.place.name}` };
+}
+
+function updateEntryPreview() {
+  const el = $("entPreview");
+  if (coast.entry.mode === "latlon") {
+    const p = parseLatLon($("entLatLonInput").value);
+    el.textContent = p ? `= ${degMin(p.lat, p.lon)}` : ($("entLatLonInput").value ? "Can't read that yet" : "");
+    el.classList.toggle("bad", !p && !!$("entLatLonInput").value);
+    $("entGo").textContent = "Set pin";
+    return;
+  }
+  const r = placeResult();
+  el.classList.toggle("bad", !!r.error);
+  if (r.error) { el.textContent = r.error; $("entGo").textContent = "Set"; return; }
+  if (r.line) { el.textContent = `Line ${r.line.label} — no distance, so no pin yet`; $("entGo").textContent = "Draw line"; return; }
+  el.textContent = `Pin ${r.source} = ${degMin(r.point.lat, r.point.lon)}`;
+  $("entGo").textContent = "Set pin";
+}
+
+function applyEntry() {
+  if (coast.entry.mode === "latlon") {
+    const p = parseLatLon($("entLatLonInput").value);
+    if (!p) return;
+    coast.line = null;
+    try { localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
+    setPin(p.lat, p.lon); // the card already shows the position
+    centreOn(p);
+  } else {
+    const r = placeResult();
+    if (r.error) return;
+    if (r.line) {
+      coast.line = r.line;
+      writeJson(LINE_KEY, r.line);
+      const far = destination(r.line, r.line.bearingT, 3 * NM);
+      centreOn({ lat: (r.line.lat + far.lat) / 2, lon: (r.line.lon + far.lon) / 2 }, 3.5 * NM);
+    } else {
+      coast.line = null;
+      try { localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
+      setPin(r.point.lat, r.point.lon, r.source);
+      centreOn(r.point);
+    }
+  }
+  closeEntry();
+  updatePinCard();
+  queueDraw();
+}
+
+function centreOn(p, spanM) {
+  coast.view.lat = p.lat; coast.view.lon = p.lon;
+  if (spanM) coast.view.mpp = Math.max(coast.view.mpp, spanM / Math.max(Math.min(coast.w, coast.h), 200));
+  clampView();
+}
+
+function setUpEntry() {
+  $("coastPosBtn").addEventListener("click", openEntry);
+  $("entClose").addEventListener("click", closeEntry);
+  $("entTabLatLon").addEventListener("click", () => { coast.entry.mode = "latlon"; renderEntry(); });
+  $("entTabPlace").addEventListener("click", () => { coast.entry.mode = "place"; renderEntry(); renderPlaceList(); });
+  $("entLatLonInput").addEventListener("input", updateEntryPreview);
+  $("entPlaceInput").addEventListener("input", () => { coast.entry.place = null; renderPlaceList(); renderEntry(); });
+  $("entPlaceInput").addEventListener("focus", renderPlaceList);
+  $("entBearing").addEventListener("input", () => { if ($("entBearing").value) coast.entry.dir = null; renderEntry(); });
+  $("entDist").addEventListener("input", updateEntryPreview);
+  document.querySelectorAll("#entDirs button").forEach(b => b.addEventListener("click", () => {
+    coast.entry.dir = coast.entry.dir === b.dataset.dir ? null : b.dataset.dir;
+    $("entBearing").value = "";
+    renderEntry();
+  }));
+  document.querySelectorAll("#entUnits button").forEach(b => b.addEventListener("click", () => { coast.entry.unit = b.dataset.unit; renderEntry(); }));
+  document.querySelectorAll("#entBType button").forEach(b => b.addEventListener("click", () => { coast.entry.bearingType = b.dataset.bt; renderEntry(); }));
+  $("entGo").addEventListener("click", applyEntry);
+  $("entVariation").textContent = `Magnetic variation here: ${Math.abs(declinationNow()).toFixed(1)}° ${declinationNow() < 0 ? "W" : "E"} (WMM2025).`;
 }
 
 // ---- Data loading ----
@@ -962,9 +1191,45 @@ function drawRouteLine(target, colour) {
   ctx.restore();
 }
 
+// A reported bearing with no distance: an orange line from the point
+// out to 12 nm, with ticks every nautical mile so a distance can be
+// judged against it.
+function drawBearingLine() {
+  const L = coast.line;
+  if (!L) return;
+  const { ctx } = coast;
+  const end = destination(L, L.bearingT, 12 * NM);
+  const a = toScreen(L.lat, L.lon), b = toScreen(end.lat, end.lon);
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineWidth = 6; ctx.strokeStyle = "rgba(10,12,16,0.75)";
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.lineWidth = 3; ctx.strokeStyle = "#ff9a3c";
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.font = "600 11px -apple-system, BlinkMacSystemFont, sans-serif";
+  ctx.textBaseline = "middle";
+  for (let n = 1; n <= 12; n++) {
+    const p = destination(L, L.bearingT, n * NM);
+    const s2 = toScreen(p.lat, p.lon);
+    if (s2.x < -20 || s2.y < -20 || s2.x > coast.w + 20 || s2.y > coast.h + 20) continue;
+    ctx.beginPath(); ctx.arc(s2.x, s2.y, 4, 0, Math.PI * 2); ctx.fillStyle = "#ff9a3c"; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
+    ctx.strokeText(`${n} nm`, s2.x + 7, s2.y); ctx.fillStyle = "#ffd2a8"; ctx.fillText(`${n} nm`, s2.x + 7, s2.y);
+  }
+  ctx.beginPath(); ctx.arc(a.x, a.y, 6, 0, Math.PI * 2); ctx.fillStyle = "#ff9a3c"; ctx.fill();
+  ctx.restore();
+}
+
+function destination(from, bearingTrue, distM) {
+  const b = bearingTrue * Math.PI / 180;
+  const kx = 111320 * Math.cos(from.lat * Math.PI / 180);
+  return { lat: from.lat + distM * Math.cos(b) / KY, lon: from.lon + distM * Math.sin(b) / kx };
+}
+
 function drawPinAndMe() {
   const { ctx } = coast;
   const pin = coast.pin, me = coast.me;
+  drawBearingLine();
   if (pin && coast.show.shore) drawRouteLine(pin.shore, "#ffe08a");
   if (pin && coast.show.way) drawRouteLine(pin.wayOff, "#5fe08a");
   if (pin && me) {
@@ -1198,7 +1463,6 @@ function setUpGestures() {
   c.addEventListener("wheel", ev => { ev.preventDefault(); zoomAt(ev.deltaY > 0 ? 1.2 : 1 / 1.2, ev.offsetX, ev.offsetY); }, { passive: false });
 
   $("coastPinBtn").addEventListener("click", () => { coast.pinMode = !coast.pinMode; updatePinCard(); });
-  $("coastPinClear").addEventListener("click", () => { coast.pinMode = false; clearPin(); });
   $("coastMeBtn").addEventListener("click", toggleMe);
   $("coastZoomIn").addEventListener("click", () => zoomAt(0.5, coast.w / 2, coast.h / 2));
   $("coastZoomOut").addEventListener("click", () => zoomAt(2, coast.w / 2, coast.h / 2));
@@ -1242,6 +1506,8 @@ async function initCoast() {
   const saved = readJson(COAST_VIEW_KEY, null);
   coast.view = saved && typeof saved.lat === "number" ? saved : { ...COAST_START };
   loadPin();
+  const savedLine = readJson(LINE_KEY, null);
+  if (savedLine && typeof savedLine.lat === "number") coast.line = savedLine;
   // Opened with a pin (e.g. from the callout screen): start there.
   if (coast.pin) { coast.view.lat = coast.pin.lat; coast.view.lon = coast.pin.lon; }
   resetBaseTime();
@@ -1249,6 +1515,7 @@ async function initCoast() {
   window.addEventListener("resize", resize);
   setUpGestures();
   setUpSlider();
+  setUpEntry();
   updateTimeLabel();
   updatePinCard();
   $("coastBack").addEventListener("click", () => {
