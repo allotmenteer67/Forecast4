@@ -77,8 +77,23 @@
     input[type=range] { width: 100%; accent-color: #85b7eb; height: 34px; margin: 0; }
     .range-labels { display: flex; justify-content: space-between; color: #888780; font-size: 12px; margin-top: -6px; }
     .map-controls { display: flex; gap: 8px; padding: 0 12px 8px; background: #14161a; }
-    .map-controls button { height: 40px; min-width: 44px; }
+    .map-controls button { height: 40px; min-width: 44px; padding: 0 11px; }
     .map-controls .zoom-btn { font-size: 22px; padding: 0 12px; line-height: 1; }
+    .map-controls .spacer { flex: 1; }
+    .map-controls button.on { background: #185fa5; border-color: #185fa5; color: #fff; }
+    /* Pin and own-position details, along the bottom of the map. */
+    .pin-card {
+      position: absolute; left: 8px; right: 8px; bottom: 8px; background: rgba(14,17,22,0.9);
+      border-radius: 12px; padding: 8px 12px; font-size: 14px; line-height: 1.45; pointer-events: none;
+    }
+    .pin-card b { font-variant-numeric: tabular-nums; }
+    .pc-title { font-weight: 600; margin-top: 2px; }
+    .pc-dim { color: #b4b2a9; font-weight: 400; }
+    .pc-hint { color: #fac775; font-weight: 600; }
+    .pc-pin, .pc-me { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+    .pc-pin { background: #e5484d; }
+    .pc-me { background: #3d8bff; border: 2px solid #fff; width: 11px; height: 11px; vertical-align: -1px; }
+
     .map-wrap { position: relative; flex: 1; min-height: 0; margin: 0 8px; border-radius: 14px; overflow: hidden; }
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
     .legend {
@@ -106,6 +121,10 @@
     <button id="coastZoomIn" class="zoom-btn" type="button" aria-label="Zoom in">+</button>
     <button id="coastZoomOut" class="zoom-btn" type="button" aria-label="Zoom out">−</button>
     <button id="coastLegendToggle" type="button" aria-expanded="false">Key</button>
+    <span class="spacer"></span>
+    <button id="coastPinBtn" type="button">Pin</button>
+    <button id="coastPinClear" type="button" hidden>Clear</button>
+    <button id="coastMeBtn" type="button" aria-label="Show my position">Me</button>
   </div>
 
   <div class="map-wrap">
@@ -128,6 +147,7 @@
       <div><span class="sw" style="background:rgb(22,34,52);border:1px solid #555"></span>Sea</div>
       <div><span class="sw" style="background:#2f9e55;border-radius:50%"></span>Way off the beach (grey once cut)</div>
     </div>
+    <div id="coastPinCard" class="pin-card" hidden></div>
     <div id="coastMessage" class="message" hidden></div>
   </div>
 

@@ -511,6 +511,30 @@ function renderUpdated(cache, errors) {
   el.classList.toggle("stale", stale || errors.length > 0);
 }
 
+// ---- Pin from the Coast map ----
+// coast.js saves the pin with the distance and bearing (true) to the
+// nearest dry ground and the nearest way off, worked out when it was
+// placed. Shown here in a red-edged line with a Clear button.
+function pinDistText(m) {
+  return m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1852).toFixed(2)} nm`;
+}
+function renderPinLine() {
+  const el = calloutEl("calloutPin");
+  const pin = readJson(CALLOUT_SPOT_KEY, null);
+  if (!pin || typeof pin.lat !== "number") { el.hidden = true; el.innerHTML = ""; return; }
+  const parts = [];
+  if (pin.shore) parts.push(`dry ground <b>${pinDistText(pin.shore.distM)}</b> ${String(pin.shore.bearing).padStart(3, "0")}°T`);
+  if (pin.wayOff) parts.push(`way off <b>${pinDistText(pin.wayOff.distM)}</b> ${String(pin.wayOff.bearing).padStart(3, "0")}°T${pin.wayOff.cut ? ` (${pin.wayOff.cut})` : ""}`);
+  el.innerHTML = `<span class="dot"></span><span class="pin-text">Pin set on the Coast map: weather and sea are for the pin${parts.length ? "<br>" + parts.join(" · ") : ""}</span><button id="calloutPinClear" type="button">Clear</button>`;
+  el.hidden = false;
+  calloutEl("calloutPinClear").addEventListener("click", () => {
+    try { localStorage.removeItem(CALLOUT_SPOT_KEY); } catch { /* ignore */ }
+    renderPinLine();
+    renderFromCache();
+    refreshCallout();
+  });
+}
+
 // ---- Main refresh ----
 let calloutRefreshing = false;
 async function refreshCallout() {
@@ -543,6 +567,7 @@ async function refreshCallout() {
 
 // Shows whatever was last downloaded, straight away, before any fetch.
 function renderFromCache() {
+  renderPinLine();
   const spot = currentSpot();
   const units = unitChoices();
   const cache = loadCache(spot);

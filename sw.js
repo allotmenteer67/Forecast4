@@ -404,7 +404,9 @@
 // water (fixes false cut-offs), tidier way-off and beach labels.
 // Bumped to v89: coast map — cut-off pink only for stranded ground that
 // reaches the shore, not isolated patches out in the bay.
-const SHELL_CACHE_NAME = "cloude-shell-v89";
+// Bumped to v90: coast map step 3c — Pin and Me (own position), the
+// pin card, and the pin line with Clear on the callout screen.
+const SHELL_CACHE_NAME = "cloude-shell-v90";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

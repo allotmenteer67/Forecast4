@@ -34,8 +34,22 @@
 //     which there is no dry route — without crossing water or a cliff —
 //     to a way off or to higher ground
 //
-// Coming in later parts: a pin and own position (3c), rescue position
-// entry (3d).
+// Step 3c adds:
+//   - a pin: tap "Pin", then tap the map. It's saved under
+//     cloude-callout:spot (the key callout.js reads), so the callout
+//     screen's weather, sea and tide switch to that spot. It stays until
+//     "Clear" here, or "Back to normal" on the callout screen.
+//     With the pin, the distance and bearing to the nearest dry ground
+//     and the nearest way off are worked out here and saved with it, so
+//     the callout screen can show them without loading the map data.
+//   - "Me": the phone's own position (GPS), live, with its accuracy, and
+//     the distance and bearing from you to the pin. Handy in fog.
+//   Bearings are true (°T) for now; magnetic comes with step 3d.
+//
+// Double-tap zoom has been removed, as on the weather map: a tap now
+// places the pin, and the + / − buttons zoom.
+//
+// Coming in a later part: rescue position entry (3d).
 
 const COAST_BASE = "data/coast/stbrides/";
 const COAST_TILE_DIR = COAST_BASE + "heights/";
@@ -44,6 +58,8 @@ const COAST_TIDE_POINT = { lat: 51.75, lon: -5.15 };
 // Where the map opens if nothing else is chosen: Little Haven.
 const COAST_START = { lat: 51.775, lon: -5.11, mpp: 6 };
 const COAST_VIEW_KEY = "cloude-coast:view";
+const CALLOUT_SPOT_KEY = "cloude-callout:spot"; // shared with callout.js
+const NM = 1852;
 
 const STEEP_DEG = 30;
 const CLIFF_DEG = 55;
@@ -127,7 +143,12 @@ const coast = {
   beaches: [],         // { name, lat, lon, outline, access: [indexes] }
   series: null,        // { startMs, levels: Float32Array } tide every SERIES_STEP_MIN
   cutoffKey: null,     // what the current cut-off overlay was worked out for
-  cutoffTimer: null
+  cutoffTimer: null,
+  pin: null,           // { lat, lon, ... } as saved under CALLOUT_SPOT_KEY
+  pinMode: false,      // next tap on the map places the pin
+  me: null,            // { lat, lon, acc } from the phone's GPS
+  meWatch: null,
+  meError: ""
 };
 
 function $(id) { return document.getElementById(id); }
@@ -231,6 +252,181 @@ function updateTimeLabel() {
   const state = abs < 0.25 ? "Turning" : (lv.rate > 0 ? "Rising" : "Falling") + (abs >= 0.9 ? " fast" : "");
   setTideText(`Tide ${shown.toFixed(1)} m${datum} · ${state}`,
     `${lv.rate >= 0 ? "+" : "−"}${abs.toFixed(1)} m per hour · ${coast.tide.label}`);
+}
+
+// ---- Distances, bearings and positions ----
+function distanceM(a, b) {
+  const dx = (b.lon - a.lon) * KX, dy = (b.lat - a.lat) * KY;
+  return Math.hypot(dx, dy);
+}
+// True bearing from a to b, 0-359.
+function bearingT(a, b) {
+  const dx = (b.lon - a.lon) * KX, dy = (b.lat - a.lat) * KY;
+  return (Math.round(Math.atan2(dx, dy) * 180 / Math.PI) + 360) % 360;
+}
+function distText(m) {
+  return m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / NM).toFixed(m < 10 * NM ? 2 : 1)} nm`;
+}
+function bearingText(deg) { return `${String(deg).padStart(3, "0")}°T`; }
+// Degrees and decimal minutes, as the coastguard gives positions.
+function degMin(lat, lon) {
+  const f = (v, pos, neg, w) => {
+    const a = Math.abs(v);
+    let d = Math.floor(a), m = (a - d) * 60;
+    if (m >= 59.995) { d += 1; m = 0; }
+    return `${String(d).padStart(w, "0")}°${m.toFixed(2).padStart(5, "0")}′${v >= 0 ? pos : neg}`;
+  };
+  return `${f(lat, "N", "S", 2)} ${f(lon, "E", "W", 1)}`;
+}
+
+// ---- Pin ----
+function loadPin() {
+  const p = readJson(CALLOUT_SPOT_KEY, null);
+  coast.pin = p && typeof p.lat === "number" && typeof p.lon === "number" ? p : null;
+}
+
+async function setPin(lat, lon) {
+  coast.pin = { lat, lon, setAt: Date.now() };
+  writeJson(CALLOUT_SPOT_KEY, coast.pin);
+  updatePinCard();
+  queueDraw();
+  await describePin();
+}
+
+function clearPin() {
+  coast.pin = null;
+  try { localStorage.removeItem(CALLOUT_SPOT_KEY); } catch { /* ignore */ }
+  updatePinCard();
+  queueDraw();
+}
+
+// Nearest dry ground (now) and nearest way off, saved with the pin so
+// the callout screen can show them.
+async function describePin() {
+  const pin = coast.pin;
+  if (!pin || !coast.index) return;
+  const shore = await nearestDryGround(pin);
+  if (coast.pin !== pin) return; // moved meanwhile
+  let way = null;
+  for (const a of coast.access) {
+    const d = distanceM(pin, a);
+    if (!way || d < way.distM) way = { distM: d, a };
+  }
+  pin.shore = shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore) } : null;
+  if (way) {
+    const ct = cutTimeFromNow(way.a.foot);
+    pin.wayOff = {
+      distM: Math.round(way.distM), bearing: bearingT(pin, way.a),
+      kind: way.a.kind, cut: ct ? (ct.state === "now" ? "cut now" : ct.state === "at" ? `cut ${clockTime(ct.time)}` : "above high tide") : null
+    };
+  } else pin.wayOff = null;
+  writeJson(CALLOUT_SPOT_KEY, pin);
+  updatePinCard();
+}
+
+// Cut time from the real "now", whatever the slider says.
+function cutTimeFromNow(footOd) {
+  const saved = coast.offsetMin;
+  coast.offsetMin = 0;
+  const r = cutTime(footOd);
+  coast.offsetMin = saved;
+  return r;
+}
+
+// Searches the detailed tiles within ~1.5 km of the point for the
+// closest ground that's dry at the current real time; beyond that, the
+// coarse land outline. Returns { lat, lon, distM } or null.
+async function nearestDryGround(pt) {
+  const g = coast.index.grid, T = g.tileSize;
+  const now = tideOdAt(new Date());
+  const cover = now === null ? 0 : codeFor(now);
+  const row = Math.floor((g.north - pt.lat) / g.dLat);
+  const col = Math.floor((pt.lon - g.west) / g.dLon);
+  const tr = Math.floor(row / T), tc = Math.floor(col / T);
+  let best = null;
+  const near = coast.index.tiles.filter(t => Math.abs(t.r - tr) <= 1 && Math.abs(t.c - tc) <= 1);
+  for (const meta of near) {
+    const e = tileEntry(meta);
+    e.used = performance.now();
+    if (!e.codes) await decodeTile(e);
+    if (!e.codes) continue;
+    for (let y = 0; y < T; y++) {
+      const gy = meta.r * T + y;
+      for (let x = 0; x < T; x++) {
+        const code = e.codes[y * T + x];
+        if (code === 0 || code <= cover) continue;
+        const gx = meta.c * T + x;
+        const dy = (gy - row) * g.dLat * KY, dx = (gx - col) * g.dLon * KX;
+        const d2 = dx * dx + dy * dy;
+        if (!best || d2 < best.d2) best = { d2, gy, gx };
+      }
+    }
+  }
+  if (best) {
+    return { lat: g.north - (best.gy + 0.5) * g.dLat, lon: g.west + (best.gx + 0.5) * g.dLon, distM: Math.sqrt(best.d2) };
+  }
+  if (!coast.mask) return null;
+  const m = coast.mask, c = m.canvas;
+  const p = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+    if (p[(y * c.width + x) * 4 + 3] === 0) continue;
+    const lat = g.north - (y + 0.5) * m.dLat, lon = g.west + (x + 0.5) * m.dLon;
+    const d = distanceM(pt, { lat, lon });
+    if (!best || d < best.distM) best = { lat, lon, distM: d };
+  }
+  return best;
+}
+
+// ---- Own position ----
+function toggleMe() {
+  if (coast.meWatch !== null) {
+    navigator.geolocation.clearWatch(coast.meWatch);
+    coast.meWatch = null; coast.me = null; coast.meError = "";
+    $("coastMeBtn").classList.remove("on");
+    updatePinCard(); queueDraw();
+    return;
+  }
+  if (!("geolocation" in navigator)) { coast.meError = "Location isn't available on this device"; updatePinCard(); return; }
+  $("coastMeBtn").classList.add("on");
+  coast.meError = "Finding your position…";
+  updatePinCard();
+  let first = true;
+  coast.meWatch = navigator.geolocation.watchPosition(pos => {
+    coast.me = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy };
+    coast.meError = "";
+    if (first) { first = false; coast.view.lat = coast.me.lat; coast.view.lon = coast.me.lon; clampView(); }
+    updatePinCard(); queueDraw();
+  }, err => {
+    coast.meError = err.code === 1 ? "Location permission is off for this app" : "Can't get a position right now";
+    updatePinCard();
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+}
+
+// ---- Pin / position card (bottom of the map) ----
+function updatePinCard() {
+  const card = $("coastPinCard");
+  const lines = [];
+  const pin = coast.pin;
+  if (pin) {
+    lines.push(`<div class="pc-title"><span class="pc-pin"></span>Pin · ${degMin(pin.lat, pin.lon)}</div>`);
+    if (pin.shore) lines.push(`<div>Nearest dry ground now: <b>${distText(pin.shore.distM)}</b> ${bearingText(pin.shore.bearing)}</div>`);
+    if (pin.wayOff) lines.push(`<div>Nearest way off: <b>${distText(pin.wayOff.distM)}</b> ${bearingText(pin.wayOff.bearing)}${pin.wayOff.cut ? ` · ${pin.wayOff.cut}` : ""}</div>`);
+  }
+  if (coast.me) {
+    const acc = Math.round(coast.me.acc);
+    let line = `<div class="pc-title"><span class="pc-me"></span>You · ${degMin(coast.me.lat, coast.me.lon)} <span class="pc-dim">±${acc} m</span></div>`;
+    if (pin) line += `<div>To pin: <b>${distText(distanceM(coast.me, pin))}</b> ${bearingText(bearingT(coast.me, pin))}</div>`;
+    lines.push(line);
+  } else if (coast.meError) {
+    lines.push(`<div class="pc-dim">${coast.meError}</div>`);
+  }
+  if (coast.pinMode) lines.unshift(`<div class="pc-hint">Tap the map to place the pin</div>`);
+  card.innerHTML = lines.join("");
+  card.hidden = lines.length === 0;
+  $("coastPinClear").hidden = !pin;
+  $("coastPinBtn").classList.toggle("on", coast.pinMode);
+  $("coastPinBtn").setAttribute("aria-label", pin ? "Move the pin" : "Place a pin");
+  queueDraw();
 }
 
 // ---- Data loading ----
@@ -719,8 +915,43 @@ function draw() {
   if (coast.view.mpp <= CUTOFF_MPP) drawAccess();
   if (coast.view.mpp <= NAMES_MPP) drawNames();
   if (coast.view.mpp <= CUTOFF_MPP) drawBeachTimes();
+  drawPinAndMe();
   scheduleCutoff();
   drawScaleBar();
+}
+
+function drawPinAndMe() {
+  const { ctx } = coast;
+  const pin = coast.pin, me = coast.me;
+  if (pin && me) {
+    const a = toScreen(me.lat, me.lon), b = toScreen(pin.lat, pin.lon);
+    ctx.save();
+    ctx.setLineDash([6, 5]); ctx.lineWidth = 2; ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.restore();
+  }
+  if (me) {
+    const s = toScreen(me.lat, me.lon);
+    const r = Math.max(me.acc / coast.view.mpp, 8);
+    ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(80,150,255,0.18)"; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = "rgba(120,180,255,0.6)"; ctx.stroke();
+    ctx.beginPath(); ctx.arc(s.x, s.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = "#3d8bff"; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = "#ffffff"; ctx.stroke();
+  }
+  if (pin) {
+    const s = toScreen(pin.lat, pin.lon);
+    // A map pin: a red head on a short stem, the point at the spot.
+    ctx.lineWidth = 2; ctx.strokeStyle = "#0e1116";
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.bezierCurveTo(s.x - 4, s.y - 10, s.x - 10, s.y - 14, s.x - 10, s.y - 21);
+    ctx.arc(s.x, s.y - 21, 10, Math.PI, 0);
+    ctx.bezierCurveTo(s.x + 10, s.y - 14, s.x + 4, s.y - 10, s.x, s.y);
+    ctx.fillStyle = "#e5484d"; ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(s.x, s.y - 21, 3.5, 0, Math.PI * 2); ctx.fillStyle = "#ffffff"; ctx.fill();
+  }
 }
 
 // Ways off: a green disc with an up arrow while open, grey with a cross
@@ -823,7 +1054,9 @@ function drawScaleBar() {
   let pick = choices[0];
   for (const c of choices) if (c * nm / mpp <= targetPx) pick = c;
   const px = pick * nm / mpp;
-  const x = 14, y = coast.h - 18;
+  // Top left (the bottom of the map is for the pin card; the time pill
+  // is top right).
+  const x = 14, y = 34;
   ctx.strokeStyle = "#f2efe6"; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x, y); ctx.lineTo(x + px, y); ctx.lineTo(x + px, y - 5); ctx.stroke();
   ctx.font = "600 12px -apple-system, BlinkMacSystemFont, sans-serif";
@@ -873,24 +1106,22 @@ function setUpGestures() {
   const c = coast.canvas;
   const pointers = new Map();
   let pinchStart = null;
-  let lastTap = 0;
+  let tap = null; // a possible tap: start point, time; cancelled by moving
 
   c.addEventListener("pointerdown", ev => {
     c.setPointerCapture(ev.pointerId);
     pointers.set(ev.pointerId, { x: ev.offsetX, y: ev.offsetY });
+    tap = pointers.size === 1 ? { x: ev.offsetX, y: ev.offsetY, t: Date.now(), moved: false } : null;
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinchStart = { dist: Math.hypot(a.x - b.x, a.y - b.y), mpp: coast.view.mpp };
     }
-    // Double tap zooms in.
-    const now = Date.now();
-    if (pointers.size === 1 && now - lastTap < 300) zoomAt(0.5, ev.offsetX, ev.offsetY);
-    lastTap = now;
   });
   c.addEventListener("pointermove", ev => {
     const prev = pointers.get(ev.pointerId);
     if (!prev) return;
     const cur = { x: ev.offsetX, y: ev.offsetY };
+    if (tap && Math.hypot(cur.x - tap.x, cur.y - tap.y) > 8) tap.moved = true;
     if (pointers.size === 1) {
       const v = coast.view;
       v.lat += (cur.y - prev.y) * v.mpp / KY;
@@ -909,10 +1140,22 @@ function setUpGestures() {
     pointers.set(ev.pointerId, cur);
   });
   const end = ev => { pointers.delete(ev.pointerId); if (pointers.size < 2) pinchStart = null; };
-  c.addEventListener("pointerup", end);
+  c.addEventListener("pointerup", ev => {
+    const wasTap = tap && !tap.moved && pointers.size === 1 && Date.now() - tap.t < 600;
+    end(ev);
+    tap = null;
+    if (wasTap && coast.pinMode) {
+      const ll = toLatLon(ev.offsetX, ev.offsetY);
+      coast.pinMode = false;
+      setPin(ll.lat, ll.lon);
+    }
+  });
   c.addEventListener("pointercancel", end);
   c.addEventListener("wheel", ev => { ev.preventDefault(); zoomAt(ev.deltaY > 0 ? 1.2 : 1 / 1.2, ev.offsetX, ev.offsetY); }, { passive: false });
 
+  $("coastPinBtn").addEventListener("click", () => { coast.pinMode = !coast.pinMode; updatePinCard(); });
+  $("coastPinClear").addEventListener("click", () => { coast.pinMode = false; clearPin(); });
+  $("coastMeBtn").addEventListener("click", toggleMe);
   $("coastZoomIn").addEventListener("click", () => zoomAt(0.5, coast.w / 2, coast.h / 2));
   $("coastZoomOut").addEventListener("click", () => zoomAt(2, coast.w / 2, coast.h / 2));
 }
@@ -954,12 +1197,16 @@ async function initCoast() {
   coast.ctx = coast.canvas.getContext("2d");
   const saved = readJson(COAST_VIEW_KEY, null);
   coast.view = saved && typeof saved.lat === "number" ? saved : { ...COAST_START };
+  loadPin();
+  // Opened with a pin (e.g. from the callout screen): start there.
+  if (coast.pin) { coast.view.lat = coast.pin.lat; coast.view.lon = coast.pin.lon; }
   resetBaseTime();
   resize();
   window.addEventListener("resize", resize);
   setUpGestures();
   setUpSlider();
   updateTimeLabel();
+  updatePinCard();
   $("coastBack").addEventListener("click", () => {
     if (document.referrer && history.length > 1) history.back();
     else window.location.href = "callout.html";
@@ -978,7 +1225,7 @@ async function initCoast() {
   }
   await Promise.all([loadMask().catch(() => {}), loadNames(), loadAccessAndBeaches()]);
   queueDraw();
-  loadTide();
+  loadTide().then(() => { if (coast.pin) describePin(); });
   prefetchAllTiles();
   // Keep "now" honest if the page is left open.
   setInterval(() => {

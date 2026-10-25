@@ -57,6 +57,15 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .updated { font-size: 13px; color: #888780; margin: 6px 0 12px; }
     .updated.stale { color: #fac775; }
+    /* Shown when a pin has been placed on the Coast map. */
+    .pin-line {
+      display: flex; align-items: center; gap: 10px; background: #2a1f22; border: 1px solid #5c2b30;
+      border-radius: 12px; padding: 8px 12px; margin: -4px 0 10px; font-size: 14px; line-height: 1.4;
+    }
+    .pin-line .pin-text { flex: 1; }
+    .pin-line b { font-variant-numeric: tabular-nums; }
+    .pin-line .dot { width: 10px; height: 10px; border-radius: 50%; background: #e5484d; flex: none; }
+    .pin-line button { padding: 5px 10px; font-size: 14px; }
     .box { background: #1e2126; border-radius: 14px; padding: 10px 14px 11px; margin-bottom: 9px; }
     .label { font-size: 17px; color: #a8a69e; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
     .label-right { margin-left: auto; font-weight: 600; color: #d3d1c7; text-align: right; }
@@ -107,6 +116,7 @@
       </div>
     </div>
     <div id="calloutUpdated" class="updated">St Brides Bay</div>
+    <div id="calloutPin" class="pin-line" hidden></div>
 
     <section id="calloutWind" class="box"><div class="label">Wind</div><div class="row"><span class="big dim">Loading…</span></div></section>
     <section id="calloutSea" class="box"><div class="label">Sea</div><div class="row"><span class="big dim">Loading…</span></div></section>
