@@ -1,0 +1,55 @@
+# Coast map — CHECK ONLY, run by hand from the Actions tab.
+# Asks the NRW historic LIDAR archive which older surveys cover St Brides
+# Bay, and measures how much of the coast map's hatched "not surveyed"
+# foreshore they have heights for. Writes a report to
+# data/coast/stbrides/archive-check.md (plus archive-tiles.json).
+# Nothing on the map changes. Needs coast-heights to have run first.
+name: coast-archive-check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coast-data
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install map tools
+        run: pip install rasterio numpy pillow
+
+      - name: Check the archive
+        run: python scripts/check-coast-archive.py
+
+      - name: Commit the report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/coast/stbrides/archive-check.md data/coast/stbrides/archive-tiles.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Coast data: archive LIDAR check report"
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase && git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push attempt $attempt failed, retrying…"
+            sleep $((attempt * 10))
+          done
+          echo "Could not push after 5 attempts."
+          exit 1
