@@ -136,6 +136,28 @@ def flagged_cells(index):
     return np.concatenate(lats), np.concatenate(lons)
 
 
+def surveyed_cells(index, step=8, max_height=5.0):
+    """Lat/lon and 2020-23 height of surveyed low ground (beach and
+    foreshore up to max_height m OD), every `step` cells: used to check
+    that each older survey lines up with the new one."""
+    g = index["grid"]
+    T = g["tileSize"]
+    lats, lons, hs = [], [], []
+    top = int(round((max_height + 6) * 10)) + 1
+    for t in index["tiles"]:
+        a = np.asarray(Image.open(os.path.join(HEIGHTS_DIR, t["file"])).convert("RGB"))[::step, ::step, 0].astype(int)
+        ys, xs = np.nonzero((a > 0) & (a <= top))
+        if not ys.size:
+            continue
+        hs.append((a[ys, xs] - 1) / 10.0 - 6.0)
+        ys = ys * step; xs = xs * step
+        lats.append(g["north"] - (t["r"] * T + ys + 0.5) * g["dLat"])
+        lons.append(g["west"] + (t["c"] * T + xs + 0.5) * g["dLon"])
+    if not lats:
+        return np.array([]), np.array([]), np.array([])
+    return np.concatenate(lats), np.concatenate(lons), np.concatenate(hs)
+
+
 def fix_url(url):
     # The catalogue's links have no "https://" in front.
     url = str(url).strip()
@@ -255,6 +277,17 @@ def main():
 
     xs, ys = warp_transform("EPSG:4326", "EPSG:27700", lons.tolist(), lats.tolist())
     xs = np.asarray(xs); ys = np.asarray(ys)
+    # Reference points: surveyed beach/foreshore from 2020-23, to check
+    # each older survey lines up (same heights where both have data).
+    rlat, rlon, rh = surveyed_cells(index)
+    if rlat.size:
+        rx, ry = warp_transform("EPSG:4326", "EPSG:27700", rlon.tolist(), rlat.tolist())
+        rx = np.asarray(rx); ry = np.asarray(ry)
+    else:
+        rx = ry = np.array([])
+    log(f"Reference points (2020-23 beach and foreshore): {rlat.size}")
+    nF = xs.size
+    allx = np.concatenate([xs, rx]); ally = np.concatenate([ys, ry])
     covered = np.zeros(n_flagged, dtype=bool)
     lowest = np.full(n_flagged, np.nan, dtype="float32")
     rows = []
@@ -286,12 +319,25 @@ def main():
                 downloaded += size
                 log(f"{name}: {size / 1e6:.0f} MB downloaded")
                 if zipfile.is_zipfile(zpath):
-                    h, nread = sample_zip(zpath, tmp, xs, ys)
+                    hall, nread = sample_zip(zpath, tmp, allx, ally)
                 else:
                     with rasterio.open(zpath) as ds:
-                        h = sample(ds, xs, ys)
+                        hall = sample(ds, allx, ally)
                     nread = 1
+            h = hall[:nF]
+            href = hall[nF:]
+            # Agreement with 2020-23 where both have ground.
+            both = ~np.isnan(href)
+            if both.any():
+                diff = href[both] - rh[both]
+                row["refPoints"] = int(both.sum())
+                row["refMedianDiff"] = round(float(np.median(diff)), 2)
+                row["refWithin50cm"] = round(100.0 * float(np.mean(np.abs(diff) <= 0.5)), 0)
             got = ~np.isnan(h)
+            if got.any():
+                v = h[got]
+                row["p5"], row["p50"], row["p95"] = [round(float(x), 2) for x in np.percentile(v, [5, 50, 95])]
+                row["exactFill"] = int(np.sum(np.isin(np.round(v, 2), [-50.0, -99.0, -100.0, 0.0])))
             new = got & ~covered
             covered |= got
             lowest = np.where(got & (np.isnan(lowest) | (h < lowest)), h, lowest)
@@ -316,20 +362,23 @@ def main():
     report.append(f"\n**Result: older surveys have heights for {pct:.0f}% of the 'not surveyed' foreshore** "
                   f"(about {n_cov * cell_m2 / 1e6:.2f} km² of {n_flagged * cell_m2 / 1e6:.2f} km²).\n")
     if low.size:
-        bands = [(-99, -3), (-3, -2), (-2, -1), (-1, 0), (0, 99)]
+        bands = [(-1e9, -6), (-6, -3), (-3, -2), (-2, -1), (-1, 0), (0, 5), (5, 1e9)]
         report.append("\nHow low the filled heights go (m above Ordnance Datum; Milford Haven chart datum is −3.71 m OD, "
                       "so −3 m OD is about 0.7 m above chart datum):\n")
         for lo, hi in bands:
             n = int(((low > lo) & (low <= hi)).sum())
-            label = f"below {hi} m" if lo == -99 else (f"above {lo} m" if hi == 99 else f"{lo} to {hi} m")
+            label = (f"below {hi} m (suspicious: deeper than any foreshore)" if lo < -1e8 else
+                     f"above {lo} m (suspicious for foreshore)" if hi > 1e8 else f"{lo} to {hi} m")
             report.append(f"- {label}: {100.0 * n / max(low.size, 1):.0f}%")
         report.append("")
     report.append("\n## Tiles\n")
-    report.append("| Download | Date flown | Resolution (m) | Result | Cells with height | New | Lowest (m OD) |")
-    report.append("|---|---|---|---|---|---|---|")
+    report.append("| Download | Date flown | Res. (m) | Result | Gap cells with height | New | Heights 5% / median / 95% (m OD) | Exactly -50/0 etc. | Agreement with 2020-23: points, median diff (m), % within 0.5 m |")
+    report.append("|---|---|---|---|---|---|---|---|---|")
     for r in rows:
+        pct = f"{r['p5']} / {r['p50']} / {r['p95']}" if "p50" in r else ""
+        agree = f"{r['refPoints']}, {r['refMedianDiff']:+}, {r['refWithin50cm']:.0f}%" if "refPoints" in r else ""
         report.append(f"| {r['name']} | {r['date']} | {r['resolution']} | {r.get('result', '')} | "
-                      f"{r.get('cellsWithHeight', '')} | {r.get('newCells', '')} | {r.get('minHeight', '')} |")
+                      f"{r.get('cellsWithHeight', '')} | {r.get('newCells', '')} | {pct} | {r.get('exactFill', '')} | {agree} |")
     report.append(f"\nTook {(time.time() - started) / 60:.1f} minutes.\n")
     report.append("\nContains Natural Resources Wales information © Natural Resources Wales and Database Right (Open Government Licence).\n")
     report.append("\n## Log\n\n```\n" + "\n".join(log_lines[-200:]) + "\n```\n")
