@@ -356,6 +356,9 @@ def low_water_lines(src, bng_box):
     for g, k in zip(geoms, keep):
         if not k or g is None or g.is_empty:
             continue
+        # OS lines carry a height on every point (x, y, z); only x and y
+        # are wanted.
+        g = shapely.force_2d(g)
         g = shapely.clip_by_rect(g, *bng_box)
         if g.is_empty:
             continue
@@ -371,7 +374,7 @@ def low_water_lines(src, bng_box):
         if ln.is_empty or len(ln.coords) < 2:
             continue
         gj = transform_geom(crs, "EPSG:4326", shapely.geometry.mapping(ln))
-        pts = [[round(y, 5), round(x, 5)] for x, y in gj["coordinates"]]
+        pts = [[round(c[1], 5), round(c[0], 5)] for c in gj["coordinates"]]
         # Keep only lines that touch the coast outline (not the far corners
         # of the box round it).
         if any(inside_outline(la, lo) for la, lo in pts[::max(1, len(pts) // 20)] + [pts[-1]]):
