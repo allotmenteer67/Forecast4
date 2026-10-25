@@ -1076,8 +1076,9 @@ function renderTile(e, lv) {
     const code = e.codes[i];
     let col;
     if (code === 0) {
-      // Foreshore the survey couldn't see (blue channel 1): grey with a
-      // fine diagonal hatch, so it can't be mistaken for open sea.
+      // Foreshore the survey couldn't see (blue channel 2: Ordnance
+      // Survey foreshore, between mean low and mean high water; 1 in
+      // tiles built before that): grey with a fine diagonal hatch.
       if (e.flags && e.flags[i]) {
         const x = i % size, y = (i / size) | 0;
         col = ((x + y) % 6) < 2 ? C.unsurveyedHatch : C.unsurveyed;

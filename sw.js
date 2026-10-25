@@ -411,7 +411,9 @@
 // Bumped to v92: coast map step 3d — rescue position entry (lat/long,
 // or distance and direction/bearing from a place, or a bearing line),
 // and bearings shown magnetic (WMM2025).
-const SHELL_CACHE_NAME = "cloude-shell-v92";
+// Bumped to v93: coast map — hatched foreshore now from Ordnance Survey
+// (dries at low tide, height unknown); key, credits and Help updated.
+const SHELL_CACHE_NAME = "cloude-shell-v93";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
