@@ -147,6 +147,7 @@ const coast = {
   pin: null,           // { lat, lon, ... } as saved under CALLOUT_SPOT_KEY
   pinMode: false,      // next tap on the map places the pin
   me: null,            // { lat, lon, acc } from the phone's GPS
+  show: { shore: false, way: false }, // lines drawn from the pin when its card lines are tapped
   meWatch: null,
   meError: ""
 };
@@ -287,6 +288,7 @@ function loadPin() {
 
 async function setPin(lat, lon) {
   coast.pin = { lat, lon, setAt: Date.now() };
+  coast.show = { shore: false, way: false };
   writeJson(CALLOUT_SPOT_KEY, coast.pin);
   updatePinCard();
   queueDraw();
@@ -312,11 +314,11 @@ async function describePin() {
     const d = distanceM(pin, a);
     if (!way || d < way.distM) way = { distM: d, a };
   }
-  pin.shore = shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore) } : null;
+  pin.shore = shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), lat: shore.lat, lon: shore.lon } : null;
   if (way) {
     const ct = cutTimeFromNow(way.a.foot);
     pin.wayOff = {
-      distM: Math.round(way.distM), bearing: bearingT(pin, way.a),
+      distM: Math.round(way.distM), bearing: bearingT(pin, way.a), lat: way.a.lat, lon: way.a.lon,
       kind: way.a.kind, cut: ct ? (ct.state === "now" ? "cut now" : ct.state === "at" ? `cut ${clockTime(ct.time)}` : "above high tide") : null
     };
   } else pin.wayOff = null;
@@ -409,8 +411,9 @@ function updatePinCard() {
   const pin = coast.pin;
   if (pin) {
     lines.push(`<div class="pc-title"><span class="pc-pin"></span>Pin · ${degMin(pin.lat, pin.lon)}</div>`);
-    if (pin.shore) lines.push(`<div>Nearest dry ground now: <b>${distText(pin.shore.distM)}</b> ${bearingText(pin.shore.bearing)}</div>`);
-    if (pin.wayOff) lines.push(`<div>Nearest way off: <b>${distText(pin.wayOff.distM)}</b> ${bearingText(pin.wayOff.bearing)}${pin.wayOff.cut ? ` · ${pin.wayOff.cut}` : ""}</div>`);
+    // These two lines can be tapped to draw the route from the pin.
+    if (pin.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(pin.shore.distM)}</b> ${bearingText(pin.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
+    if (pin.wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">Nearest way off: <b>${distText(pin.wayOff.distM)}</b> ${bearingText(pin.wayOff.bearing)}${pin.wayOff.cut ? ` · ${pin.wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
   }
   if (coast.me) {
     const acc = Math.round(coast.me.acc);
@@ -423,6 +426,13 @@ function updatePinCard() {
   if (coast.pinMode) lines.unshift(`<div class="pc-hint">Tap the map to place the pin</div>`);
   card.innerHTML = lines.join("");
   card.hidden = lines.length === 0;
+  card.querySelectorAll(".pc-tap").forEach(el => el.addEventListener("click", () => {
+    const which = el.dataset.show;
+    coast.show[which] = !coast.show[which];
+    const target = which === "shore" ? coast.pin && coast.pin.shore : coast.pin && coast.pin.wayOff;
+    if (coast.show[which] && target && typeof target.lat === "number") fitPinAnd(target);
+    updatePinCard();
+  }));
   $("coastPinClear").hidden = !pin;
   $("coastPinBtn").classList.toggle("on", coast.pinMode);
   $("coastPinBtn").setAttribute("aria-label", pin ? "Move the pin" : "Place a pin");
@@ -920,9 +930,43 @@ function draw() {
   drawScaleBar();
 }
 
+// Make sure the pin and a target are both on screen (zooming out if
+// needed, never in), leaving room for the time pill and the card.
+function fitPinAnd(target) {
+  const pin = coast.pin;
+  const ptA = toScreen(pin.lat, pin.lon), ptB = toScreen(target.lat, target.lon);
+  const inView = p => p.x > 30 && p.x < coast.w - 30 && p.y > 130 && p.y < coast.h - 130;
+  if (inView(ptA) && inView(ptB)) return;
+  coast.view.lat = (pin.lat + target.lat) / 2;
+  coast.view.lon = (pin.lon + target.lon) / 2;
+  const dx = Math.abs(target.lon - pin.lon) * KX, dy = Math.abs(target.lat - pin.lat) * KY;
+  const need = Math.max(dx / Math.max(coast.w - 80, 100), dy / Math.max(coast.h - 280, 100));
+  coast.view.mpp = Math.max(coast.view.mpp, need);
+  clampView();
+  queueDraw();
+}
+
+// A line from the pin to a target, with a ring at the far end.
+function drawRouteLine(target, colour) {
+  if (!target || typeof target.lat !== "number") return;
+  const { ctx } = coast;
+  const a = toScreen(coast.pin.lat, coast.pin.lon), b = toScreen(target.lat, target.lon);
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineWidth = 6; ctx.strokeStyle = "rgba(10,12,16,0.75)";
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.lineWidth = 3; ctx.strokeStyle = colour;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.beginPath(); ctx.arc(b.x, b.y, 9, 0, Math.PI * 2);
+  ctx.lineWidth = 3; ctx.stroke();
+  ctx.restore();
+}
+
 function drawPinAndMe() {
   const { ctx } = coast;
   const pin = coast.pin, me = coast.me;
+  if (pin && coast.show.shore) drawRouteLine(pin.shore, "#ffe08a");
+  if (pin && coast.show.way) drawRouteLine(pin.wayOff, "#5fe08a");
   if (pin && me) {
     const a = toScreen(me.lat, me.lon), b = toScreen(pin.lat, pin.lon);
     ctx.save();

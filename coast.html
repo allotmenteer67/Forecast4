@@ -90,6 +90,15 @@
     .pc-title { font-weight: 600; margin-top: 2px; }
     .pc-dim { color: #b4b2a9; font-weight: 400; }
     .pc-hint { color: #fac775; font-weight: 600; }
+    /* Tappable lines: show or hide the route from the pin on the map. */
+    .pc-tap {
+      pointer-events: auto; cursor: pointer; display: flex; align-items: baseline; gap: 5px; flex-wrap: wrap;
+      margin: 2px -6px; padding: 3px 6px; border-radius: 8px; border-left: 3px solid #ffe08a;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pc-tap.way { border-left-color: #5fe08a; }
+    .pc-tap.on { background: rgba(255,255,255,0.08); }
+    .pc-show { margin-left: auto; font-size: 12px; color: #b4b2a9; text-decoration: underline; }
     .pc-pin, .pc-me { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
     .pc-pin { background: #e5484d; }
     .pc-me { background: #3d8bff; border: 2px solid #fff; width: 11px; height: 11px; vertical-align: -1px; }

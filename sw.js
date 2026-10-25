@@ -406,7 +406,9 @@
 // reaches the shore, not isolated patches out in the bay.
 // Bumped to v90: coast map step 3c — Pin and Me (own position), the
 // pin card, and the pin line with Clear on the callout screen.
-const SHELL_CACHE_NAME = "cloude-shell-v90";
+// Bumped to v91: coast map — tap the pin card's dry-ground or way-off
+// line to draw it on the map.
+const SHELL_CACHE_NAME = "cloude-shell-v91";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
