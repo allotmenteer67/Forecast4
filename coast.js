@@ -57,7 +57,20 @@ const CUTOFF_MPP = 6;          // cut-off overlay and way-off times shown when t
 const CUTOFF_MAX_TILES = 20;   // limit on the area checked at once (phone memory)
 const IMPASSABLE_DEG = 40;     // ground this steep counts as a wall for walkers
 const SERIES_STEP_MIN = 5;     // tide worked out every 5 minutes for the cut times
-const SERIES_HOURS = 30;       // far enough ahead to cover the slider (24 h) plus a tide
+const SERIES_HOURS = 30;
+// Foreshore the survey couldn't see (hatched grey) has no height. It's
+// treated as walkable when the tide is below this level (m OD, about
+// 2.7 m above Chart Datum at Milford Haven) — around low water it's
+// almost certainly exposed sand or rock — and as water above it. Without
+// this, a low-tide beach next to unsurveyed sand showed as cut off.
+const UNSURVEYED_DRY_OD = -1.0;
+// Pink (cut off) is only shown for stranded patches that come within
+// this many cells (~60 m) of land above beach height — the whole patch,
+// so a wide stranded beach is pink right down to the water's edge. Out
+// in the bay, isolated low "ground" is mostly laser returns off the
+// water surface at survey time, or lone rocks: neither is where people
+// get cut off, and pink there just looked like the sea was cut off.
+const CUTOFF_NEAR_SHORE_CELLS = 30;       // far enough ahead to cover the slider (24 h) plus a tide
 
 // Colours (dark map, readable at night).
 const C = {
@@ -365,6 +378,7 @@ function computeCutoff() {
 
   const W = cols * T, H = rows * T, N = W * H;
   const coverCode = codeFor(lv.now);
+  const unsurveyedDry = lv.now < UNSURVEYED_DRY_OD;
   const sandCode = codeFor(5);
   // 0 = blocked, 1 = walkable, 2 = reached
   const state = new Uint8Array(N);
@@ -378,8 +392,12 @@ function computeCutoff() {
       const src = y * T, dst = (pr * T + y) * W + pc * T;
       for (let x = 0; x < T; x++) {
         const code = e.codes[src + x];
-        if (code === 0 || code <= coverCode) continue;
         const k = dst + x;
+        if (code === 0) {
+          if (unsurveyedDry && e.flags && e.flags[src + x]) state[k] = 1;
+          continue;
+        }
+        if (code <= coverCode) continue;
         if (e.slopes[src + x] >= IMPASSABLE_DEG) { wall[k] = 1; continue; }
         state[k] = code === 255 ? 3 : 1; // 3 = higher land, seeded below
       }
@@ -451,7 +469,50 @@ function computeCutoff() {
       }
     }
   }
-  // Mark dry beach-height cells that weren't reached, per tile.
+  // How far each cell is from land above beach height (up to the limit).
+  const near = new Uint8Array(N);
+  {
+    let h0 = 0, h1 = 0;
+    for (let k = 0; k < N; k++) if (high[k]) { near[k] = 1; queue[h1++] = k; }
+    while (h0 < h1) {
+      const k = queue[h0++];
+      const d = near[k];
+      if (d > CUTOFF_NEAR_SHORE_CELLS) continue;
+      const y = (k / W) | 0, x = k - y * W;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= W) continue;
+          const n = yy * W + xx;
+          if (!near[n]) { near[n] = d + 1; queue[h1++] = n; }
+        }
+      }
+    }
+  }
+  // Stranded patches that reach near the shore: spread from their
+  // near-shore cells through the rest of the stranded ground (state 1,
+  // not reached from any way out). Marked as state 4.
+  {
+    let h0 = 0, h1 = 0;
+    for (let k = 0; k < N; k++) if (state[k] === 1 && near[k]) { state[k] = 4; queue[h1++] = k; }
+    while (h0 < h1) {
+      const k = queue[h0++];
+      const y = (k / W) | 0, x = k - y * W;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= W) continue;
+          const n = yy * W + xx;
+          if (state[n] === 1) { state[n] = 4; queue[h1++] = n; }
+        }
+      }
+    }
+  }
+  // Mark the stranded dry beach-height cells, per tile.
   for (const e of coast.tiles.values()) e.cut = null;
   for (let pr = 0; pr < rows; pr++) for (let pc = 0; pc < cols; pc++) {
     const e = patch[pr * cols + pc];
@@ -461,7 +522,8 @@ function computeCutoff() {
       const src = y * T, dst = (pr * T + y) * W + pc * T;
       for (let x = 0; x < T; x++) {
         const k = dst + x;
-        if (state[k] === 1 && e.codes[src + x] <= sandCode) {
+        const code = e.codes[src + x];
+        if (state[k] === 4 && code !== 0 && code <= sandCode) {
           if (!cut) cut = new Uint8Array(T * T);
           cut[src + x] = 1;
         }
@@ -680,8 +742,10 @@ function drawAccess() {
     if (shut) { ctx.moveTo(s.x - 3, s.y - 3); ctx.lineTo(s.x + 3, s.y + 3); ctx.moveTo(s.x + 3, s.y - 3); ctx.lineTo(s.x - 3, s.y + 3); }
     else { ctx.moveTo(s.x, s.y + 4); ctx.lineTo(s.x, s.y - 4); ctx.moveTo(s.x - 3, s.y - 1); ctx.lineTo(s.x, s.y - 4); ctx.lineTo(s.x + 3, s.y - 1); }
     ctx.stroke();
-    if (showTimes && ct) {
-      const text = ct.state === "now" ? "cut" : ct.state === "at" ? `cut ${clockTime(ct.time)}` : "open 24 h+";
+    // Ways off above the reach of the tide need no label: the green
+    // marker says it all, and it keeps busy spots like Little Haven clear.
+    if (showTimes && ct && ct.state !== "clear") {
+      const text = ct.state === "now" ? "cut" : `cut ${clockTime(ct.time)}`;
       ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
       ctx.strokeText(text, s.x + 10, s.y); ctx.fillStyle = shut ? "#b4b2a9" : "#b8f0c8"; ctx.fillText(text, s.x + 10, s.y);
     }
@@ -701,7 +765,7 @@ function drawBeachTimes() {
     else {
       const times = b.access.map(i => cutTime(coast.access[i].foot)).filter(Boolean);
       if (!times.length) continue;
-      if (times.some(t => t.state === "clear")) { text = "Way off open 24 h+"; colour = "#b8f0c8"; }
+      if (times.some(t => t.state === "clear")) { text = "Way off above high tide"; colour = "#b8f0c8"; }
       else if (times.every(t => t.state === "now")) { text = "All ways off cut"; colour = "#f09595"; }
       else {
         const last = times.filter(t => t.state === "at").map(t => t.time).sort((x, y) => y - x)[0];
@@ -709,8 +773,18 @@ function drawBeachTimes() {
         colour = "#fac775";
       }
     }
-    const y = s.y + 16;
     const w = ctx.measureText(text).width;
+    // Above the beach's middle, nudged further up if a way-off marker
+    // sits right there.
+    let y = s.y - 14;
+    for (let tries = 0; tries < 4; tries++) {
+      const clash = coast.access.some(a => {
+        const m = toScreen(a.lat, a.lon);
+        return Math.abs(m.y - y) < 14 && m.x > s.x - w / 2 - 12 && m.x < s.x + w / 2 + 12;
+      });
+      if (!clash) break;
+      y -= 16;
+    }
     ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
     ctx.strokeText(text, s.x - w / 2, y); ctx.fillStyle = colour; ctx.fillText(text, s.x - w / 2, y);
   }

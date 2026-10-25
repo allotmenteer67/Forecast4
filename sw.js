@@ -400,7 +400,11 @@
 // above the map, time pill top right, Time slider section below.
 // Bumped to v87: coast map step 3b — ways off the beach with cut
 // times, each beach's last way off, and the pink cut-off overlay.
-const SHELL_CACHE_NAME = "cloude-shell-v87";
+// Bumped to v88: coast map — unsurveyed foreshore walkable around low
+// water (fixes false cut-offs), tidier way-off and beach labels.
+// Bumped to v89: coast map — cut-off pink only for stranded ground that
+// reaches the shore, not isolated patches out in the bay.
+const SHELL_CACHE_NAME = "cloude-shell-v89";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
