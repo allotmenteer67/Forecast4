@@ -3,7 +3,8 @@
 # Reads the Welsh Government 1 m LIDAR terrain model for St Brides Bay
 # (only the parts needed, straight from its online copy) and saves
 # compact height-and-steepness tiles under data/coast/stbrides/heights/,
-# plus a preview picture. Also checks step 1's ways off the beach against
+# plus a preview picture and the Ordnance Survey mean low water line
+# (data/coast/stbrides/low-water.json). Also checks step 1's ways off the beach against
 # the ground heights. Not scheduled: the survey doesn't change.
 name: coast-heights
 
@@ -29,7 +30,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install map tools
-        # pyogrio and shapely read the Ordnance Survey foreshore (GeoPackage).
+        # pyogrio and shapely read the Ordnance Survey foreshore and low water line.
         run: pip install rasterio numpy pillow pyogrio shapely
 
       - name: Build height tiles
@@ -44,7 +45,7 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "Coast data: LIDAR height tiles"
+          git commit -m "Coast data: LIDAR height tiles and low water line"
           # precache-weather pushes every 20 minutes, so retry on a clash.
           for attempt in 1 2 3 4 5; do
             if git pull --rebase && git push; then
