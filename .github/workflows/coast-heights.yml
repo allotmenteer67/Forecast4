@@ -29,7 +29,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install map tools
-        run: pip install rasterio numpy pillow
+        # pyogrio and shapely read the Ordnance Survey foreshore (GeoPackage).
+        run: pip install rasterio numpy pillow pyogrio shapely
 
       - name: Build height tiles
         run: python scripts/build-coast-heights.py
