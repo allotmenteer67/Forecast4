@@ -37,6 +37,11 @@
 #           0 everywhere else — including no-data cells outside the OS
 #           foreshore, which are sea (below mean low water).
 #
+# Also saves the Ordnance Survey mean low water line (OS OpenMap Local,
+# Tidal Boundary, "Low Water Mark") over the area, for the map to draw:
+#
+#   data/coast/stbrides/low-water.json       lines of [lat, lon]
+#
 # Tiles are on a plain latitude/longitude grid, the same simple
 # projection the app's own map already draws with.
 #
@@ -183,90 +188,216 @@ OS_DOWNLOADS = os.environ.get("COAST_OS_DOWNLOADS", "https://api.os.uk/downloads
 OS_AREA = "SM"  # the 100 km grid square covering west Pembrokeshire
 
 
-def load_foreshore(bng_box):
-    """Foreshore polygons over the area, as GeoJSON-like dicts in lat/lon,
-    or None if OS data couldn't be had (the old 40 m rule is used then)."""
+def _find_layer(layers, want):
+    """The layer whose name, ignoring case, spaces and underscores,
+    contains `want` (e.g. "foreshore", "tidalboundary")."""
+    norm = lambda t: t.lower().replace("_", "").replace(" ", "")
+    return (next((l for l in layers if norm(l) == want), None) or
+            next((l for l in layers if want in norm(l)), None))
+
+
+def _os_sources(tmpdir):
+    """Where to read the OS layers from: {"foreshore": (path, layer),
+    "tidalboundary": (path, layer)}, either from one GeoPackage or from
+    the SM tile's shapefiles. Missing layers are left out."""
+    path = os.environ.get("COAST_FORESHORE_GPKG")
+    zpath = os.environ.get("COAST_OS_ZIP")  # local copy of the OS zip, for testing
+    if not path and not zpath:
+        req = urllib.request.Request(OS_DOWNLOADS, headers={"User-Agent": "Cloude coast map"})
+        items = json.loads(urllib.request.urlopen(req, timeout=60).read().decode())
+        fmt = lambda i: str(i.get("format", "")).lower()
+        area = lambda i: str(i.get("area", "")).upper()
+        # OS supplies OpenMap Local per 100 km tile only as shapefiles
+        # (GeoPackage is the whole of Great Britain, 2.4 GB), so the SM
+        # tile's shapefiles come first; the national GeoPackage is the
+        # fallback.
+        pick = ([i for i in items if area(i) == OS_AREA and "shapefile" in fmt(i)] or
+                [i for i in items if area(i) == OS_AREA and "geopackage" in fmt(i)] or
+                [i for i in items if area(i) == "GB" and "geopackage" in fmt(i)])
+        if not pick:
+            offered = sorted({f"{area(i)}:{i.get('format')}" for i in items if area(i) in (OS_AREA, "GB")})
+            print(f"OS OpenMap Local: nothing usable for {OS_AREA}; offered: {offered}")
+            return {}
+        print(f"OS OpenMap Local: using {area(pick[0])} {pick[0].get('format')}")
+        zpath = os.path.join(tmpdir, "oml.zip")
+        print(f"OS OpenMap Local {OS_AREA}: downloading {pick[0].get('size', '?')} bytes…")
+        req = urllib.request.Request(pick[0]["url"], headers={"User-Agent": "Cloude coast map"})
+        with urllib.request.urlopen(req, timeout=600) as r, open(zpath, "wb") as f:
+            while True:
+                chunk = r.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+    if path:
+        layers = [l[0] for l in pyogrio_list(path)]
+        out = {}
+        for want in ("foreshore", "tidalboundary"):
+            l = _find_layer(layers, want)
+            if l:
+                out[want] = (path, l)
+        if not out:
+            print(f"No Foreshore or TidalBoundary layer in the OS data (layers: {layers})")
+        return out
+    import zipfile
+    if not zipfile.is_zipfile(zpath):
+        print("OS OpenMap Local download isn't a zip — skipped")
+        return {}
+    out = {}
+    with zipfile.ZipFile(zpath) as z:
+        names = z.namelist()
+        gpkg = [n for n in names if n.lower().endswith(".gpkg")]
+        shps = [n for n in names if n.lower().endswith(".shp")]
+        for want in ("foreshore", "tidalboundary"):
+            hit = [n for n in shps if want in os.path.basename(n).lower().replace("_", "")]
+            if hit:
+                # A shapefile is several files with the same stem.
+                stem = hit[0][:-4]
+                for n in names:
+                    if n.startswith(stem + "."):
+                        z.extract(n, tmpdir)
+                out[want] = (os.path.join(tmpdir, hit[0]), None)
+        if not out and gpkg:
+            g = z.extract(gpkg[0], tmpdir)
+            layers = [l[0] for l in pyogrio_list(g)]
+            for want in ("foreshore", "tidalboundary"):
+                l = _find_layer(layers, want)
+                if l:
+                    out[want] = (g, l)
+        if not out:
+            print(f"OS OpenMap Local zip has no foreshore or tidal boundary data (e.g. {names[:6]})")
+    return out
+
+
+def pyogrio_list(path):
+    import pyogrio
+    return pyogrio.list_layers(path)
+
+
+def _read(src, bng_box):
+    """(crs, [shapely geometries], {field: values}) from one OS layer."""
+    import pyogrio
+    import shapely
+    path, layer = src
+    kw = {"bbox": bng_box}
+    if layer:
+        kw["layer"] = layer
+    meta, _fids, geoms, fields = pyogrio.raw.read(path, **kw)
+    crs = meta.get("crs") or "EPSG:27700"  # OS data is British National Grid
+    names = list(meta.get("fields", []))
+    table = {n: list(v) for n, v in zip(names, fields)}
+    shapes = [None if w is None else shapely.from_wkb(w) for w in geoms]
+    return crs, shapes, table
+
+
+def load_os(bng_box):
+    """Ordnance Survey foreshore polygons and the mean low water line over
+    the area, in lat/lon: (foreshore, low_water). foreshore is a list of
+    GeoJSON-like dicts, or None if OS data couldn't be had (the old 40 m
+    rule is used then); low_water is a list of lines, each a list of
+    [lat, lon], or None."""
     try:
-        import pyogrio
+        import pyogrio  # noqa: F401
         import shapely
     except ImportError:
         print("pyogrio/shapely not installed — foreshore from OS skipped")
-        return None
-    path = os.environ.get("COAST_FORESHORE_GPKG")
-    tmpdir = None
+        return None, None
+    tmpdir = tempfile.mkdtemp()
+    foreshore = low_water = None
     try:
-        if not path:
-            req = urllib.request.Request(OS_DOWNLOADS, headers={"User-Agent": "Cloude coast map"})
-            items = json.loads(urllib.request.urlopen(req, timeout=60).read().decode())
-            fmt = lambda i: str(i.get("format", "")).lower()
-            area = lambda i: str(i.get("area", "")).upper()
-            # OS supplies OpenMap Local per 100 km tile only as shapefiles
-            # (GeoPackage is the whole of Great Britain, 2.4 GB), so the SM
-            # tile's shapefiles come first; the national GeoPackage is the
-            # fallback.
-            pick = ([i for i in items if area(i) == OS_AREA and "shapefile" in fmt(i)] or
-                    [i for i in items if area(i) == OS_AREA and "geopackage" in fmt(i)] or
-                    [i for i in items if area(i) == "GB" and "geopackage" in fmt(i)])
-            if not pick:
-                offered = sorted({f"{area(i)}:{i.get('format')}" for i in items if area(i) in (OS_AREA, "GB")})
-                print(f"OS OpenMap Local: nothing usable for {OS_AREA}; offered: {offered}")
-                return None
-            print(f"OS OpenMap Local: using {area(pick[0])} {pick[0].get('format')}")
-            url = pick[0]["url"]
-            tmpdir = tempfile.mkdtemp()
-            zpath = os.path.join(tmpdir, "oml.zip")
-            print(f"OS OpenMap Local {OS_AREA}: downloading {pick[0].get('size', '?')} bytes…")
-            req = urllib.request.Request(url, headers={"User-Agent": "Cloude coast map"})
-            with urllib.request.urlopen(req, timeout=600) as r, open(zpath, "wb") as f:
-                while True:
-                    chunk = r.read(8 * 1024 * 1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            import zipfile
-            if zipfile.is_zipfile(zpath):
-                with zipfile.ZipFile(zpath) as z:
-                    names = z.namelist()
-                    gpkg = [n for n in names if n.lower().endswith(".gpkg")]
-                    shp = [n for n in names if n.lower().endswith(".shp") and "foreshore" in os.path.basename(n).lower()]
-                    if shp:
-                        # A shapefile is several files with the same stem.
-                        stem = shp[0][:-4]
-                        for n in names:
-                            if n.startswith(stem + "."):
-                                z.extract(n, tmpdir)
-                        path = os.path.join(tmpdir, shp[0])
-                    elif gpkg:
-                        path = z.extract(gpkg[0], tmpdir)
-                    else:
-                        print(f"OS OpenMap Local zip has no foreshore data (e.g. {names[:6]})")
-                        return None
-            else:
-                path = zpath
-        layers = [l[0] for l in pyogrio.list_layers(path)]
-        layer = (next((l for l in layers if l.lower() == "foreshore"), None) or
-                 next((l for l in layers if "foreshore" in l.lower()), None) or
-                 (layers[0] if path.lower().endswith(".shp") else None))
-        if not layer:
-            print(f"No Foreshore layer in the OS data (layers: {layers})")
-            return None
-        meta, _fids, geoms, _fields = pyogrio.raw.read(path, layer=layer, bbox=bng_box)
-        src_crs = meta.get("crs") or "EPSG:27700"  # OS data is British National Grid
-        shapes = []
-        for wkb in geoms:
-            if wkb is None:
-                continue
-            geom = shapely.geometry.mapping(shapely.from_wkb(wkb))
-            shapes.append(transform_geom(src_crs, "EPSG:4326", geom))
-        print(f"OS foreshore: {len(shapes)} areas over the bay")
-        return shapes
+        srcs = _os_sources(tmpdir)
+        if "foreshore" in srcs:
+            try:
+                crs, geoms, _t = _read(srcs["foreshore"], bng_box)
+                foreshore = [transform_geom(crs, "EPSG:4326", shapely.geometry.mapping(g))
+                             for g in geoms if g is not None and not g.is_empty]
+                print(f"OS foreshore: {len(foreshore)} areas over the bay")
+            except Exception as err:  # noqa: BLE001
+                print(f"OS foreshore couldn't be read ({type(err).__name__}: {err}) — using the old 40 m rule")
+        else:
+            print("OS foreshore not found — using the old 40 m rule")
+        if "tidalboundary" in srcs:
+            try:
+                low_water = low_water_lines(srcs["tidalboundary"], bng_box)
+            except Exception as err:  # noqa: BLE001
+                print(f"OS low water line couldn't be read ({type(err).__name__}: {err}) — no line drawn")
+        else:
+            print("OS TidalBoundary not found — no low water line")
     except Exception as err:  # noqa: BLE001
-        print(f"OS foreshore couldn't be loaded ({type(err).__name__}: {err}) — using the old 40 m rule")
-        return None
+        print(f"OS data couldn't be loaded ({type(err).__name__}: {err}) — using the old 40 m rule, no low water line")
     finally:
-        if tmpdir:
-            import shutil
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return foreshore, low_water
+
+
+LOW_WATER_SIMPLIFY_M = 1.5  # drop points that move the line less than this
+
+
+def low_water_lines(src, bng_box):
+    """The OS Low Water Mark (mean low water in England and Wales) from the
+    TidalBoundary layer, cut to the area, joined up, lightly simplified,
+    as lines of [lat, lon] rounded to about 1 m."""
+    import shapely
+    from shapely.ops import linemerge
+    crs, geoms, table = _read(src, bng_box)
+    # Which features are low water: a text field saying "Low Water Mark"
+    # (CLASSIFICA in the shapefiles, classification in the GeoPackage).
+    keep = None
+    for name, vals in table.items():
+        texts = [str(v).lower() for v in vals]
+        if any("low water" in t for t in texts):
+            keep = ["low water" in t for t in texts]
+            print(f"OS TidalBoundary: low water taken from field {name}; values {sorted(set(map(str, vals)))}")
+            break
+    if keep is None:
+        print(f"OS TidalBoundary: no field says 'Low Water' (fields: {list(table)}) — no line drawn")
+        return None
+    parts = []
+    for g, k in zip(geoms, keep):
+        if not k or g is None or g.is_empty:
+            continue
+        g = shapely.clip_by_rect(g, *bng_box)
+        if g.is_empty:
+            continue
+        parts.extend(getattr(g, "geoms", [g]))
+    parts = [p for p in parts if p.geom_type == "LineString" and len(p.coords) >= 2]
+    if not parts:
+        print("OS TidalBoundary: no low water line over the bay")
+        return []
+    merged = linemerge(parts)
+    merged = merged.simplify(LOW_WATER_SIMPLIFY_M, preserve_topology=False)
+    lines = []
+    for ln in getattr(merged, "geoms", [merged]):
+        if ln.is_empty or len(ln.coords) < 2:
+            continue
+        gj = transform_geom(crs, "EPSG:4326", shapely.geometry.mapping(ln))
+        pts = [[round(y, 5), round(x, 5)] for x, y in gj["coordinates"]]
+        # Keep only lines that touch the coast outline (not the far corners
+        # of the box round it).
+        if any(inside_outline(la, lo) for la, lo in pts[::max(1, len(pts) // 20)] + [pts[-1]]):
+            lines.append(pts)
+    n = sum(len(l) for l in lines)
+    print(f"OS low water line: {len(lines)} lines, {n} points over the bay")
+    return lines
+
+
+def write_low_water(lines):
+    path = os.path.join(OUT_DIR, "low-water.json")
+    if lines is None:
+        # Leave any earlier file alone rather than lose the line on a bad download.
+        return
+    data = {
+        "area": AREA_ID,
+        "builtAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "meaning": "Mean low water (the Low Water Mark): below this line is sea at an average low tide; on big spring tides a strip beyond it can briefly dry",
+        "format": "lines: each a list of [lat, lon]",
+        "lines": lines,
+        "source": "Ordnance Survey OpenMap Local, Tidal Boundary (Contains OS data © Crown copyright and database right, OGL)",
+    }
+    with open(path, "w") as f:
+        json.dump(data, f, separators=(",", ":"))
+        f.write("\n")
+    print(f"Wrote {path} ({os.path.getsize(path) / 1e3:.0f} kB)")
 
 
 def shape_bounds(geom):
@@ -319,7 +450,9 @@ def main():
     # The area in British National Grid metres, for the OS download.
     from rasterio.warp import transform as warp_transform
     bx, by = warp_transform("EPSG:4326", "EPSG:27700", [WEST, EAST, WEST, EAST], [SOUTH, SOUTH, NORTH, NORTH])
-    foreshore = load_foreshore((min(bx), min(by), max(bx), max(by)))
+    foreshore, low_water = load_os((min(bx), min(by), max(bx), max(by)))
+    os.makedirs(OUT_DIR, exist_ok=True)
+    write_low_water(low_water)
     fs_bounds = [shape_bounds(g) for g in foreshore] if foreshore else []
 
     with rasterio.Env(**env), rasterio.open(SOURCE_URL) as src:
