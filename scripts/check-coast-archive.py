@@ -47,7 +47,7 @@ AREA_DIR = os.path.join("data", "coast", "stbrides")
 HEIGHTS_DIR = os.path.join(AREA_DIR, "heights")
 LAYER = "geonode:nrw_lidar_tile_catalogue_archive"
 SAMPLE_STEP = 2            # every 2nd flagged cell each way (~4 m) — plenty for a check
-MAX_DOWNLOAD_BYTES = 4e9   # stop downloading after ~4 GB in total
+MAX_DOWNLOAD_BYTES = 9e9   # stop downloading after ~9 GB in total
 USER_AGENT = "Cloude coast map (GitHub Actions; one-off data check)"
 
 WFS_BASES = [
@@ -136,24 +136,65 @@ def flagged_cells(index):
     return np.concatenate(lats), np.concatenate(lons)
 
 
-def open_dtm(url, workdir):
-    """Downloads a DTM tile (a raster, or a zip holding one) and returns
-    an open rasterio dataset, or None."""
-    data = http_get(url, timeout=600, binary=True)
-    size = len(data)
-    name = os.path.basename(urllib.parse.urlparse(url).path) or "tile"
-    if data[:2] == b"PK":
-        z = zipfile.ZipFile(io.BytesIO(data))
-        rasters = [n for n in z.namelist() if n.lower().endswith((".tif", ".tiff", ".asc", ".img"))]
-        if not rasters:
-            raise RuntimeError(f"zip has no raster ({z.namelist()[:5]})")
-        z.extractall(workdir)
-        path = os.path.join(workdir, rasters[0])
-    else:
-        path = os.path.join(workdir, name)
-        with open(path, "wb") as f:
-            f.write(data)
-    return rasterio.open(path), size
+def fix_url(url):
+    # The catalogue's links have no "https://" in front.
+    url = str(url).strip()
+    return url if "://" in url else (os.environ.get("COAST_ARCHIVE_SCHEME", "https") + "://" + url.lstrip("/"))
+
+
+def download(url, path):
+    """Streams a download to disk (the archive zips can be large)."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    size = 0
+    with urllib.request.urlopen(req, timeout=600) as r, open(path, "wb") as f:
+        while True:
+            chunk = r.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+            size += len(chunk)
+    return size
+
+
+RASTER_EXT = (".tif", ".tiff", ".asc", ".img")
+
+
+def sample_zip(zpath, workdir, xs, ys, depth=0):
+    """Samples every raster in a zip (each archive zip covers a 10 km grid
+    square as many smaller tiles). Returns heights (NaN where none) and
+    how many rasters were read."""
+    h = np.full(xs.shape, np.nan, dtype="float32")
+    n = 0
+    with zipfile.ZipFile(zpath) as z:
+        for member in z.namelist():
+            low = member.lower()
+            if low.endswith(".zip") and depth == 0:
+                inner = z.extract(member, workdir)
+                hh, nn = sample_zip(inner, workdir, xs, ys, depth + 1)
+                h = np.where(np.isnan(h), hh, h); n += nn
+                os.remove(inner)
+                continue
+            if not low.endswith(RASTER_EXT):
+                continue
+            # .asc grids may come with a .prj beside them; extract both.
+            path = z.extract(member, workdir)
+            extra = []
+            for side in (".prj", ".aux.xml", ".hdr", ".tfw"):
+                cand = member.rsplit(".", 1)[0] + side
+                if cand in z.namelist():
+                    extra.append(z.extract(cand, workdir))
+            try:
+                with rasterio.open(path) as ds:
+                    hh = sample(ds, xs, ys)
+                h = np.where(np.isnan(h), hh, h)
+                n += 1
+            except Exception as err:  # noqa: BLE001
+                log(f"    couldn't read {member}: {err}")
+            finally:
+                for fp in [path, *extra]:
+                    try: os.remove(fp)
+                    except OSError: pass
+    return h, n
 
 
 def sample(ds, xs, ys):
@@ -218,48 +259,59 @@ def main():
     lowest = np.full(n_flagged, np.nan, dtype="float32")
     rows = []
     downloaded = 0
-    tiles_sorted = sorted(tiles, key=lambda p: str(pick(p, "date_flown", "year") or ""))
-    for props in tiles_sorted:
-        name = pick(props, "lidar_name", "name") or "?"
-        date = pick(props, "date_flown", "year") or "?"
-        res = pick(props, "resolution") or "?"
+    # Many catalogue tiles share one download (a 10 km square for one
+    # survey year), so group by download link.
+    groups = {}
+    no_dtm = 0
+    for props in tiles:
         url = pick(props, "dtm_url")
-        row = {"name": name, "date": str(date), "resolution": str(res), "dtm_url": url}
         if not url:
-            row["result"] = "no DTM (surface model only)"
-            rows.append(row); log(f"{name} {date}: no DTM link"); continue
+            no_dtm += 1
+            continue
+        url = fix_url(url)
+        g = groups.setdefault(url, {"names": [], "date": str(pick(props, "date_flown", "year") or "?"),
+                                    "resolution": str(pick(props, "resolution") or "?")})
+        g["names"].append(str(pick(props, "lidar_name", "name") or "?").strip())
+    log(f"{len(groups)} separate downloads ({no_dtm} catalogue tiles have no terrain model)")
+    for url, g in sorted(groups.items(), key=lambda kv: kv[0]):
+        name = os.path.basename(urllib.parse.urlparse(url).path)
+        row = {"name": name, "date": g["date"], "resolution": g["resolution"], "dtm_url": url, "catalogueTiles": len(g["names"])}
         if downloaded > MAX_DOWNLOAD_BYTES:
             row["result"] = "skipped (download limit reached)"
             rows.append(row); continue
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                ds, size = open_dtm(url, tmp)
+                zpath = os.path.join(tmp, name or "tile.zip")
+                size = download(url, zpath)
                 downloaded += size
-                with ds:
-                    if ds.crs is None:
-                        log(f"  {name}: no CRS in file, assuming British National Grid")
-                    h = sample(ds, xs, ys)
+                log(f"{name}: {size / 1e6:.0f} MB downloaded")
+                if zipfile.is_zipfile(zpath):
+                    h, nread = sample_zip(zpath, tmp, xs, ys)
+                else:
+                    with rasterio.open(zpath) as ds:
+                        h = sample(ds, xs, ys)
+                    nread = 1
             got = ~np.isnan(h)
             new = got & ~covered
             covered |= got
             lowest = np.where(got & (np.isnan(lowest) | (h < lowest)), h, lowest)
             row.update({
-                "result": "ok", "mb": round(size / 1e6, 1),
+                "result": f"ok ({nread} grids)", "mb": round(size / 1e6, 1),
                 "cellsWithHeight": int(got.sum()), "newCells": int(new.sum()),
                 "below0OD": int((got & (h <= 0)).sum()),
                 "minHeight": None if not got.any() else round(float(np.nanmin(h[got])), 2),
             })
-            log(f"{name} {date} ({res}): {int(got.sum())} cells with height, {int(new.sum())} new, {size / 1e6:.1f} MB")
+            log(f"{name} {g['date']} ({g['resolution']} m): {int(got.sum())} cells with height, {int(new.sum())} new, {size / 1e6:.1f} MB")
         except Exception as err:  # noqa: BLE001
             row["result"] = f"failed: {type(err).__name__}: {str(err)[:150]}"
-            log(f"{name} {date}: FAILED {err}")
+            log(f"{name} {g['date']}: FAILED {err}")
         rows.append(row)
 
     n_cov = int(covered.sum())
     pct = 100.0 * n_cov / n_flagged
     low = lowest[covered]
-    report.append(f"\nThe catalogue lists **{len(tiles)}** historic tiles over the bay; "
-                  f"{sum(1 for r in rows if r.get('result') == 'ok')} were downloaded and read "
+    report.append(f"\nThe catalogue lists **{len(tiles)}** historic tiles over the bay, in {len(groups)} downloads; "
+                  f"{sum(1 for r in rows if str(r.get('result', '')).startswith('ok'))} were downloaded and read "
                   f"({downloaded / 1e6:.0f} MB).\n")
     report.append(f"\n**Result: older surveys have heights for {pct:.0f}% of the 'not surveyed' foreshore** "
                   f"(about {n_cov * cell_m2 / 1e6:.2f} km² of {n_flagged * cell_m2 / 1e6:.2f} km²).\n")
@@ -273,7 +325,7 @@ def main():
             report.append(f"- {label}: {100.0 * n / max(low.size, 1):.0f}%")
         report.append("")
     report.append("\n## Tiles\n")
-    report.append("| Tile | Date flown | Resolution | Result | Cells with height | New | Lowest (m OD) |")
+    report.append("| Download | Date flown | Resolution (m) | Result | Cells with height | New | Lowest (m OD) |")
     report.append("|---|---|---|---|---|---|---|")
     for r in rows:
         report.append(f"| {r['name']} | {r['date']} | {r['resolution']} | {r.get('result', '')} | "
