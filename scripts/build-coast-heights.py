@@ -179,7 +179,7 @@ def local_relief(h, half):
 
 
 # ---- Ordnance Survey foreshore (OS OpenMap Local, Open Government Licence) ----
-OS_DOWNLOADS = "https://api.os.uk/downloads/v1/products/OpenMapLocal/downloads"
+OS_DOWNLOADS = os.environ.get("COAST_OS_DOWNLOADS", "https://api.os.uk/downloads/v1/products/OpenMapLocal/downloads")
 OS_AREA = "SM"  # the 100 km grid square covering west Pembrokeshire
 
 
@@ -198,10 +198,20 @@ def load_foreshore(bng_box):
         if not path:
             req = urllib.request.Request(OS_DOWNLOADS, headers={"User-Agent": "Cloude coast map"})
             items = json.loads(urllib.request.urlopen(req, timeout=60).read().decode())
-            pick = [i for i in items if str(i.get("area", "")).upper() == OS_AREA and "geopackage" in str(i.get("format", "")).lower()]
+            fmt = lambda i: str(i.get("format", "")).lower()
+            area = lambda i: str(i.get("area", "")).upper()
+            # OS supplies OpenMap Local per 100 km tile only as shapefiles
+            # (GeoPackage is the whole of Great Britain, 2.4 GB), so the SM
+            # tile's shapefiles come first; the national GeoPackage is the
+            # fallback.
+            pick = ([i for i in items if area(i) == OS_AREA and "shapefile" in fmt(i)] or
+                    [i for i in items if area(i) == OS_AREA and "geopackage" in fmt(i)] or
+                    [i for i in items if area(i) == "GB" and "geopackage" in fmt(i)])
             if not pick:
-                print(f"OS OpenMap Local: no GeoPackage for {OS_AREA} in the download list")
+                offered = sorted({f"{area(i)}:{i.get('format')}" for i in items if area(i) in (OS_AREA, "GB")})
+                print(f"OS OpenMap Local: nothing usable for {OS_AREA}; offered: {offered}")
                 return None
+            print(f"OS OpenMap Local: using {area(pick[0])} {pick[0].get('format')}")
             url = pick[0]["url"]
             tmpdir = tempfile.mkdtemp()
             zpath = os.path.join(tmpdir, "oml.zip")
@@ -216,20 +226,32 @@ def load_foreshore(bng_box):
             import zipfile
             if zipfile.is_zipfile(zpath):
                 with zipfile.ZipFile(zpath) as z:
-                    names = [n for n in z.namelist() if n.lower().endswith(".gpkg")]
-                    if not names:
-                        print("OS OpenMap Local zip has no .gpkg")
+                    names = z.namelist()
+                    gpkg = [n for n in names if n.lower().endswith(".gpkg")]
+                    shp = [n for n in names if n.lower().endswith(".shp") and "foreshore" in os.path.basename(n).lower()]
+                    if shp:
+                        # A shapefile is several files with the same stem.
+                        stem = shp[0][:-4]
+                        for n in names:
+                            if n.startswith(stem + "."):
+                                z.extract(n, tmpdir)
+                        path = os.path.join(tmpdir, shp[0])
+                    elif gpkg:
+                        path = z.extract(gpkg[0], tmpdir)
+                    else:
+                        print(f"OS OpenMap Local zip has no foreshore data (e.g. {names[:6]})")
                         return None
-                    path = z.extract(names[0], tmpdir)
             else:
                 path = zpath
         layers = [l[0] for l in pyogrio.list_layers(path)]
-        layer = next((l for l in layers if l.lower() == "foreshore"), None) or next((l for l in layers if "foreshore" in l.lower()), None)
+        layer = (next((l for l in layers if l.lower() == "foreshore"), None) or
+                 next((l for l in layers if "foreshore" in l.lower()), None) or
+                 (layers[0] if path.lower().endswith(".shp") else None))
         if not layer:
             print(f"No Foreshore layer in the OS data (layers: {layers})")
             return None
         meta, _fids, geoms, _fields = pyogrio.raw.read(path, layer=layer, bbox=bng_box)
-        src_crs = meta.get("crs") or "EPSG:27700"
+        src_crs = meta.get("crs") or "EPSG:27700"  # OS data is British National Grid
         shapes = []
         for wkb in geoms:
             if wkb is None:
