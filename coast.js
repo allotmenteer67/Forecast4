@@ -156,6 +156,7 @@ const coast = {
   index: null,
   mask: null,          // { canvas, width, height }
   names: [],
+  lowWater: [],        // OS mean low water: { pts: [[lat, lon]...], south, west, north, east }
   tiles: new Map(),    // file -> { meta, codes, slopes, canvas, renderKey, loading, used }
   view: null,          // { lat, lon, mpp }
   canvas: null, ctx: null, dpr: 1, w: 0, h: 0,
@@ -726,6 +727,58 @@ async function loadAccessAndBeaches() {
   } catch { /* optional */ }
 }
 
+// The Ordnance Survey mean low water line (optional: older data sets
+// don't have it, and the map works the same without).
+async function loadLowWater() {
+  try {
+    const res = await fetch(COAST_BASE + "low-water.json");
+    if (!res.ok) return;
+    const data = await res.json();
+    coast.lowWater = (data.lines || []).filter(l => Array.isArray(l) && l.length >= 2).map(pts => {
+      let south = 90, north = -90, west = 180, east = -180;
+      for (const [la, lo] of pts) {
+        if (la < south) south = la; if (la > north) north = la;
+        if (lo < west) west = lo; if (lo > east) east = lo;
+      }
+      return { pts, south, west, north, east };
+    });
+  } catch { /* optional */ }
+}
+
+// Drawn as a dotted pale line, with a dark edge so it shows on sand and
+// sea alike. Dots, not dashes, so it can't be mistaken for the dashed
+// line from the pin to dry ground.
+function drawLowWater() {
+  if (!coast.lowWater.length) return;
+  const { ctx } = coast;
+  const vb = viewBounds();
+  const path = new Path2D();
+  let any = false;
+  for (const l of coast.lowWater) {
+    if (l.east < vb.west || l.west > vb.east || l.north < vb.south || l.south > vb.north) continue;
+    const pts = l.pts;
+    let p = toScreen(pts[0][0], pts[0][1]);
+    path.moveTo(p.x, p.y);
+    let lx = p.x, ly = p.y;
+    for (let i = 1; i < pts.length; i++) {
+      p = toScreen(pts[i][0], pts[i][1]);
+      // Skip points less than half a pixel on, zoomed right out.
+      if (i < pts.length - 1 && Math.abs(p.x - lx) < 0.5 && Math.abs(p.y - ly) < 0.5) continue;
+      path.lineTo(p.x, p.y);
+      lx = p.x; ly = p.y;
+    }
+    any = true;
+  }
+  if (!any) return;
+  const close = coast.view.mpp <= 6;
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.setLineDash([0, close ? 6 : 5]);
+  ctx.lineWidth = close ? 4.5 : 3.5; ctx.strokeStyle = "rgba(10,12,16,0.7)"; ctx.stroke(path);
+  ctx.lineWidth = close ? 2.5 : 2; ctx.strokeStyle = "rgba(240,244,248,0.95)"; ctx.stroke(path);
+  ctx.restore();
+}
+
 function distanceToLineM(lat, lon, line) {
   let best = Infinity;
   for (let i = 1; i < line.length; i++) {
@@ -1152,6 +1205,7 @@ function draw() {
     ctx.drawImage(e.canvas, Math.floor(tl.x), Math.floor(tl.y), Math.ceil(br.x - tl.x) + 1, Math.ceil(br.y - tl.y) + 1);
   }
 
+  drawLowWater();
   if (coast.view.mpp <= CUTOFF_MPP) drawAccess();
   if (coast.view.mpp <= NAMES_MPP) drawNames();
   if (coast.view.mpp <= CUTOFF_MPP) drawBeachTimes();
@@ -1535,7 +1589,7 @@ async function initCoast() {
     $("coastMessage").hidden = false;
     return;
   }
-  await Promise.all([loadMask().catch(() => {}), loadNames(), loadAccessAndBeaches()]);
+  await Promise.all([loadMask().catch(() => {}), loadNames(), loadAccessAndBeaches(), loadLowWater()]);
   queueDraw();
   loadTide().then(() => { if (coast.pin) describePin(); });
   prefetchAllTiles();

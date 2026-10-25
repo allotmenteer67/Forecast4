@@ -413,7 +413,10 @@
 // and bearings shown magnetic (WMM2025).
 // Bumped to v93: coast map — hatched foreshore now from Ordnance Survey
 // (dries at low tide, height unknown); key, credits and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v93";
+// Bumped to v94: coast map — Ordnance Survey mean low water line drawn
+// as a white dotted line (data/coast/stbrides/low-water.json, made by
+// the coast-heights workflow); key and Help updated.
+const SHELL_CACHE_NAME = "cloude-shell-v94";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
