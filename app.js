@@ -140,6 +140,59 @@ const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:"];
 // direction that actually matters today.
 const BACKUP_FORMAT_VERSION = 1;
 
+// ---- Keeping this device's data safe ----
+// When an iPhone or iPad runs short of space, iOS may clear website
+// data, and a Home Screen web app counts as website data, so
+// everything above can vanish. Two guards:
+//
+// 1. Ask the browser to treat Cloude's storage as "persistent" (keep
+//    it, don't clear it when space is short). Safari decides for itself
+//    whether to agree and doesn't ask the user; it isn't a promise, but
+//    it makes clearing less likely. Asked once per page load; harmless
+//    if already granted or unsupported.
+//
+// 2. Remember when a whole-device backup was last copied, so Settings
+//    can nudge when it's getting old. The key deliberately sits OUTSIDE
+//    BACKUP_KEY_PREFIXES: it's about THIS device's backups, so it isn't
+//    copied into a backup or carried across by a restore (a restored
+//    phone shouldn't claim the other device's backup date).
+const LAST_BACKUP_KEY = "cloude-device:lastBackup";
+const BACKUP_OVERDUE_DAYS = 14;
+
+function markBackupTaken() {
+  try { localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString()); } catch { /* ignore */ }
+}
+
+function lastBackupTime() {
+  try {
+    const t = Date.parse(localStorage.getItem(LAST_BACKUP_KEY) || "");
+    return Number.isFinite(t) ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+// Resolves true / false, or null where the browser can't say.
+async function storageIsKept() {
+  try {
+    if (!navigator.storage || !navigator.storage.persisted) return null;
+    if (await navigator.storage.persisted()) return true;
+    // Not yet: ask now (the page-load request may still be in flight)
+    // and report the browser's answer.
+    return navigator.storage.persist ? await navigator.storage.persist() : false;
+  } catch {
+    return null;
+  }
+}
+
+(async function askToKeepData() {
+  try {
+    if (!navigator.storage || !navigator.storage.persist) return;
+    if (await navigator.storage.persisted()) return;
+    await navigator.storage.persist();
+  } catch { /* not supported, or refused: backups are the fallback */ }
+})();
+
 function exportAppData() {
   const data = {};
   for (let i = 0; i < localStorage.length; i++) {

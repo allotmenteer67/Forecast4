@@ -87,6 +87,38 @@ if (themeSwatchesEl) {
   });
 }
 
+// ---- Backup reminder ----
+// Says when this device last copied a whole backup, and whether the
+// browser has agreed to keep Cloude's data when space runs short (see
+// LAST_BACKUP_KEY and askToKeepData in app.js). Highlighted when there's
+// never been a backup on this device, or the last one is over
+// BACKUP_OVERDUE_DAYS old.
+const backupReminder = document.getElementById("backupReminder");
+
+async function renderBackupReminder() {
+  if (!backupReminder) return;
+  const t = lastBackupTime();
+  let text, overdue;
+  if (t === null) {
+    text = "No backup has been copied from this device yet. If the phone or tablet runs short of space, iOS can clear Cloude's data — copy a backup and keep it in a note.";
+    overdue = true;
+  } else {
+    const days = Math.floor((Date.now() - t) / 86400000);
+    const when = days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+    overdue = days > BACKUP_OVERDUE_DAYS;
+    text = overdue
+      ? `Last backup copied ${when} — worth copying a fresh one and keeping it in a note.`
+      : `Last backup copied ${when}.`;
+  }
+  const kept = await storageIsKept();
+  if (kept === true) text += " This device has agreed to keep Cloude's data when space is short.";
+  else if (kept === false) text += " This device hasn't agreed to keep Cloude's data when space is short, so backups matter more here.";
+  backupReminder.textContent = text;
+  backupReminder.classList.toggle("backup-overdue", overdue);
+}
+
+renderBackupReminder();
+
 // ---- Backup & restore: whole device ----
 const exportButton = document.getElementById("exportButton");
 const exportStatus = document.getElementById("exportStatus");
@@ -101,9 +133,14 @@ function renderExportStatus(message, isError) {
 if (exportButton) {
   exportButton.addEventListener("click", async () => {
     const backup = exportAppData();
+    // Counted as a backup whichever way it's handed over (clipboard or
+    // the select-and-copy box), since the text is in the user's hands
+    // either way.
+    markBackupTaken();
+    renderBackupReminder();
     try {
       await navigator.clipboard.writeText(backup);
-      renderExportStatus("Copied to clipboard.", false);
+      renderExportStatus("Copied to clipboard. Now paste it into a note or a message to yourself so it's kept safe.", false);
       if (exportOutput) exportOutput.hidden = true;
     } catch {
       // Clipboard access can fail or be unavailable (older Safari,

@@ -115,6 +115,15 @@
       <fieldset>
         <legend>Backup &amp; restore</legend>
         <p class="note">Everything Cloude knows — FFV history, saved places, settings, and tide data (locations, TFV, your Admiralty key and proxy URL, learned corrections) — lives only on this device. Copy a backup here before switching phones or clearing site data. To hand your learned forecaster accuracy for one place to someone else (rather than your whole device), use "Share accuracy data" below instead — it merges in without touching their own places or settings.</p>
+        <p id="backupReminder" class="note backup-reminder" aria-live="polite"></p>
+        <style>
+          .backup-reminder.backup-overdue {
+            border-left: 4px solid #e0a030;
+            padding: 6px 10px;
+            background: rgba(224, 160, 48, 0.12);
+            border-radius: 4px;
+          }
+        </style>
         <button id="exportButton" type="button">Copy backup to clipboard</button>
         <p id="exportStatus" class="actual-status status-error-only"></p>
         <textarea id="exportOutput" class="backup-textarea" readonly hidden></textarea>
