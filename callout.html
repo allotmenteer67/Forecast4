@@ -120,6 +120,21 @@
     .time-row { display: flex; gap: 8px; align-items: center; }
     .time-row input { flex: 1; font-size: 26px !important; font-weight: 600; font-variant-numeric: tabular-nums; min-height: 54px; }
     .no-time { margin: 8px 0 0; padding: 8px 10px; border-left: 4px solid #fac775; background: rgba(250,199,117,0.12); border-radius: 4px; color: #fac775; font-size: 14px; }
+    .pickup-card { background: #1e2126; border-radius: 14px; padding: 10px 12px 12px; margin-bottom: 10px; }
+    .pickup-card.left-out { opacity: 0.45; }
+    .pickup-card label { margin-top: 8px; }
+    .pickup-card input[type=text], .pickup-card input[type=time] { background: #14161a; }
+    .card-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .card-pair label { margin-top: 4px; font-size: 14px; }
+    .pickup-card .card-pair input[type=text] { font-size: 16px; padding: 9px 10px; }
+    .card-time { margin-top: 10px; }
+    .pickup-card .card-time input { font-size: 22px !important; min-height: 48px; }
+    .pickup-card .no-time { margin-top: 6px; font-size: 13px; padding: 6px 8px; }
+    .card-top { display: flex; align-items: center; min-height: 34px; }
+    .card-top .include { margin: 0; }
+    .card-top .card-title { font-weight: 600; color: #d3d1c7; font-size: 16px; }
+    .card-top .remove { margin-left: auto; padding: 5px 10px; font-size: 14px; }
+    .add-pickup { display: block; width: 100%; padding: 12px; border-style: dashed; color: #85b7eb; font-weight: 600; }
     .preview {
       white-space: pre-wrap; word-break: break-word; background: #1e2126; border-radius: 12px; padding: 10px 12px;
       font-size: 14px; line-height: 1.45; color: #d3d1c7; margin-top: 6px;
@@ -130,7 +145,6 @@
     }
     .send-now:active { background: #a52d33; }
     .send-now:disabled { opacity: 0.6; }
-    .save { display: block; width: 100%; margin-top: 16px; padding: 14px; font-size: 17px; font-weight: 600; background: #185fa5; color: #e6f1fb; border: none; }
     .row-buttons { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
     .status { font-size: 14px; color: #fac775; margin: 10px 0 0; line-height: 1.4; }
     .sheet details { margin-top: 16px; background: #1e2126; border-radius: 12px; padding: 10px 12px; font-size: 14px; line-height: 1.5; color: #d3d1c7; }
@@ -185,41 +199,30 @@
     <div class="sheet-inner">
       <h2>Can't do pickup <button id="pickupClose" type="button">Close</button></h2>
 
-      <div id="pickupSend" hidden>
-        <label for="pickupTime">Pickup time</label>
-        <div class="time-row">
-          <input id="pickupTime" type="time">
-          <button id="pickupTimeClear" type="button">No time</button>
-        </div>
-        <p id="pickupNoTime" class="no-time">No time set — the message will say clearly that no pickup time was given.</p>
-        <label>Message</label>
-        <div id="pickupPreview" class="preview"></div>
-        <p id="pickupPosState" class="hint"></p>
-        <button id="pickupSendNow" class="send-now" type="button">Send now</button>
-        <p id="pickupStatus" class="status"></p>
-        <div class="row-buttons">
-          <button id="pickupEdit" type="button">Edit details</button>
-        </div>
-      </div>
+      <p id="pickupSetupIntro" class="hint" hidden>Fill this in once. It's kept on this phone, and any change you make here is saved as you type. Add a card for each child or dog. At a callout, just pick the times and tap Send; untick Include to leave one out that day. Who receives it is chosen in the "Cloude Pickup" shortcut (see below).</p>
 
-      <div id="pickupSetup" hidden>
-        <p id="pickupSetupIntro" class="hint">Set this up once. It's kept on this phone until you change or delete it, and at a callout the only thing to put in is the pickup time. Who receives it is chosen in the "Cloude Pickup" shortcut (see below).</p>
-        <label for="pickupWho">Who's to be picked up</label>
-        <input id="pickupWho" type="text" placeholder="e.g. Ellie, or the dog" autocomplete="off">
-        <label for="pickupWhere">From where</label>
-        <input id="pickupWhere" type="text" placeholder="e.g. school, football, the kennels" autocomplete="off">
-        <label for="pickupIfUnable">If they can't, contact</label>
-        <input id="pickupIfUnable" type="text" placeholder="e.g. Dad on 07700 900123, or Sarah" autocomplete="off">
+      <div id="pickupRows"></div>
+      <button id="pickupAdd" type="button" class="add-pickup">+ Add another pickup</button>
+
+      <label for="pickupIfUnable">If they can't, contact</label>
+      <input id="pickupIfUnable" type="text" placeholder="e.g. Dad on 07700 900123, or Sarah" autocomplete="off">
+
+      <button id="pickupSendNow" class="send-now" type="button">Send now</button>
+      <p id="pickupStatus" class="status"></p>
+
+      <label>Message that will be sent</label>
+      <div id="pickupPreview" class="preview"></div>
+      <p id="pickupPosState" class="hint"></p>
+
+      <details id="pickupMore">
+        <summary>More options</summary>
         <label for="pickupOpening">First line</label>
         <textarea id="pickupOpening"></textarea>
         <label class="check"><input id="pickupIncludePos" type="checkbox"> Include my current position</label>
-        <button id="pickupSave" class="save" type="button">Save</button>
-        <p id="pickupSetupStatus" class="status"></p>
         <div class="row-buttons">
-          <button id="pickupCancel" type="button">Cancel</button>
           <button id="pickupDelete" type="button">Delete saved message</button>
         </div>
-      </div>
+      </details>
 
       <details>
         <summary>How to set up the shortcut (once)</summary>

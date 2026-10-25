@@ -16,8 +16,13 @@
 //   cloude-pickup:details   the saved wording, kept until changed or deleted
 //   cloude-pickup:lastSent  when the last message was handed to Shortcuts
 //
-// The only thing typed at send time is the pickup time. Left blank,
-// the message says plainly that no time was given.
+// Several pickups can be saved (a child from the carer, the dog from
+// the kennels, another child from gymnastics), each with who and from
+// where. At send time only the times are typed, one per pickup; a
+// blank time makes the message say plainly that no time was given.
+// Each pickup can be left out for one callout ("Include" untick)
+// without deleting it. Times and Include ticks are never saved: every
+// opening starts with all pickups included and no times.
 
 const PICKUP_DETAILS_KEY = "cloude-pickup:details";
 const PICKUP_LAST_KEY = "cloude-pickup:lastSent";
@@ -28,7 +33,13 @@ const PICKUP_POSITION_WAIT_MS = 6000; // at Send, wait at most this long for a p
 function pickupLoad() {
   try {
     const d = JSON.parse(localStorage.getItem(PICKUP_DETAILS_KEY) || "null");
-    return d && typeof d === "object" ? d : null;
+    if (!d || typeof d !== "object") return null;
+    // Older saves had a single who/where.
+    if (!Array.isArray(d.pickups)) {
+      d.pickups = (d.who || d.where) ? [{ who: d.who || "", where: d.where || "" }] : [];
+      delete d.who; delete d.where;
+    }
+    return d;
   } catch {
     return null;
   }
@@ -42,10 +53,16 @@ function pickupEsc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// "15:00" from the time box, or "" if left blank.
+// "15:00" from a time box, or "" if left blank.
 function pickupTimeText(value) {
   const m = /^(\d{1,2}):(\d{2})/.exec(value || "");
   return m ? `${m[1].padStart(2, "0")}:${m[2]}` : "";
+}
+
+// "Ellie", "Ellie and the dog", "Ellie, the dog and Tom"
+function pickupNames(list) {
+  const n = list.map(p => p.who).filter(Boolean);
+  return n.length <= 1 ? (n[0] || "") : n.slice(0, -1).join(", ") + " and " + n[n.length - 1];
 }
 
 const pickup = {
@@ -53,6 +70,7 @@ const pickup = {
   posError: "",
   posWaiters: [],
   watching: false,
+  rows: [],         // on screen: { who, where, time, include }
 };
 
 function pickupStartPosition() {
@@ -91,17 +109,28 @@ function pickupPositionLine(d) {
   return "My position wasn't available.";
 }
 
-function pickupMessage(d, time) {
-  const who = (d.who || "").trim() || "the children";
-  const where = (d.where || "").trim();
-  const from = where ? ` from ${where}` : "";
+// d: saved details; list: the pickups going out this time, each
+// { who, where, time }.
+function pickupMessage(d, list) {
   const lines = [];
   lines.push((d.opening || "").trim() || PICKUP_DEFAULT_OPENING);
-  if (time) {
-    lines.push(`Please pick up ${who}${from} at ${time}.`);
+  const item = p => {
+    const from = p.where ? ` from ${p.where}` : "";
+    return p.time
+      ? `${p.who}${from} at ${p.time}`
+      : `${p.who}${from} — NO TIME GIVEN, please check when${p.where ? ` with ${p.where}` : ""}`;
+  };
+  if (list.length === 1) {
+    const p = list[0];
+    const from = p.where ? ` from ${p.where}` : "";
+    if (p.time) {
+      lines.push(`Please pick up ${p.who}${from} at ${p.time}.`);
+    } else {
+      lines.push(`Please pick up ${p.who}${from}.`);
+      lines.push(`NO PICKUP TIME WAS GIVEN — please check when ${p.who} needs collecting${p.where ? ` (ask ${p.where})` : ""}.`);
+    }
   } else {
-    lines.push(`Please pick up ${who}${from}.`);
-    lines.push(`NO PICKUP TIME WAS GIVEN — please check when ${who} needs collecting${where ? ` (ask ${where})` : ""}.`);
+    lines.push("Please pick up:\n" + list.map(p => "• " + item(p)).join("\n"));
   }
   if ((d.ifUnable || "").trim()) lines.push(`If you can't, please contact ${d.ifUnable.trim()}.`);
   lines.push("Please reply to everyone to say you've got it.");
@@ -111,6 +140,11 @@ function pickupMessage(d, time) {
 }
 
 // ---------- Screen ----------
+// One screen does everything: a card per pickup (who, from where, and
+// that callout's time), "Add another pickup", who to contact if unable,
+// Send, then the message as it will be sent. Who and where are saved as
+// they're typed, so a change at a callout needs no extra tap. First
+// line and position live under "More options".
 
 function pickupEl(id) { return document.getElementById(id); }
 
@@ -119,8 +153,9 @@ function pickupRenderButton() {
   const last = pickupEl("pickupLast");
   if (!btn) return;
   const d = pickupLoad();
-  btn.innerHTML = d
-    ? `Can't do pickup<small>Send the pickup message${d.who ? ` for ${pickupEsc(d.who)}` : ""}</small>`
+  const names = d ? pickupNames(d.pickups) : "";
+  btn.innerHTML = names
+    ? `Can't do pickup<small>Send the pickup message for ${pickupEsc(names)}</small>`
     : `Set up "Can't do pickup"<small>One-tap message by text and email</small>`;
   let lastText = "";
   try {
@@ -134,11 +169,27 @@ function pickupRenderButton() {
   if (last) { last.textContent = lastText; last.hidden = !lastText; }
 }
 
+function pickupDefaults() {
+  return { opening: PICKUP_DEFAULT_OPENING, pickups: [], ifUnable: "", includePosition: true };
+}
+
 function pickupOpen() {
-  const d = pickupLoad();
+  const saved = pickupLoad();
+  const d = saved || pickupDefaults();
   pickupEl("pickupSheet").hidden = false;
   document.body.classList.add("sheet-open");
-  if (d) pickupShowSend(); else pickupShowSetup(true);
+  pickupEl("pickupSetupIntro").hidden = !!(saved && saved.pickups.some(p => p.who));
+  // Times and Include ticks start fresh every time.
+  pickup.rows = (d.pickups.length ? d.pickups : [{ who: "", where: "" }])
+    .map(p => ({ who: p.who || "", where: p.where || "", time: "", include: true }));
+  pickupEl("pickupIfUnable").value = d.ifUnable || "";
+  pickupEl("pickupOpening").value = d.opening || "";
+  pickupEl("pickupIncludePos").checked = d.includePosition !== false;
+  pickupEl("pickupStatus").textContent = "";
+  pickupEl("pickupSheet").scrollTop = 0;
+  pickupBuildRows();
+  if (d.includePosition !== false) pickupStartPosition();
+  pickupRender();
 }
 
 function pickupClose() {
@@ -147,49 +198,117 @@ function pickupClose() {
   pickupRenderButton();
 }
 
-function pickupShowSend() {
-  pickupEl("pickupSetup").hidden = true;
-  pickupEl("pickupSend").hidden = false;
-  pickupEl("pickupTime").value = "";
-  pickupEl("pickupStatus").textContent = "";
-  const d = pickupLoad();
-  if (d && d.includePosition) pickupStartPosition();
-  pickupRenderPreview();
+function pickupBuildRows() {
+  const box = pickupEl("pickupRows");
+  box.innerHTML = "";
+  const many = pickup.rows.length > 1;
+  pickup.rows.forEach((r, i) => {
+    const card = document.createElement("div");
+    card.className = "pickup-card" + (r.include ? "" : " left-out");
+    card.innerHTML = `
+      <div class="card-top">
+        ${many ? `<label class="check include"><input type="checkbox" data-f="include"${r.include ? " checked" : ""}> Include</label>` : `<span class="card-title">Pickup</span>`}
+        ${many ? `<button type="button" class="remove" data-act="remove">Remove</button>` : ""}
+      </div>
+      <div class="card-pair">
+        <div><label>Who</label>
+        <input type="text" data-f="who" placeholder="e.g. Ellie" autocomplete="off" value="${pickupEsc(r.who)}"></div>
+        <div><label>From where</label>
+        <input type="text" data-f="where" placeholder="e.g. the carer" autocomplete="off" value="${pickupEsc(r.where)}"></div>
+      </div>
+      <div class="time-row card-time">
+        <input type="time" data-f="time" value="${pickupEsc(r.time)}">
+        <button type="button" data-act="notime">No time</button>
+      </div>
+      <p class="no-time"${r.time ? " hidden" : ""}>No time set — the message will say so.</p>`;
+    card.querySelectorAll("[data-f]").forEach(el => {
+      const f = el.dataset.f;
+      const handler = () => {
+        r[f] = el.type === "checkbox" ? el.checked : (f === "time" ? el.value : el.value);
+        if (f === "include") card.classList.toggle("left-out", !r.include);
+        if (f === "time") card.querySelector(".no-time").hidden = !!pickupTimeText(r.time);
+        if (f === "who" || f === "where") pickupSaveScreen();
+        pickupRender();
+      };
+      el.addEventListener("input", handler);
+      el.addEventListener("change", handler);
+    });
+    card.querySelector('[data-act="notime"]').addEventListener("click", () => {
+      r.time = "";
+      card.querySelector('[data-f="time"]').value = "";
+      card.querySelector(".no-time").hidden = false;
+      pickupRender();
+    });
+    const rm = card.querySelector('[data-act="remove"]');
+    if (rm) rm.addEventListener("click", () => {
+      const name = r.who || "this pickup";
+      if (!confirm(`Remove ${name} from the saved pickups?`)) return;
+      pickup.rows.splice(i, 1);
+      pickupSaveScreen();
+      pickupBuildRows();
+      pickupRender();
+    });
+    box.appendChild(card);
+  });
 }
 
-function pickupShowSetup(first) {
-  const d = pickupLoad() || { opening: PICKUP_DEFAULT_OPENING, who: "", where: "", ifUnable: "", includePosition: true };
-  pickupEl("pickupSend").hidden = true;
-  pickupEl("pickupSetup").hidden = false;
-  pickupEl("pickupSetupIntro").hidden = !first;
-  pickupEl("pickupDelete").hidden = !!first;
-  pickupEl("pickupOpening").value = d.opening || "";
-  pickupEl("pickupWho").value = d.who || "";
-  pickupEl("pickupWhere").value = d.where || "";
-  pickupEl("pickupIfUnable").value = d.ifUnable || "";
-  pickupEl("pickupIncludePos").checked = d.includePosition !== false;
-  pickupEl("pickupSetupStatus").textContent = "";
+function pickupAddRow() {
+  pickup.rows.push({ who: "", where: "", time: "", include: true });
+  pickupBuildRows();
+  pickupRender();
+  const cards = pickupEl("pickupRows").querySelectorAll(".pickup-card");
+  const last = cards[cards.length - 1];
+  if (last) { last.scrollIntoView({ block: "center" }); last.querySelector('[data-f="who"]').focus(); }
 }
 
-function pickupRenderPreview() {
-  const box = pickupEl("pickupPreview");
-  if (!box || pickupEl("pickupSend").hidden) return;
-  const d = pickupLoad();
-  if (!d) return;
-  const time = pickupTimeText(pickupEl("pickupTime").value);
-  box.textContent = pickupMessage(d, time);
-  const noTime = pickupEl("pickupNoTime");
-  noTime.hidden = !!time;
+// The saved part of what's on screen (no times, no Include ticks).
+function pickupFromScreen() {
+  return {
+    opening: pickupEl("pickupOpening").value.trim(),
+    pickups: pickup.rows.map(r => ({ who: r.who.trim(), where: r.where.trim() })).filter(p => p.who || p.where),
+    ifUnable: pickupEl("pickupIfUnable").value.trim(),
+    includePosition: pickupEl("pickupIncludePos").checked,
+  };
+}
+
+function pickupSaveScreen() { pickupSave(pickupFromScreen()); }
+
+// The pickups going out this time.
+function pickupGoing() {
+  return pickup.rows
+    .filter(r => r.include && r.who.trim())
+    .map(r => ({ who: r.who.trim(), where: r.where.trim(), time: pickupTimeText(r.time) }));
+}
+
+function pickupChanged() {
+  const d = pickupFromScreen();
+  pickupSave(d);
+  if (d.includePosition && !pickup.pos && !pickup.watching) pickupStartPosition();
+  pickupRender();
+}
+
+function pickupRender() {
+  const d = pickupFromScreen();
+  const going = pickupGoing();
+  pickupEl("pickupSendNow").disabled = !going.length;
+  pickupEl("pickupSendNow").textContent = going.length > 1 ? `Send now (${going.length} pickups)` : "Send now";
+  pickupEl("pickupPreview").textContent = going.length
+    ? pickupMessage(d, going)
+    : (pickup.rows.some(r => r.who.trim()) ? "Every pickup is left out — tick Include on at least one." : "Put in who's to be picked up, and the message will appear here.");
   const posLine = pickupEl("pickupPosState");
-  if (!d.includePosition) posLine.textContent = "Position: not included (change in Edit details).";
+  if (!d.includePosition) posLine.textContent = "Position: not included (see More options).";
   else if (pickup.pos) posLine.textContent = `Position found, to about ${Math.max(5, Math.round(pickup.pos.acc))} m.`;
   else if (pickup.posError) posLine.textContent = `Position ${pickup.posError} — the message will say so.`;
   else posLine.textContent = "Getting your position…";
 }
+// Position updates call this name.
+function pickupRenderPreview() { if (!pickupEl("pickupSheet").hidden) pickupRender(); }
 
 async function pickupSendNow() {
-  const d = pickupLoad();
-  if (!d) return;
+  const going = pickupGoing();
+  if (!going.length) return;
+  const d = pickupFromScreen();
+  pickupSave(d);
   const btn = pickupEl("pickupSendNow");
   const status = pickupEl("pickupStatus");
   btn.disabled = true;
@@ -197,39 +316,18 @@ async function pickupSendNow() {
     status.textContent = "Getting your position…";
     await pickupWaitForPosition(PICKUP_POSITION_WAIT_MS);
   }
-  const time = pickupTimeText(pickupEl("pickupTime").value);
-  const message = pickupMessage(d, time);
+  const message = pickupMessage(d, pickupGoing());
   try { localStorage.setItem(PICKUP_LAST_KEY, new Date().toISOString()); } catch { /* ignore */ }
   status.textContent = `Opening the "${PICKUP_SHORTCUT}" shortcut to send it… If nothing happens, the shortcut isn't set up yet — see "How to set up the shortcut" below.`;
   btn.disabled = false;
+  pickupRender();
   pickupRenderButton();
   window.location.href = "shortcuts://run-shortcut?name=" + encodeURIComponent(PICKUP_SHORTCUT) +
     "&input=text&text=" + encodeURIComponent(message);
 }
 
-function pickupSaveSetup() {
-  const d = {
-    opening: pickupEl("pickupOpening").value.trim(),
-    who: pickupEl("pickupWho").value.trim(),
-    where: pickupEl("pickupWhere").value.trim(),
-    ifUnable: pickupEl("pickupIfUnable").value.trim(),
-    includePosition: pickupEl("pickupIncludePos").checked,
-  };
-  if (!d.who) {
-    pickupEl("pickupSetupStatus").textContent = "Put in who's to be picked up first.";
-    pickupEl("pickupWho").focus();
-    return;
-  }
-  if (!pickupSave(d)) {
-    pickupEl("pickupSetupStatus").textContent = "Couldn't save on this device.";
-    return;
-  }
-  pickupRenderButton();
-  pickupShowSend();
-}
-
 function pickupDeleteAll() {
-  if (!confirm("Delete the saved pickup message? (The shortcut and its contacts stay in the Shortcuts app.)")) return;
+  if (!confirm("Delete all the saved pickups and wording? (The shortcut and its contacts stay in the Shortcuts app.)")) return;
   try { localStorage.removeItem(PICKUP_DETAILS_KEY); localStorage.removeItem(PICKUP_LAST_KEY); } catch { /* ignore */ }
   pickupClose();
 }
@@ -239,12 +337,10 @@ function pickupDeleteAll() {
   if (!btn) return;
   btn.addEventListener("click", pickupOpen);
   pickupEl("pickupClose").addEventListener("click", pickupClose);
-  pickupEl("pickupTime").addEventListener("input", pickupRenderPreview);
-  pickupEl("pickupTimeClear").addEventListener("click", () => { pickupEl("pickupTime").value = ""; pickupRenderPreview(); });
+  pickupEl("pickupAdd").addEventListener("click", pickupAddRow);
+  ["pickupIfUnable", "pickupOpening"].forEach(id => pickupEl(id).addEventListener("input", pickupChanged));
+  pickupEl("pickupIncludePos").addEventListener("change", pickupChanged);
   pickupEl("pickupSendNow").addEventListener("click", pickupSendNow);
-  pickupEl("pickupEdit").addEventListener("click", () => pickupShowSetup(false));
-  pickupEl("pickupSave").addEventListener("click", pickupSaveSetup);
-  pickupEl("pickupCancel").addEventListener("click", () => { if (pickupLoad()) pickupShowSend(); else pickupClose(); });
   pickupEl("pickupDelete").addEventListener("click", pickupDeleteAll);
   pickupRenderButton();
 })();
