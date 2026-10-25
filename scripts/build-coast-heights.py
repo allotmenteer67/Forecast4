@@ -28,11 +28,14 @@
 #           height changes by at least RELIEF_MIN_M within about 14 m —
 #           so field banks and hedges (short but steep) read as flat,
 #           while cliffs, dune faces and rock steps keep their steepness.
-#   blue  = 1 where there's no survey data but surveyed foreshore below
-#           +1 m OD is within about 40 m: almost certainly foreshore or
-#           shallows that were wet or underwater when the plane flew
-#           over. The map shows these as "not surveyed" rather than sea.
-#           0 everywhere else.
+#   blue  = 2 where there's no survey data but Ordnance Survey maps the
+#           ground as Foreshore (between the mean low and mean high water
+#           marks, OS OpenMap Local): it dries at low tide, height
+#           unknown. The map hatches these.
+#           1 (only if the OS download failed, as before): no survey data
+#           but surveyed foreshore below +1 m OD within about 40 m.
+#           0 everywhere else — including no-data cells outside the OS
+#           foreshore, which are sea (below mean low water).
 #
 # Tiles are on a plain latitude/longitude grid, the same simple
 # projection the app's own map already draws with.
@@ -62,6 +65,10 @@ from rasterio.transform import from_origin
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 from PIL import Image
+import urllib.request
+import tempfile
+from rasterio.features import rasterize
+from rasterio.warp import transform_geom
 
 SOURCE_URL = os.environ.get(
     "COAST_DTM_URL",
@@ -171,6 +178,87 @@ def local_relief(h, half):
     return r
 
 
+# ---- Ordnance Survey foreshore (OS OpenMap Local, Open Government Licence) ----
+OS_DOWNLOADS = "https://api.os.uk/downloads/v1/products/OpenMapLocal/downloads"
+OS_AREA = "SM"  # the 100 km grid square covering west Pembrokeshire
+
+
+def load_foreshore(bng_box):
+    """Foreshore polygons over the area, as GeoJSON-like dicts in lat/lon,
+    or None if OS data couldn't be had (the old 40 m rule is used then)."""
+    try:
+        import pyogrio
+        import shapely
+    except ImportError:
+        print("pyogrio/shapely not installed — foreshore from OS skipped")
+        return None
+    path = os.environ.get("COAST_FORESHORE_GPKG")
+    tmpdir = None
+    try:
+        if not path:
+            req = urllib.request.Request(OS_DOWNLOADS, headers={"User-Agent": "Cloude coast map"})
+            items = json.loads(urllib.request.urlopen(req, timeout=60).read().decode())
+            pick = [i for i in items if str(i.get("area", "")).upper() == OS_AREA and "geopackage" in str(i.get("format", "")).lower()]
+            if not pick:
+                print(f"OS OpenMap Local: no GeoPackage for {OS_AREA} in the download list")
+                return None
+            url = pick[0]["url"]
+            tmpdir = tempfile.mkdtemp()
+            zpath = os.path.join(tmpdir, "oml.zip")
+            print(f"OS OpenMap Local {OS_AREA}: downloading {pick[0].get('size', '?')} bytes…")
+            req = urllib.request.Request(url, headers={"User-Agent": "Cloude coast map"})
+            with urllib.request.urlopen(req, timeout=600) as r, open(zpath, "wb") as f:
+                while True:
+                    chunk = r.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            import zipfile
+            if zipfile.is_zipfile(zpath):
+                with zipfile.ZipFile(zpath) as z:
+                    names = [n for n in z.namelist() if n.lower().endswith(".gpkg")]
+                    if not names:
+                        print("OS OpenMap Local zip has no .gpkg")
+                        return None
+                    path = z.extract(names[0], tmpdir)
+            else:
+                path = zpath
+        layers = [l[0] for l in pyogrio.list_layers(path)]
+        layer = next((l for l in layers if l.lower() == "foreshore"), None) or next((l for l in layers if "foreshore" in l.lower()), None)
+        if not layer:
+            print(f"No Foreshore layer in the OS data (layers: {layers})")
+            return None
+        meta, _fids, geoms, _fields = pyogrio.raw.read(path, layer=layer, bbox=bng_box)
+        src_crs = meta.get("crs") or "EPSG:27700"
+        shapes = []
+        for wkb in geoms:
+            if wkb is None:
+                continue
+            geom = shapely.geometry.mapping(shapely.from_wkb(wkb))
+            shapes.append(transform_geom(src_crs, "EPSG:4326", geom))
+        print(f"OS foreshore: {len(shapes)} areas over the bay")
+        return shapes
+    except Exception as err:  # noqa: BLE001
+        print(f"OS foreshore couldn't be loaded ({type(err).__name__}: {err}) — using the old 40 m rule")
+        return None
+    finally:
+        if tmpdir:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def shape_bounds(geom):
+    xs, ys = [], []
+    def walk(c):
+        if isinstance(c[0], (int, float)):
+            xs.append(c[0]); ys.append(c[1])
+        else:
+            for cc in c:
+                walk(cc)
+    walk(geom["coordinates"])
+    return min(xs), min(ys), max(xs), max(ys)
+
+
 def encode_height(h):
     code = np.zeros(h.shape, dtype=np.uint8)
     valid = ~np.isnan(h)
@@ -206,6 +294,12 @@ def main():
         GDAL_CACHEMAX=1024,
         VSI_CACHE="TRUE",
     )
+    # The area in British National Grid metres, for the OS download.
+    from rasterio.warp import transform as warp_transform
+    bx, by = warp_transform("EPSG:4326", "EPSG:27700", [WEST, EAST, WEST, EAST], [SOUTH, SOUTH, NORTH, NORTH])
+    foreshore = load_foreshore((min(bx), min(by), max(bx), max(by)))
+    fs_bounds = [shape_bounds(g) for g in foreshore] if foreshore else []
+
     with rasterio.Env(**env), rasterio.open(SOURCE_URL) as src:
         print(f"Source: {src.width} x {src.height}, {src.crs}, nodata={src.nodata}, overviews={src.overviews(1)}")
         nodata = src.nodata
@@ -270,12 +364,22 @@ def main():
                 far_land = (~near) & (code > 0)
                 code[far_land] = 255
                 slope[far_land] = 0
-                low = (~np.isnan(h)) & (h <= UNSURVEYED_LOW_M)
-                unsurveyed = np.isnan(h) & grow(low, UNSURVEYED_REACH)
                 rgb = np.zeros((TILE, TILE, 3), dtype=np.uint8)
                 rgb[..., 0] = code
                 rgb[..., 1] = slope
-                rgb[..., 2] = unsurveyed.astype(np.uint8)
+                if foreshore is not None:
+                    # OS foreshore without survey heights: dries at low tide.
+                    here = [g for g, (x0, y0, x1, y1) in zip(foreshore, fs_bounds)
+                            if x1 >= west and x0 <= east and y1 >= south and y0 <= north]
+                    if here:
+                        fmask = rasterize(here, out_shape=(TILE, TILE),
+                                          transform=from_origin(west, north, D_LON, D_LAT),
+                                          fill=0, default_value=1, dtype="uint8").astype(bool)
+                        rgb[..., 2] = (np.isnan(h) & fmask).astype(np.uint8) * 2
+                else:
+                    low = (~np.isnan(h)) & (h <= UNSURVEYED_LOW_M)
+                    unsurveyed = np.isnan(h) & grow(low, UNSURVEYED_REACH)
+                    rgb[..., 2] = unsurveyed.astype(np.uint8)
                 name = f"r{r}c{c}.png"
                 Image.fromarray(rgb, "RGB").save(os.path.join(HEIGHTS_DIR, name), optimize=True)
                 tiles.append({"r": r, "c": c, "file": name,
@@ -297,7 +401,10 @@ def main():
         "encoding": {
             "red": "ground height: 0 = no data (usually sea); 1-254 = (red - 1) / 10 - 6 metres above Ordnance Datum; 255 = above 19.3 m, or land more than about 250 m from the sea (kept without detail)",
             "green": "steepness in degrees",
-            "blue": "1 = no survey data but almost certainly foreshore or shallows (within ~40 m of surveyed ground below +1 m OD); 0 otherwise",
+            "blue": ("2 = no survey data, but Ordnance Survey foreshore (between mean low and mean high water): dries at low tide, height unknown; 0 otherwise (no-data outside it is sea)"
+                     if foreshore is not None else
+                     "1 = no survey data but almost certainly foreshore or shallows (within ~40 m of surveyed ground below +1 m OD); 0 otherwise"),
+            "foreshoreSource": "Ordnance Survey OpenMap Local (Contains OS data © Crown copyright and database right, OGL)" if foreshore is not None else None,
             "heightMin": HEIGHT_MIN, "heightMax": HEIGHT_MAX, "heightStep": 0.1,
         },
         "landmask": {"file": "landmask.png", "dLat": D_LAT * COARSE, "dLon": D_LON * COARSE,
@@ -341,7 +448,7 @@ def make_preview(tiles, tile_rows, tile_cols):
         out[land & ((h > 5) | (code == 255))] = (120, 160, 100)
         out[land & (slope >= 30)] = (230, 160, 40)
         out[land & (slope >= 55)] = (200, 50, 40)
-        out[(code == 0) & (flag == 1)] = (110, 110, 120)  # foreshore not surveyed
+        out[(code == 0) & (flag >= 1)] = (110, 110, 120)  # foreshore not surveyed
         img[t["r"] * per:(t["r"] + 1) * per, t["c"] * per:(t["c"] + 1) * per] = out
     Image.fromarray(img, "RGB").save(os.path.join(HEIGHTS_DIR, "preview.png"), optimize=True)
 
