@@ -125,7 +125,9 @@ applyTheme(loadTheme());
 // this needing to be updated to know about them. Two prefixes: the
 // original weather-side storage, and tide's own (added later, under its
 // own prefix since it's a genuinely separate feature — see tide.js).
-const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:"];
+// cloude-pickup: is the Callout screen's saved "Can't do pickup" wording
+// (pickup.js); the recipients live in the iPhone Shortcut, not here.
+const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:", "cloude-pickup:"];
 
 // Bump this whenever a backup's own SHAPE changes in a way an older
 // importer couldn't handle (a renamed field, a restructured store) —

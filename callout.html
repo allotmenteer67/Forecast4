@@ -91,6 +91,52 @@
     }
     .coast:active { background: #134c85; }
     .coast small { display: block; font-weight: 400; font-size: 13px; margin-top: 2px; color: #b5d4f4; }
+    /* "Can't do pickup" button, and its sheet (pickup.js). */
+    .pickup {
+      display: block; width: 100%; margin-top: 9px; padding: 14px; font: inherit; font-size: 17px; font-weight: 600;
+      background: #7a2e33; color: #fbe9ea; border: none; border-radius: 14px; text-align: center;
+    }
+    .pickup:active { background: #632529; }
+    .pickup small { display: block; font-weight: 400; font-size: 13px; margin-top: 2px; color: #f3c4c7; }
+    .pickup-last { font-size: 13px; color: #888780; text-align: center; margin: 6px 0 0; }
+    body.sheet-open { overflow: hidden; }
+    .sheet {
+      position: fixed; inset: 0; z-index: 50; background: #14161a; overflow-y: auto;
+      padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px calc(env(safe-area-inset-bottom, 0px) + 20px);
+      -webkit-overflow-scrolling: touch;
+    }
+    .sheet-inner { max-width: 480px; margin: 0 auto; }
+    .sheet h2 { font-size: 19px; margin: 4px 0 10px; color: #f09595; display: flex; align-items: center; }
+    .sheet h2 button { margin-left: auto; font-weight: 400; }
+    .sheet label { display: block; font-size: 15px; color: #a8a69e; font-weight: 600; margin: 12px 0 4px; }
+    .sheet input[type=text], .sheet input[type=time], .sheet textarea {
+      width: 100%; font: inherit; font-size: 17px; color: #e8e6df; background: #1e2126;
+      border: 1px solid #5f5e5a; border-radius: 10px; padding: 10px 12px; -webkit-appearance: none;
+    }
+    .sheet textarea { min-height: 64px; resize: vertical; }
+    .sheet .hint { font-size: 13px; color: #888780; margin: 4px 0 0; line-height: 1.4; }
+    .sheet .check { display: flex; gap: 10px; align-items: center; font-weight: 400; color: #d3d1c7; }
+    .sheet .check input { width: 22px; height: 22px; }
+    .time-row { display: flex; gap: 8px; align-items: center; }
+    .time-row input { flex: 1; font-size: 26px !important; font-weight: 600; font-variant-numeric: tabular-nums; min-height: 54px; }
+    .no-time { margin: 8px 0 0; padding: 8px 10px; border-left: 4px solid #fac775; background: rgba(250,199,117,0.12); border-radius: 4px; color: #fac775; font-size: 14px; }
+    .preview {
+      white-space: pre-wrap; word-break: break-word; background: #1e2126; border-radius: 12px; padding: 10px 12px;
+      font-size: 14px; line-height: 1.45; color: #d3d1c7; margin-top: 6px;
+    }
+    .send-now {
+      display: block; width: 100%; margin-top: 14px; padding: 16px; font: inherit; font-size: 19px; font-weight: 700;
+      background: #c4363d; color: #fff; border: none; border-radius: 14px;
+    }
+    .send-now:active { background: #a52d33; }
+    .send-now:disabled { opacity: 0.6; }
+    .save { display: block; width: 100%; margin-top: 16px; padding: 14px; font-size: 17px; font-weight: 600; background: #185fa5; color: #e6f1fb; border: none; }
+    .row-buttons { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .status { font-size: 14px; color: #fac775; margin: 10px 0 0; line-height: 1.4; }
+    .sheet details { margin-top: 16px; background: #1e2126; border-radius: 12px; padding: 10px 12px; font-size: 14px; line-height: 1.5; color: #d3d1c7; }
+    .sheet details summary { font-weight: 600; color: #85b7eb; font-size: 15px; }
+    .sheet details ol { padding-left: 20px; margin: 8px 0; }
+    .sheet details li { margin-bottom: 6px; }
     .foot { font-size: 12px; color: #888780; text-align: center; margin-top: 10px; line-height: 1.45; }
   </style>
 </head>
@@ -128,12 +174,71 @@
 
     <a class="coast" href="coast.html">Coast map<small>Tide, beaches, cliffs and steep ground</small></a>
 
+    <button id="pickupButton" class="pickup" type="button">Can't do pickup</button>
+    <p id="pickupLast" class="pickup-last" hidden></p>
+
     <p class="foot">Quick picture only — not for safety-critical decisions.<br>
       Wind, sea and visibility: Open-Meteo. Tide: predicted from Environment Agency gauge data (Open Government Licence). Visibility from weather models is a rough guide, especially for fog.</p>
   </main>
 
+  <div id="pickupSheet" class="sheet" hidden>
+    <div class="sheet-inner">
+      <h2>Can't do pickup <button id="pickupClose" type="button">Close</button></h2>
+
+      <div id="pickupSend" hidden>
+        <label for="pickupTime">Pickup time</label>
+        <div class="time-row">
+          <input id="pickupTime" type="time">
+          <button id="pickupTimeClear" type="button">No time</button>
+        </div>
+        <p id="pickupNoTime" class="no-time">No time set — the message will say clearly that no pickup time was given.</p>
+        <label>Message</label>
+        <div id="pickupPreview" class="preview"></div>
+        <p id="pickupPosState" class="hint"></p>
+        <button id="pickupSendNow" class="send-now" type="button">Send now</button>
+        <p id="pickupStatus" class="status"></p>
+        <div class="row-buttons">
+          <button id="pickupEdit" type="button">Edit details</button>
+        </div>
+      </div>
+
+      <div id="pickupSetup" hidden>
+        <p id="pickupSetupIntro" class="hint">Set this up once. It's kept on this phone until you change or delete it, and at a callout the only thing to put in is the pickup time. Who receives it is chosen in the "Cloude Pickup" shortcut (see below).</p>
+        <label for="pickupWho">Who's to be picked up</label>
+        <input id="pickupWho" type="text" placeholder="e.g. Ellie, or the dog" autocomplete="off">
+        <label for="pickupWhere">From where</label>
+        <input id="pickupWhere" type="text" placeholder="e.g. school, football, the kennels" autocomplete="off">
+        <label for="pickupIfUnable">If they can't, contact</label>
+        <input id="pickupIfUnable" type="text" placeholder="e.g. Dad on 07700 900123, or Sarah" autocomplete="off">
+        <label for="pickupOpening">First line</label>
+        <textarea id="pickupOpening"></textarea>
+        <label class="check"><input id="pickupIncludePos" type="checkbox"> Include my current position</label>
+        <button id="pickupSave" class="save" type="button">Save</button>
+        <p id="pickupSetupStatus" class="status"></p>
+        <div class="row-buttons">
+          <button id="pickupCancel" type="button">Cancel</button>
+          <button id="pickupDelete" type="button">Delete saved message</button>
+        </div>
+      </div>
+
+      <details>
+        <summary>How to set up the shortcut (once)</summary>
+        <p>Cloude writes the message; an iPhone Shortcut called <b>Cloude Pickup</b> sends it from your own number and email without asking. Set it up in the Shortcuts app:</p>
+        <ol>
+          <li>Open <b>Shortcuts</b>, tap <b>+</b>, and name the new shortcut exactly <b>Cloude Pickup</b>.</li>
+          <li>Add the action <b>Send Message</b>. Tap <b>Message</b> and choose <b>Shortcut Input</b>. Tap <b>Recipients</b> and pick up to 3 people. Open the action's little arrow and turn <b>Show When Run</b> off.</li>
+          <li>Add the action <b>Send Email</b>. Put <b>Shortcut Input</b> as the message, pick up to 3 people, and type a subject such as <i>Pickup needed</i>. Open its arrow and turn <b>Show Compose Sheet</b> off.</li>
+          <li>Tap <b>Done</b>.</li>
+        </ol>
+        <p>Test it first with only your own number and email as the recipients, then swap in the real people. The first time it runs, the iPhone asks whether the shortcut may send messages: choose <b>Always Allow</b>. If the test arrives empty, open the shortcut, tap its top line, and turn on <b>Share Sheet</b>.</p>
+        <p>To change who gets it, edit the shortcut in the Shortcuts app.</p>
+      </details>
+    </div>
+  </div>
+
   <script src="tide.js"></script>
   <script src="callout.js"></script>
+  <script src="pickup.js"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
