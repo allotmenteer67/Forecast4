@@ -398,7 +398,9 @@
 // hatched grey, plain-land shade matched to detailed land.
 // Bumped to v86: coast map laid out like the weather map — buttons
 // above the map, time pill top right, Time slider section below.
-const SHELL_CACHE_NAME = "cloude-shell-v86";
+// Bumped to v87: coast map step 3b — ways off the beach with cut
+// times, each beach's last way off, and the pink cut-off overlay.
+const SHELL_CACHE_NAME = "cloude-shell-v87";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

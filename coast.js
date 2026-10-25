@@ -25,8 +25,17 @@
 // datum), so the two compare directly. The level is shown on screen
 // above Chart Datum, like the tide card, using the gauge's CD offset.
 //
-// Coming in later parts: ways off the beach and time until each is cut
-// (3b), a pin and own position (3c), rescue position entry (3d).
+// Step 3b adds:
+//   - ways off the beach (slipways, steps and paths checked against the
+//     LIDAR in step 2 as reaching beach level), each with the time the
+//     tide reaches its foot
+//   - for each named beach, the time its last way off is cut
+//   - a "cut off" overlay: dry beach and rock at the chosen time from
+//     which there is no dry route — without crossing water or a cliff —
+//     to a way off or to higher ground
+//
+// Coming in later parts: a pin and own position (3c), rescue position
+// entry (3d).
 
 const COAST_BASE = "data/coast/stbrides/";
 const COAST_TILE_DIR = COAST_BASE + "heights/";
@@ -44,6 +53,11 @@ const MIN_MPP = 0.6;   // metres per screen pixel, closest
 const MAX_MPP = 60;    // furthest: the whole bay on a phone
 const NAMES_MPP = 9;   // place names shown when closer than this
 const DECODED_TILE_LIMIT = 36;
+const CUTOFF_MPP = 6;          // cut-off overlay and way-off times shown when this close
+const CUTOFF_MAX_TILES = 20;   // limit on the area checked at once (phone memory)
+const IMPASSABLE_DEG = 40;     // ground this steep counts as a wall for walkers
+const SERIES_STEP_MIN = 5;     // tide worked out every 5 minutes for the cut times
+const SERIES_HOURS = 30;       // far enough ahead to cover the slider (24 h) plus a tide
 
 // Colours (dark map, readable at night).
 const C = {
@@ -54,6 +68,7 @@ const C = {
   land: [104, 136, 92],
   steep: [222, 156, 58],
   cliff: [205, 70, 60],
+  cutoff: [214, 72, 190],         // dry, but no dry way out
   unsurveyed: [92, 96, 108],      // foreshore the survey couldn't see
   unsurveyedHatch: [122, 126, 138],
   // Plain land (inland, and the coarse outline) is drawn at the shade
@@ -94,7 +109,12 @@ const coast = {
   offsetMin: 0,        // slider position, minutes from now (rounded)
   baseTime: 0,         // now, rounded down to SLIDER_STEP_MIN
   drawQueued: false,
-  status: ""
+  status: "",
+  access: [],          // ways off at beach level: { lat, lon, kind, name, groundM }
+  beaches: [],         // { name, lat, lon, outline, access: [indexes] }
+  series: null,        // { startMs, levels: Float32Array } tide every SERIES_STEP_MIN
+  cutoffKey: null,     // what the current cut-off overlay was worked out for
+  cutoffTimer: null
 };
 
 function $(id) { return document.getElementById(id); }
@@ -155,6 +175,7 @@ async function loadTide() {
       cdOffset: typeof station.cdOffsetOD === "number" ? station.cdOffsetOD : null,
       label: station.label
     };
+    buildSeries();
   } catch {
     coast.tide = null;
     setTideText("Tide not available — showing ground only", "");
@@ -234,6 +255,233 @@ async function loadMask() {
   coast.mask = { canvas: c, dLat: lm.dLat, dLon: lm.dLon };
 }
 
+async function loadAccessAndBeaches() {
+  try {
+    const [ra, rb] = await Promise.all([fetch(COAST_BASE + "access.json"), fetch(COAST_BASE + "beaches.json")]);
+    const access = ra.ok ? (await ra.json()).access || [] : [];
+    const beaches = rb.ok ? (await rb.json()).beaches || [] : [];
+    // Only ways off that step 2 confirmed reach the beach. If step 2
+    // hasn't checked them yet, none are shown rather than guessing.
+    coast.access = access.filter(a => a.atBeachLevel && typeof a.lat === "number")
+      .map(a => ({ ...a, foot: typeof a.groundM === "number" ? a.groundM : (a.kind === "slipway" ? 0 : null) }));
+    coast.beaches = beaches.filter(b => b.name && b.outline && b.outline.length).map(b => {
+      const pts = b.outline.flat();
+      const lat = pts.reduce((t, p) => t + p[0], 0) / pts.length;
+      const lon = pts.reduce((t, p) => t + p[1], 0) / pts.length;
+      // Ways off within 40 m of the beach outline belong to it.
+      const mine = [];
+      coast.access.forEach((a, i) => {
+        if (b.outline.some(line => distanceToLineM(a.lat, a.lon, line) <= 40)) mine.push(i);
+      });
+      return { name: b.name, lat, lon, outline: b.outline, access: mine };
+    });
+  } catch { /* optional */ }
+}
+
+function distanceToLineM(lat, lon, line) {
+  let best = Infinity;
+  for (let i = 1; i < line.length; i++) {
+    const ax = line[i - 1][1] * KX, ay = line[i - 1][0] * KY;
+    const bx = line[i][1] * KX, by = line[i][0] * KY;
+    const px = lon * KX, py = lat * KY;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    best = Math.min(best, Math.hypot(px - (ax + t * dx), py - (ay + t * dy)));
+  }
+  return best;
+}
+
+// ---- Tide series and cut times ----
+function buildSeries() {
+  if (!coast.tide) { coast.series = null; return; }
+  const n = SERIES_HOURS * 60 / SERIES_STEP_MIN + 1;
+  const levels = new Float32Array(n);
+  for (let i = 0; i < n; i++) levels[i] = tideOdAt(new Date(coast.baseTime + i * SERIES_STEP_MIN * 60000));
+  coast.series = { startMs: coast.baseTime, levels };
+}
+
+// First time at or after the slider time that the tide reaches `footOd`.
+// Returns { state: "now" } if already covered, { state: "at", time } or
+// { state: "clear" } if not within the series.
+function cutTime(footOd) {
+  const sr = coast.series;
+  if (!sr || footOd === null) return null;
+  const i0 = Math.round(coast.offsetMin / SERIES_STEP_MIN);
+  if (sr.levels[i0] >= footOd) return { state: "now" };
+  for (let i = i0 + 1; i < sr.levels.length; i++) {
+    if (sr.levels[i] >= footOd) return { state: "at", time: new Date(sr.startMs + i * SERIES_STEP_MIN * 60000) };
+  }
+  return { state: "clear" };
+}
+
+function inText(date) {
+  const min = Math.round((date - slideTime()) / 60000);
+  const h = Math.floor(min / 60), m = min % 60;
+  return h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${String(m).padStart(2, "0")}`;
+}
+
+// ---- Cut-off overlay ----
+// Works on a patchwork of the tiles round the view. A cell is walkable
+// if it has a height, is above the water and isn't steeper than
+// IMPASSABLE_DEG. Starting from every way off and from all higher land
+// (and walkable land at the patchwork's edge), it spreads through
+// walkable cells; dry beach-height cells it never reaches are cut off.
+function scheduleCutoff() {
+  clearTimeout(coast.cutoffTimer);
+  coast.cutoffTimer = setTimeout(computeCutoff, 120);
+}
+
+function computeCutoff() {
+  if (!coast.index || coast.view.mpp > CUTOFF_MPP) { clearCutoff(); return; }
+  const lv = levelsForSlider();
+  if (!lv) { clearCutoff(); return; }
+  const g = coast.index.grid, T = g.tileSize;
+  const vb = viewBounds();
+  const padLat = T * g.dLat * 0.5, padLon = T * g.dLon * 0.5;
+  const r0 = Math.max(0, Math.floor((g.north - (vb.north + padLat)) / (T * g.dLat)));
+  const r1 = Math.floor((g.north - (vb.south - padLat)) / (T * g.dLat));
+  const c0 = Math.max(0, Math.floor((vb.west - padLon - g.west) / (T * g.dLon)));
+  const c1 = Math.floor((vb.east + padLon - g.west) / (T * g.dLon));
+  const rows = r1 - r0 + 1, cols = c1 - c0 + 1;
+  if (rows * cols > CUTOFF_MAX_TILES) { clearCutoff(); return; }
+
+  // Every tile in the patch must be decoded first; decode and retry.
+  const byRC = new Map(coast.index.tiles.map(t => [`${t.r},${t.c}`, t]));
+  const patch = [];
+  let waiting = false;
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const meta = byRC.get(`${r},${c}`);
+    if (!meta) { patch.push(null); continue; }
+    const e = tileEntry(meta);
+    e.used = performance.now();
+    if (!e.codes) { decodeTile(e); waiting = true; }
+    patch.push(e);
+  }
+  if (waiting) { scheduleCutoff(); return; }
+
+  const key = `${r0},${c0},${rows},${cols}|${lv.now.toFixed(2)}`;
+  if (key === coast.cutoffKey) return;
+
+  const W = cols * T, H = rows * T, N = W * H;
+  const coverCode = codeFor(lv.now);
+  const sandCode = codeFor(5);
+  // 0 = blocked, 1 = walkable, 2 = reached
+  const state = new Uint8Array(N);
+  const queue = new Int32Array(N);
+  const wall = new Uint8Array(N);
+  let qh = 0, qt = 0;
+  for (let pr = 0; pr < rows; pr++) for (let pc = 0; pc < cols; pc++) {
+    const e = patch[pr * cols + pc];
+    if (!e) continue;
+    for (let y = 0; y < T; y++) {
+      const src = y * T, dst = (pr * T + y) * W + pc * T;
+      for (let x = 0; x < T; x++) {
+        const code = e.codes[src + x];
+        if (code === 0 || code <= coverCode) continue;
+        const k = dst + x;
+        if (e.slopes[src + x] >= IMPASSABLE_DEG) { wall[k] = 1; continue; }
+        state[k] = code === 255 ? 3 : 1; // 3 = higher land, seeded below
+      }
+    }
+  }
+  // Thicken cliffs by one cell all round, so a cliff face with the odd
+  // less-steep cell in it (a ledge, or survey noise) still counts as a
+  // wall rather than a way up.
+  for (let k = 0; k < N; k++) {
+    if (!wall[k]) continue;
+    const y = (k / W) | 0, x = k - y * W;
+    for (let dy = -1; dy <= 1; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= H) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx;
+        if (xx >= 0 && xx < W) state[yy * W + xx] = 0;
+      }
+    }
+  }
+  // Higher land is a way out in itself.
+  for (let k = 0; k < N; k++) if (state[k] === 3) { state[k] = 2; queue[qt++] = k; }
+  // Walkable ground above beach height on the patch's edge is assumed to
+  // lead somewhere. Beach-height ground on the edge is NOT: the patch
+  // reaches half a tile (~500 m) beyond the screen, and a beach that
+  // carries on further than that without a way off or a slope up is
+  // better shown as cut off than wrongly shown as safe.
+  const high = new Uint8Array(N);
+  for (let pr = 0; pr < rows; pr++) for (let pc = 0; pc < cols; pc++) {
+    const e = patch[pr * cols + pc];
+    if (!e) continue;
+    for (let y = 0; y < T; y++) {
+      const src = y * T, dst = (pr * T + y) * W + pc * T;
+      for (let x = 0; x < T; x++) if (e.codes[src + x] > sandCode) high[dst + x] = 1;
+    }
+  }
+  const edgeSeed = k => { if (state[k] === 1 && high[k]) { state[k] = 2; queue[qt++] = k; } };
+  for (let x = 0; x < W; x++) { edgeSeed(x); edgeSeed((H - 1) * W + x); }
+  for (let y = 0; y < H; y++) { edgeSeed(y * W); edgeSeed(y * W + W - 1); }
+  // Each way off: its foot, or the nearest walkable cell within ~10 m.
+  for (const a of coast.access) {
+    const row = Math.floor((g.north - a.lat) / g.dLat) - r0 * T;
+    const col = Math.floor((a.lon - g.west) / g.dLon) - c0 * T;
+    if (row < 0 || col < 0 || row >= H || col >= W) continue;
+    for (let d = 0; d <= 5; d++) {
+      let seeded = false;
+      for (let dy = -d; dy <= d && !seeded; dy++) for (let dx = -d; dx <= d && !seeded; dx++) {
+        const y = row + dy, x = col + dx;
+        if (y < 0 || x < 0 || y >= H || x >= W) continue;
+        const k = y * W + x;
+        if (state[k] === 1) { state[k] = 2; queue[qt++] = k; seeded = true; }
+        else if (state[k] === 2) seeded = true;
+      }
+      if (seeded) break;
+    }
+  }
+  // Spread (8 directions).
+  while (qh < qt) {
+    const k = queue[qh++];
+    const y = (k / W) | 0, x = k - y * W;
+    for (let dy = -1; dy <= 1; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= H) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx;
+        if (xx < 0 || xx >= W || (dx === 0 && dy === 0)) continue;
+        const n = yy * W + xx;
+        if (state[n] === 1) { state[n] = 2; queue[qt++] = n; }
+      }
+    }
+  }
+  // Mark dry beach-height cells that weren't reached, per tile.
+  for (const e of coast.tiles.values()) e.cut = null;
+  for (let pr = 0; pr < rows; pr++) for (let pc = 0; pc < cols; pc++) {
+    const e = patch[pr * cols + pc];
+    if (!e) continue;
+    let cut = null;
+    for (let y = 0; y < T; y++) {
+      const src = y * T, dst = (pr * T + y) * W + pc * T;
+      for (let x = 0; x < T; x++) {
+        const k = dst + x;
+        if (state[k] === 1 && e.codes[src + x] <= sandCode) {
+          if (!cut) cut = new Uint8Array(T * T);
+          cut[src + x] = 1;
+        }
+      }
+    }
+    e.cut = cut;
+  }
+  coast.cutoffKey = key;
+  invalidateTiles();
+  queueDraw();
+}
+
+function clearCutoff() {
+  if (coast.cutoffKey === null) return;
+  for (const e of coast.tiles.values()) e.cut = null;
+  coast.cutoffKey = null;
+  invalidateTiles();
+  queueDraw();
+}
+
 async function loadNames() {
   try {
     const res = await fetch(COAST_BASE + "names.json");
@@ -287,7 +535,7 @@ function trimDecoded() {
   if (decoded.length <= DECODED_TILE_LIMIT) return;
   decoded.sort((a, b) => a.used - b.used);
   for (const e of decoded.slice(0, decoded.length - DECODED_TILE_LIMIT)) {
-    e.codes = null; e.slopes = null; e.flags = null; e.canvas = null; e.renderKey = null;
+    e.codes = null; e.slopes = null; e.flags = null; e.cut = null; e.canvas = null; e.renderKey = null;
   }
 }
 
@@ -317,7 +565,7 @@ function codeFor(heightOd) {
 }
 
 function renderTile(e, lv) {
-  const key = lv ? `${lv.now.toFixed(2)}|${lv.later.toFixed(2)}` : "none";
+  const key = (lv ? `${lv.now.toFixed(2)}|${lv.later.toFixed(2)}` : "none") + (e.cut ? "|cut" + coast.cutoffKey : "");
   if (e.renderKey === key) return;
   const n = e.codes.length;
   const ctx = e.canvas.getContext("2d", { willReadFrequently: true });
@@ -340,6 +588,7 @@ function renderTile(e, lv) {
     }
     else if (code !== 255 && code <= coverCode) col = C.covered;
     else if (code !== 255 && code <= soonCode) col = C.soon;
+    else if (e.cut && e.cut[i]) col = C.cutoff;
     else {
       const s = e.slopes[i];
       if (s >= CLIFF_DEG) col = C.cliff;
@@ -372,6 +621,9 @@ function draw() {
   const { ctx, dpr } = coast;
   if (!ctx || !coast.view) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Round joins so the dark outline round text has no spikes.
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
   ctx.fillStyle = `rgb(${C.sea.join(",")})`;
   ctx.fillRect(0, 0, coast.w, coast.h);
   if (!coast.index) return;
@@ -402,8 +654,66 @@ function draw() {
     ctx.drawImage(e.canvas, Math.floor(tl.x), Math.floor(tl.y), Math.ceil(br.x - tl.x) + 1, Math.ceil(br.y - tl.y) + 1);
   }
 
+  if (coast.view.mpp <= CUTOFF_MPP) drawAccess();
   if (coast.view.mpp <= NAMES_MPP) drawNames();
+  if (coast.view.mpp <= CUTOFF_MPP) drawBeachTimes();
+  scheduleCutoff();
   drawScaleBar();
+}
+
+// Ways off: a green disc with an up arrow while open, grey with a cross
+// once the tide is at its foot. When close in, the time it's cut.
+function drawAccess() {
+  const { ctx } = coast;
+  ctx.font = "600 11px -apple-system, BlinkMacSystemFont, sans-serif";
+  ctx.textBaseline = "middle";
+  const showTimes = coast.view.mpp <= 3;
+  for (const a of coast.access) {
+    const s = toScreen(a.lat, a.lon);
+    if (s.x < -20 || s.y < -20 || s.x > coast.w + 20 || s.y > coast.h + 20) continue;
+    const ct = cutTime(a.foot);
+    const shut = ct && ct.state === "now";
+    ctx.beginPath(); ctx.arc(s.x, s.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = shut ? "#6b6b6b" : "#2f9e55"; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = "#0e1116"; ctx.stroke();
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.8; ctx.beginPath();
+    if (shut) { ctx.moveTo(s.x - 3, s.y - 3); ctx.lineTo(s.x + 3, s.y + 3); ctx.moveTo(s.x + 3, s.y - 3); ctx.lineTo(s.x - 3, s.y + 3); }
+    else { ctx.moveTo(s.x, s.y + 4); ctx.lineTo(s.x, s.y - 4); ctx.moveTo(s.x - 3, s.y - 1); ctx.lineTo(s.x, s.y - 4); ctx.lineTo(s.x + 3, s.y - 1); }
+    ctx.stroke();
+    if (showTimes && ct) {
+      const text = ct.state === "now" ? "cut" : ct.state === "at" ? `cut ${clockTime(ct.time)}` : "open 24 h+";
+      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
+      ctx.strokeText(text, s.x + 10, s.y); ctx.fillStyle = shut ? "#b4b2a9" : "#b8f0c8"; ctx.fillText(text, s.x + 10, s.y);
+    }
+  }
+}
+
+// For each named beach in view: when its last way off is cut.
+function drawBeachTimes() {
+  const { ctx } = coast;
+  ctx.font = "700 12px -apple-system, BlinkMacSystemFont, sans-serif";
+  ctx.textBaseline = "middle";
+  for (const b of coast.beaches) {
+    const s = toScreen(b.lat, b.lon);
+    if (s.x < -60 || s.y < -20 || s.x > coast.w + 60 || s.y > coast.h + 20) continue;
+    let text, colour;
+    if (!b.access.length) { text = "No mapped way off"; colour = "#b4b2a9"; }
+    else {
+      const times = b.access.map(i => cutTime(coast.access[i].foot)).filter(Boolean);
+      if (!times.length) continue;
+      if (times.some(t => t.state === "clear")) { text = "Way off open 24 h+"; colour = "#b8f0c8"; }
+      else if (times.every(t => t.state === "now")) { text = "All ways off cut"; colour = "#f09595"; }
+      else {
+        const last = times.filter(t => t.state === "at").map(t => t.time).sort((x, y) => y - x)[0];
+        text = `Last way off cut ${clockTime(last)} (in ${inText(last)})`;
+        colour = "#fac775";
+      }
+    }
+    const y = s.y + 16;
+    const w = ctx.measureText(text).width;
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
+    ctx.strokeText(text, s.x - w / 2, y); ctx.fillStyle = colour; ctx.fillText(text, s.x - w / 2, y);
+  }
 }
 
 function drawNames() {
@@ -557,7 +867,11 @@ function setUpSlider() {
 
 function resetBaseTime() {
   const step = SLIDER_STEP_MIN * 60000;
-  coast.baseTime = Math.floor(Date.now() / step) * step;
+  const next = Math.floor(Date.now() / step) * step;
+  if (next !== coast.baseTime) {
+    coast.baseTime = next;
+    if (coast.tide) buildSeries();
+  }
 }
 
 // ---- Start ----
@@ -588,7 +902,7 @@ async function initCoast() {
     $("coastMessage").hidden = false;
     return;
   }
-  await Promise.all([loadMask().catch(() => {}), loadNames()]);
+  await Promise.all([loadMask().catch(() => {}), loadNames(), loadAccessAndBeaches()]);
   queueDraw();
   loadTide();
   prefetchAllTiles();
