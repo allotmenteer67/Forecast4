@@ -57,7 +57,16 @@
       -webkit-tap-highlight-color: transparent;
     }
     button:active { background: #2a2e34; }
-    #calloutRefresh { padding: 8px 10px; line-height: 0; }
+    /* Same look as the front page's refresh buttons (.card-refresh-button
+       in style.css): a filled circle in the chosen theme colour with the
+       same white arrow, just bigger for a wet, moving hand. */
+    #calloutRefresh {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; min-height: 0; padding: 0; border: 0; border-radius: 50%;
+      background: var(--callout-accent, #2f6f4f); color: #fff; line-height: 0;
+    }
+    #calloutRefresh svg { width: 20px; height: 20px; flex-shrink: 0; }
+    #calloutRefresh:active { filter: brightness(0.85); }
     #calloutRefresh.spinning svg { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .updated { font-size: 13px; color: #888780; margin: 6px 0 12px; }
@@ -156,24 +165,25 @@
     .sheet details summary { font-weight: 600; color: #85b7eb; font-size: 15px; }
     .sheet details ol { padding-left: 20px; margin: 8px 0; }
     .sheet details li { margin-bottom: 6px; }
-    /* Tap a box for its next 24 hours (callout-detail.js). */
+    /* Tap a box for its next 12 hours (callout-detail.js). */
     .box.tappable { position: relative; cursor: pointer; -webkit-tap-highlight-color: transparent; }
     .box.tappable:active { background: #262a30; }
     .box.tappable::after {
-      content: "24 h ›"; position: absolute; right: 12px; bottom: 9px; font-size: 12px; font-weight: 600; color: #6e8fb3;
+      content: "12 h ›"; position: absolute; right: 12px; bottom: 9px; font-size: 14px; font-weight: 700; color: #85b7eb;
     }
     .pair .box.tappable::after { content: "›"; font-size: 16px; bottom: 8px; }
     .detail-sub { font-size: 14px; color: #888780; margin: -6px 0 8px; }
     .detail-chart { display: block; background: #1a1d22; border-radius: 12px; }
-    .detail-chart .ax { font-size: 11px; fill: #888780; }
-    .detail-chart .mk { font-size: 12px; font-weight: 700; fill: #e8e6df; }
-    .detail-key { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: #b4b2a9; margin: 6px 2px 4px; }
-    .detail-key i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-right: 6px; vertical-align: 3px; }
-    .detail-note { font-size: 13px; color: #888780; margin: 6px 2px; line-height: 1.4; }
+    /* Graph and list text sized up for rain and a bouncing boat. */
+    .detail-chart .ax { font-size: 15px; font-weight: 600; fill: #b4b2a9; }
+    .detail-chart .mk { font-size: 17px; font-weight: 700; fill: #f1efe8; }
+    .detail-key { display: flex; gap: 16px; flex-wrap: wrap; font-size: 16px; font-weight: 600; color: #d3d1c7; margin: 8px 2px 4px; }
+    .detail-key i { display: inline-block; width: 18px; height: 5px; border-radius: 3px; margin-right: 7px; vertical-align: 4px; }
+    .detail-note { font-size: 14px; color: #a8a69e; margin: 6px 2px; line-height: 1.4; }
     .detail-empty { font-size: 15px; color: #b4b2a9; line-height: 1.5; }
-    .detail-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 15px; font-variant-numeric: tabular-nums; }
-    .detail-table th { text-align: left; font-size: 13px; color: #888780; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid #2c3036; }
-    .detail-table td { padding: 7px 6px; border-bottom: 1px solid #23262b; color: #d3d1c7; }
+    .detail-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 18px; font-variant-numeric: tabular-nums; }
+    .detail-table th { text-align: left; font-size: 14px; color: #a8a69e; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid #2c3036; }
+    .detail-table td { padding: 9px 6px; border-bottom: 1px solid #23262b; color: #e8e6df; }
     .detail-table td.warm { color: #fac775; font-weight: 600; }
     .detail-table td.hot { color: #f09595; font-weight: 600; }
     .detail-table tr.tide-ev td { color: #85b7eb; font-weight: 600; }
@@ -203,12 +213,18 @@
         Callout
       </span>
       <div class="top-buttons">
-        <button id="calloutRefresh" type="button" aria-label="Refresh">
-          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <path d="M16 10a6 6 0 1 1-1.8-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            <path d="M16.5 3v3.5H13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
+        <button id="calloutRefresh" type="button" aria-label="Refresh"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.9,2.88 A5.2,5.2 0 1 1 2.8,8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M2.8,5.4 L0.5,8.3 L5.1,8.3 Z" fill="currentColor"/></svg></button>
+        <script>
+          // The front page's theme colour (Settings > Appearance), so the
+          // refresh button matches. Same values as style.css's themes.
+          (function () {
+            var accents = { mint: "#2f6f4f", gold: "#c9a227", sand: "#a97142", red: "#b0463f", blue: "#3d6d95", teal: "#2b7a78", olive: "#6f7a3a" };
+            try {
+              var t = localStorage.getItem("forecast-compare:theme") || "mint";
+              document.documentElement.style.setProperty("--callout-accent", accents[t] || accents.mint);
+            } catch (e) {}
+          })();
+        </script>
         <button id="calloutBack" type="button">Back to normal</button>
       </div>
     </div>
@@ -234,7 +250,7 @@
 
   <div id="detailSheet" class="sheet" hidden>
     <div class="sheet-inner">
-      <h2 style="color:#e8e6df"><span id="detailTitle">Next 24 hours</span> <button id="detailClose" type="button">Close</button></h2>
+      <h2 style="color:#e8e6df"><span id="detailTitle">Next 12 hours</span> <button id="detailClose" type="button">Close</button></h2>
       <p id="detailPlace" class="detail-sub"></p>
       <div id="detailBody"></div>
     </div>

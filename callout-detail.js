@@ -1,17 +1,17 @@
 // Callout screen: tap the Wind, Sea, Tide or Visibility box to see the
-// next 24 hours for the callout spot, as a graph and an hour-by-hour
+// next 12 hours for the callout spot, as a graph and an hour-by-hour
 // list. Uses the data the Callout screen already has (its own forecast
 // and sea downloads, and its own tide), so it's for the callout spot,
 // not the front page's place, and works on whatever was last downloaded.
 // Loaded after callout.js and uses its helpers.
 
-const DETAIL_HOURS = 24;
+const DETAIL_HOURS = 12;
 
 const detail = { kind: null };
 
 function detailEl(id) { return document.getElementById(id); }
 
-// The hours from now on, at most 25 points (now + 24 h).
+// The hours from now on: now + DETAIL_HOURS.
 function detailHourRange(h) {
   const idx = h ? hourIndexForNow(h.time) : -1;
   if (idx < 0) return null;
@@ -31,7 +31,8 @@ function detailHourLabel(sec) {
 // opts: { yMin, yMax, unit, bands: [{ from, to, color }], marks: [{ t, v, text }] }
 function detailChart(series, opts) {
   const W = Math.max(300, Math.min(560, (detailEl("detailBody").clientWidth || 340)));
-  const H = 190, L = 34, R = 8, T = 12, B = 24;
+  // Bigger than usual text, for reading in rain on a moving boat.
+  const H = 230, L = 44, R = 10, T = 22, B = 32;
   const all = series.flatMap(s => s.points);
   if (!all.length) return "";
   const t0 = Math.min(...all.map(p => p[0])), t1 = Math.max(...all.map(p => p[0]));
@@ -55,27 +56,27 @@ function detailChart(series, opts) {
     const v = yMin + (yMax - yMin) * i / 4;
     const yy = y(v);
     svg += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#2c3036" stroke-width="1"/>`;
-    svg += `<text x="${L - 5}" y="${yy + 4}" text-anchor="end" class="ax">${opts.fmt ? opts.fmt(v) : (Math.abs(yMax - yMin) < 5 ? v.toFixed(1) : Math.round(v))}</text>`;
+    svg += `<text x="${L - 6}" y="${yy + 5}" text-anchor="end" class="ax">${opts.fmt ? opts.fmt(v) : (Math.abs(yMax - yMin) < 5 ? v.toFixed(1) : Math.round(v))}</text>`;
   }
-  // Time ticks every 3 hours on the clock.
-  const first = Math.ceil(t0 / 10800) * 10800;
-  for (let t = first; t <= t1; t += 10800) {
+  // Time ticks every 2 hours on the clock.
+  const first = Math.ceil(t0 / 7200) * 7200;
+  for (let t = first; t <= t1; t += 7200) {
     const xx = x(t);
     svg += `<line x1="${xx}" x2="${xx}" y1="${T}" y2="${H - B}" stroke="#2c3036" stroke-width="1"/>`;
-    svg += `<text x="${xx}" y="${H - 7}" text-anchor="middle" class="ax">${clockTime(new Date(t * 1000)).slice(0, 2)}</text>`;
+    svg += `<text x="${xx}" y="${H - 9}" text-anchor="middle" class="ax">${clockTime(new Date(t * 1000)).slice(0, 2)}</text>`;
   }
   series.forEach(s => {
     const pts = s.points.filter(p => typeof p[1] === "number" && isFinite(p[1]));
     if (pts.length < 2) return;
     const d = pts.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
-    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2.5}" stroke-linejoin="round" stroke-linecap="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ""}/>`;
+    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 3}" stroke-linejoin="round" stroke-linecap="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ""}/>`;
   });
   (opts.marks || []).forEach(m => {
     const xx = x(m.t), yy = y(m.v);
     const above = m.below ? false : true;
-    svg += `<circle cx="${xx}" cy="${yy}" r="3.5" fill="#e8e6df"/>`;
-    const tx = Math.max(L + 18, Math.min(W - R - 18, xx));
-    svg += `<text x="${tx}" y="${above ? yy - 8 : yy + 16}" text-anchor="middle" class="mk">${m.text}</text>`;
+    svg += `<circle cx="${xx}" cy="${yy}" r="4.5" fill="#e8e6df"/>`;
+    const tx = Math.max(L + 24, Math.min(W - R - 24, xx));
+    svg += `<text x="${tx}" y="${above ? yy - 9 : yy + 21}" text-anchor="middle" class="mk">${m.text}</text>`;
   });
   // "Now" line.
   const nowX = x(Date.now() / 1000);
@@ -236,7 +237,7 @@ function calloutDetailOpen(kind) {
   const k = DETAIL_KINDS[kind];
   if (!k) return;
   detail.kind = kind;
-  detailEl("detailTitle").textContent = `${k.title} · next 24 hours`;
+  detailEl("detailTitle").textContent = `${k.title} · next ${DETAIL_HOURS} hours`;
   detailEl("detailPlace").textContent = currentSpot().label || "St Brides Bay";
   detailEl("detailSheet").hidden = false;
   document.body.classList.add("sheet-open");
