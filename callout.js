@@ -366,6 +366,28 @@ function sunEvent(dayUtcNoon, lat, lon, altitudeDeg) {
   return { rise: toDate(jTransit - H / 360), set: toDate(jTransit + H / 360) };
 }
 
+// One line for the Light box: how much moon there is, and whether it's
+// up. E.g. "Moon 78% · up till 03:40", "Moon 12% · rises 22:15".
+// moon.js does the sums; with no moon.js loaded the line is left out.
+function moonLine(spot) {
+  if (typeof MOON === "undefined") return "";
+  try {
+    const now = new Date();
+    const il = MOON.illumination(now);
+    const pct = Math.round(il.fraction * 100);
+    if (il.fraction < 0.03) return "New moon · no moonlight";
+    const ev = MOON.nextEvents(now, spot.lat, spot.lon, 36);
+    // Always the next rise or set, so within the coming day: no date needed.
+    const when = d => clockTime(d);
+    const waxing = il.phase < 0.5 ? "waxing" : "waning";
+    const head = il.fraction > 0.97 ? "Full moon" : `Moon ${pct}% ${waxing}`;
+    if (ev.up) return ev.set ? `${head} · up till ${when(ev.set)}` : `${head} · up`;
+    return ev.rise ? `${head} · rises ${when(ev.rise)}` : `${head} · not up`;
+  } catch {
+    return "";
+  }
+}
+
 function renderLight(spot) {
   const box = calloutEl("calloutLight");
   const now = new Date();
@@ -387,6 +409,8 @@ function renderLight(spot) {
   } else {
     box.innerHTML = smallBoxHtml("Light in", durationText(civilTomorrow.rise - now), `Sunrise ${clockTime(sunTomorrow.rise)}`, "warm");
   }
+  const moon = moonLine(spot);
+  if (moon) box.insertAdjacentHTML("beforeend", `<div class="line moon">${escapeHtml(moon)}</div>`);
 }
 
 // ---- Tide box ----

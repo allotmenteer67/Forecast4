@@ -105,6 +105,7 @@
     .pin-card b { font-variant-numeric: tabular-nums; }
     .pc-title { font-weight: 600; margin-top: 2px; }
     .pc-dim { color: #b4b2a9; font-weight: 400; }
+    .pc-grid { color: #d3d1c7; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; margin: 0 0 2px 16px; }
     .pc-hint { color: #fac775; font-weight: 600; }
     /* Tappable lines: show or hide the route from the pin on the map. */
     .pc-tap {
@@ -227,11 +228,16 @@
       </div>
       <div class="ent-tabs">
         <button id="entTabLatLon" type="button">Lat / long</button>
+        <button id="entTabGrid" type="button">Grid ref</button>
         <button id="entTabPlace" type="button">From a place</button>
       </div>
       <div id="entLatLon">
         <label for="entLatLonInput">Latitude and longitude, any usual way</label>
         <input id="entLatLonInput" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="51 46.2N 5 08.7W">
+      </div>
+      <div id="entGrid" hidden>
+        <label for="entGridInput">Ordnance Survey grid reference</label>
+        <input id="entGridInput" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="SM 812 093">
       </div>
       <div id="entPlace" hidden>
         <label for="entPlaceInput">From</label>
@@ -256,7 +262,7 @@
       </div>
       <div id="entPreview" class="ent-preview"></div>
       <button id="entGo" class="ent-go" type="button">Set pin</button>
-      <p class="ent-note">Compass points (SW, NE…) are map directions. A bearing in degrees is magnetic unless you pick °T. "Miles" means land miles (as someone on shore might say); at sea, use nm. <span id="entVariation"></span> A quick picture only — check positions against the coastguard's own.</p>
+      <p class="ent-note">Compass points (SW, NE…) are map directions. A bearing in degrees is magnetic unless you pick °T. A 6-figure grid reference (SM 812 093) is a 100 m square, so the pin goes in its middle; 8 figures is a 10 m square. "Miles" means land miles (as someone on shore might say); at sea, use nm. <span id="entVariation"></span> A quick picture only — check positions against the coastguard's own.</p>
       </div>
     </div>
     <div id="coastMessage" class="message" hidden></div>
@@ -275,6 +281,7 @@
   <footer>Quick picture only — not for safety-critical decisions. Tide is a prediction: wind and pressure can raise or lower the real sea level. Ground: Welsh Government LiDAR 2020–23 (OGL). Foreshore, low water line and names: OS OpenMap Local and Open Names (Crown copyright) and © OpenStreetMap contributors.</footer>
 
   <script src="tide.js"></script>
+  <script src="osgrid.js"></script>
   <script src="coast.js"></script>
   <script>
     if ("serviceWorker" in navigator) {

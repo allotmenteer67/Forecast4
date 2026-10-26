@@ -96,6 +96,7 @@
     .push { margin-left: auto; }
     .line { font-size: 14px; color: #b4b2a9; margin-top: 2px; }
     .line.strong { color: #d3d1c7; font-size: 15px; }
+    .line.moon { color: #c9c7f0; font-size: 13px; }
     .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-bottom: 9px; }
     .pair .box { margin-bottom: 0; }
     .coast {
@@ -245,7 +246,7 @@
     <p id="pickupLast" class="pickup-last" hidden></p>
 
     <p class="foot">Quick picture only — not for safety-critical decisions.<br>
-      Wind, sea and visibility: Open-Meteo. Tide: predicted from Environment Agency gauge data (Open Government Licence). Visibility from weather models is a rough guide, especially for fog.</p>
+      Wind, sea and visibility: Open-Meteo. Tide: predicted from Environment Agency gauge data (Open Government Licence). Visibility from weather models is a rough guide, especially for fog. Moon worked out on the phone, rise and set to within about 10 minutes.</p>
   </main>
 
   <div id="detailSheet" class="sheet" hidden>
@@ -301,6 +302,7 @@
   </div>
 
   <script src="tide.js"></script>
+  <script src="moon.js"></script>
   <script src="callout.js"></script>
   <script src="callout-detail.js"></script>
   <script src="pickup.js"></script>

@@ -466,6 +466,8 @@ function updatePinCard() {
   const pin = coast.pin;
   if (pin) {
     lines.push(`<div class="pc-title"><span class="pc-pin"></span>Pin · ${degMin(pin.lat, pin.lon)}</div>`);
+    const pinGrid = gridText(pin.lat, pin.lon);
+    if (pinGrid) lines.push(`<div class="pc-grid">Grid ref ${pinGrid}</div>`);
     if (pin.source) lines.push(`<div class="pc-dim">Reported: ${escapeHtml(pin.source)}</div>`);
     // These two lines can be tapped to draw the route from the pin.
     if (pin.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(pin.shore.distM)}</b> ${bearingText(pin.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
@@ -477,6 +479,8 @@ function updatePinCard() {
   if (coast.me) {
     const acc = Math.round(coast.me.acc);
     let line = `<div class="pc-title"><span class="pc-me"></span>You · ${degMin(coast.me.lat, coast.me.lon)} <span class="pc-dim">±${acc} m</span></div>`;
+    const meGrid = gridText(coast.me.lat, coast.me.lon);
+    if (meGrid) line += `<div class="pc-grid">Grid ref ${meGrid}</div>`;
     if (pin) line += `<div>To pin: <b>${distText(distanceM(coast.me, pin))}</b> ${bearingText(bearingT(coast.me, pin))}</div>`;
     lines.push(line);
   } else if (coast.meError) {
@@ -499,6 +503,12 @@ function updatePinCard() {
   $("coastPinBtn").classList.toggle("on", coast.pinMode);
   $("coastPinBtn").setAttribute("aria-label", pin ? "Move the pin" : "Place a pin");
   queueDraw();
+}
+
+// OS grid reference for a position (osgrid.js), 8 figures (a 10 m
+// square), as coastguard and police often give and ask for them.
+function gridText(lat, lon) {
+  try { return typeof gridRefFromLatLon === "function" ? gridRefFromLatLon(lat, lon, 8) : ""; } catch { return ""; }
 }
 
 // ---- Rescue position entry ----
@@ -571,8 +581,10 @@ function closeEntry() { $("coastEntry").hidden = true; }
 function renderEntry() {
   const e = coast.entry;
   $("entTabLatLon").classList.toggle("on", e.mode === "latlon");
+  $("entTabGrid").classList.toggle("on", e.mode === "grid");
   $("entTabPlace").classList.toggle("on", e.mode === "place");
   $("entLatLon").hidden = e.mode !== "latlon";
+  $("entGrid").hidden = e.mode !== "grid";
   $("entPlace").hidden = e.mode !== "place";
   document.querySelectorAll("#entDirs button").forEach(b => b.classList.toggle("on", b.dataset.dir === e.dir));
   document.querySelectorAll("#entUnits button").forEach(b => b.classList.toggle("on", b.dataset.unit === e.unit));
@@ -621,12 +633,31 @@ function placeResult() {
   return { point: pt, source: `${dist} ${unitText} ${dirText} of ${e.place.name}` };
 }
 
+// A typed grid reference, read by osgrid.js. Also accepted in the
+// Lat / long box, in case it's typed there by mistake.
+function gridEntry(text) {
+  try { return typeof parseGridRef === "function" ? parseGridRef(text) : null; } catch { return null; }
+}
+function squareNote(g) {
+  return g.squareM >= 10 ? ` (${g.squareM >= 1000 ? g.squareM / 1000 + " km" : g.squareM + " m"} square — its centre)` : "";
+}
+
 function updateEntryPreview() {
   const el = $("entPreview");
   if (coast.entry.mode === "latlon") {
-    const p = parseLatLon($("entLatLonInput").value);
-    el.textContent = p ? `= ${degMin(p.lat, p.lon)}` : ($("entLatLonInput").value ? "Can't read that yet" : "");
-    el.classList.toggle("bad", !p && !!$("entLatLonInput").value);
+    const text = $("entLatLonInput").value;
+    const p = parseLatLon(text);
+    const g = p ? null : gridEntry(text);
+    el.textContent = p ? `= ${degMin(p.lat, p.lon)}` : g ? `Grid ref ${g.text} = ${degMin(g.lat, g.lon)}` : (text ? "Can't read that yet" : "");
+    el.classList.toggle("bad", !p && !g && !!text);
+    $("entGo").textContent = "Set pin";
+    return;
+  }
+  if (coast.entry.mode === "grid") {
+    const text = $("entGridInput").value;
+    const g = gridEntry(text);
+    el.textContent = g ? `= ${degMin(g.lat, g.lon)}${squareNote(g)}` : (text ? "Can't read that yet — two letters then the figures, e.g. SM 812 093" : "");
+    el.classList.toggle("bad", !g && !!text);
     $("entGo").textContent = "Set pin";
     return;
   }
@@ -639,13 +670,16 @@ function updateEntryPreview() {
 }
 
 function applyEntry() {
-  if (coast.entry.mode === "latlon") {
-    const p = parseLatLon($("entLatLonInput").value);
-    if (!p) return;
+  if (coast.entry.mode === "latlon" || coast.entry.mode === "grid") {
+    const text = coast.entry.mode === "grid" ? $("entGridInput").value : $("entLatLonInput").value;
+    const p = coast.entry.mode === "grid" ? null : parseLatLon(text);
+    const g = p ? null : gridEntry(text);
+    if (!p && !g) return;
     coast.line = null;
     try { localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
-    setPin(p.lat, p.lon); // the card already shows the position
-    centreOn(p);
+    if (p) setPin(p.lat, p.lon); // the card already shows the position
+    else setPin(g.lat, g.lon, `Grid ref ${g.text}${squareNote(g)}`);
+    centreOn(p || g);
   } else {
     const r = placeResult();
     if (r.error) return;
@@ -676,6 +710,8 @@ function setUpEntry() {
   $("coastPosBtn").addEventListener("click", openEntry);
   $("entClose").addEventListener("click", closeEntry);
   $("entTabLatLon").addEventListener("click", () => { coast.entry.mode = "latlon"; renderEntry(); });
+  $("entTabGrid").addEventListener("click", () => { coast.entry.mode = "grid"; renderEntry(); });
+  $("entGridInput").addEventListener("input", updateEntryPreview);
   $("entTabPlace").addEventListener("click", () => { coast.entry.mode = "place"; renderEntry(); renderPlaceList(); });
   $("entLatLonInput").addEventListener("input", updateEntryPreview);
   $("entPlaceInput").addEventListener("input", () => { coast.entry.place = null; renderPlaceList(); renderEntry(); });

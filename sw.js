@@ -413,7 +413,11 @@
 // and bearings shown magnetic (WMM2025).
 // Bumped to v93: coast map — hatched foreshore now from Ordnance Survey
 // (dries at low tide, height unknown); key, credits and Help updated.
-// Bumped to v100: callout refresh button matches the front page's
+// Bumped to v101: OS grid references on the coast map (Grid ref tab in
+// Position, and the pin's and your own grid ref on the card; osgrid.js),
+// and the moon on the Callout screen's Light box (moon.js). Both added
+// to SHELL_FILES.
+// v100: callout refresh button matches the front page's
 // (filled theme-colour circle, same arrow); tap-a-box view cut to the
 // next 12 hours with larger graph and list text.
 // v99: Callout boxes (wind, sea, tide, visibility) open a
@@ -434,7 +438,7 @@
 // v94: coast map — Ordnance Survey mean low water line drawn
 // as a white dotted line (data/coast/stbrides/low-water.json, made by
 // the coast-heights workflow); key and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v100";
+const SHELL_CACHE_NAME = "cloude-shell-v101";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -453,6 +457,8 @@ const SHELL_FILES = [
   "callout.js",
   "pickup.js",
   "callout-detail.js",
+  "moon.js",
+  "osgrid.js",
   "sunvis.js",
   "coast.html",
   "coast.js",
