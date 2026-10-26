@@ -133,7 +133,7 @@ async function fetchForecast(spot) {
   const url = "https://api.open-meteo.com/v1/forecast" +
     `?latitude=${spot.lat}&longitude=${spot.lon}` +
     "&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m,visibility" +
-    "&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC&forecast_days=2";
+    "&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC&forecast_days=3";
   const res = await fetchWithTimeout(url, {}, 20000);
   if (!res.ok) throw new Error(`Forecast download failed (${res.status})`);
   return res.json();
@@ -142,7 +142,7 @@ async function fetchForecast(spot) {
 async function fetchMarine(spot) {
   const base = "https://marine-api.open-meteo.com/v1/marine" +
     `?latitude=${spot.lat}&longitude=${spot.lon}` +
-    "&timeformat=unixtime&timezone=UTC&forecast_days=2&hourly=";
+    "&timeformat=unixtime&timezone=UTC&forecast_days=3&hourly=";
   const withSeaTemp = "wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_period,wind_wave_height,sea_surface_temperature";
   let res = await fetchWithTimeout(base + withSeaTemp, {}, 20000);
   // If the supplier ever rejects the sea temperature field, still get
@@ -461,6 +461,16 @@ async function renderTide(spot) {
   if (abs < 0.25) state = "Turning";
   else state = (rate > 0 ? "Rising" : "Falling") + (abs >= 0.9 ? " fast" : "");
 
+  // Shared with the 24-hour tide view (callout-detail.js).
+  window.calloutTideModel = {
+    epochMs, levelAt, label: String(location.label).split(",")[0],
+    extremes: (fromH, toH) => findTideExtremes(built.fit, fromH, toH).map(e => {
+      const r = calloutLocationCorrection(location, built.fit, e.hours, applyTideFudge(e.level, fudge));
+      return { type: e.type, hours: r.hours, level: r.level, isCD: r.isCD };
+    }).sort((x, y) => x.hours - y.hours)
+  };
+  if (typeof calloutDetailRefresh === "function") calloutDetailRefresh();
+
   const events = findTideExtremes(built.fit, nowHours - 1, nowHours + 30)
     .map(e => {
       const r = calloutLocationCorrection(location, built.fit, e.hours, applyTideFudge(e.level, fudge));
@@ -566,6 +576,7 @@ async function refreshCallout() {
   renderSea(cache.marine, units);
   renderVisibility(cache.forecast, units);
   renderUpdated(cache, errors);
+  if (typeof calloutDetailRefresh === "function") calloutDetailRefresh();
 
   if (refreshBtn) refreshBtn.classList.remove("spinning");
   calloutRefreshing = false;

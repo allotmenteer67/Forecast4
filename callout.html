@@ -23,7 +23,7 @@
       el.textContent += (el.textContent ? "\n\n" : "") + text;
     }
   </script>
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#14161a">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -32,6 +32,11 @@
   <meta name="apple-mobile-web-app-title" content="Cloude">
   <title>Callout — Cloude</title>
   <style>
+    /* No whole-page zooming: a double tap or pinch outside the map
+       used to zoom the page itself on iOS and throw the layout out.
+       (The map canvas handles its own pinch and keeps touch-action: none.) */
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+    * { touch-action: manipulation; }
     /* The callout screen is always dark, whatever the Appearance theme:
        it's used at night and shouldn't dazzle. Self-contained on purpose
        — it doesn't use style.css, so nothing here can affect other pages. */
@@ -151,8 +156,40 @@
     .sheet details summary { font-weight: 600; color: #85b7eb; font-size: 15px; }
     .sheet details ol { padding-left: 20px; margin: 8px 0; }
     .sheet details li { margin-bottom: 6px; }
+    /* Tap a box for its next 24 hours (callout-detail.js). */
+    .box.tappable { position: relative; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .box.tappable:active { background: #262a30; }
+    .box.tappable::after {
+      content: "24 h ›"; position: absolute; right: 12px; bottom: 9px; font-size: 12px; font-weight: 600; color: #6e8fb3;
+    }
+    .pair .box.tappable::after { content: "›"; font-size: 16px; bottom: 8px; }
+    .detail-sub { font-size: 14px; color: #888780; margin: -6px 0 8px; }
+    .detail-chart { display: block; background: #1a1d22; border-radius: 12px; }
+    .detail-chart .ax { font-size: 11px; fill: #888780; }
+    .detail-chart .mk { font-size: 12px; font-weight: 700; fill: #e8e6df; }
+    .detail-key { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: #b4b2a9; margin: 6px 2px 4px; }
+    .detail-key i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-right: 6px; vertical-align: 3px; }
+    .detail-note { font-size: 13px; color: #888780; margin: 6px 2px; line-height: 1.4; }
+    .detail-empty { font-size: 15px; color: #b4b2a9; line-height: 1.5; }
+    .detail-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 15px; font-variant-numeric: tabular-nums; }
+    .detail-table th { text-align: left; font-size: 13px; color: #888780; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid #2c3036; }
+    .detail-table td { padding: 7px 6px; border-bottom: 1px solid #23262b; color: #d3d1c7; }
+    .detail-table td.warm { color: #fac775; font-weight: 600; }
+    .detail-table td.hot { color: #f09595; font-weight: 600; }
+    .detail-table tr.tide-ev td { color: #85b7eb; font-weight: 600; }
     .foot { font-size: 12px; color: #888780; text-align: center; margin-top: 10px; line-height: 1.45; }
   </style>
+  <script>
+    // iOS ignores "no zoom" in the viewport tag, so stop its pinch and
+    // double-tap page zoom directly. The coast map's own pinch-zoom uses
+    // pointer events and isn't affected.
+    (function () {
+      ["gesturestart", "gesturechange", "gestureend"].forEach(function (t) {
+        document.addEventListener(t, function (e) { e.preventDefault(); }, { passive: false });
+      });
+      document.addEventListener("dblclick", function (e) { e.preventDefault(); }, { passive: false });
+    })();
+  </script>
 </head>
 <body>
   <main class="callout">
@@ -194,6 +231,14 @@
     <p class="foot">Quick picture only — not for safety-critical decisions.<br>
       Wind, sea and visibility: Open-Meteo. Tide: predicted from Environment Agency gauge data (Open Government Licence). Visibility from weather models is a rough guide, especially for fog.</p>
   </main>
+
+  <div id="detailSheet" class="sheet" hidden>
+    <div class="sheet-inner">
+      <h2 style="color:#e8e6df"><span id="detailTitle">Next 24 hours</span> <button id="detailClose" type="button">Close</button></h2>
+      <p id="detailPlace" class="detail-sub"></p>
+      <div id="detailBody"></div>
+    </div>
+  </div>
 
   <div id="pickupSheet" class="sheet" hidden>
     <div class="sheet-inner">
@@ -241,6 +286,7 @@
 
   <script src="tide.js"></script>
   <script src="callout.js"></script>
+  <script src="callout-detail.js"></script>
   <script src="pickup.js"></script>
   <script>
     if ("serviceWorker" in navigator) {
