@@ -69,23 +69,30 @@
     /* Laid out like the weather map (map.html): buttons in a row above
        the map, time pill in the map's top-right corner (where the weather
        map's readout pill sits), Time slider in its own section below. */
-    .clock-box {
-      position: absolute; right: 8px; top: 8px; text-align: right; background: rgba(14,17,22,0.86);
-      border-radius: 10px; padding: 6px 10px 7px; pointer-events: none; max-width: calc(100% - 16px);
+    /* Tide and wind: a two-line bar across the top of the map. No clock
+       (the phone shows the time); "Now" or "In 3 h" says which moment
+       the map shows. */
+    .info-bar {
+      position: absolute; left: 8px; right: 8px; top: 8px; background: rgba(14,17,22,0.88);
+      border-radius: 10px; padding: 5px 10px 6px; pointer-events: none; line-height: 1.3;
+      font-variant-numeric: tabular-nums;
     }
-    .clock { font-size: 30px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
-    /* "Now" (or "In 2 h") sits beside the time, not under it. */
-    .clock-row { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; }
-    .ahead { font-size: 15px; font-weight: 600; color: #b4b2a9; white-space: nowrap; }
-    .ahead.future { color: #fac775; }
-    .tide { font-size: 16px; font-weight: 600; color: #85b7eb; margin-top: 4px; }
-    .tide-sub { font-size: 12px; color: #b4b2a9; }
-    /* Next high or low water after the time shown: a small bar. */
+    .ib-row { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; overflow: hidden; }
+    .ib-row + .ib-row { margin-top: 2px; }
+    .tide { font-size: 16px; font-weight: 700; color: #85b7eb; }
+    .tide-sub { font-size: 13px; color: #b4b2a9; }
     .next-tide {
-      display: inline-block; margin-top: 5px; padding: 3px 9px; border-radius: 7px;
+      margin-left: auto; padding: 1px 8px; border-radius: 7px;
       background: #16273a; border: 1px solid #234566; color: #b5d4f4;
-      font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+      font-size: 13px; font-weight: 600;
     }
+    .wind { font-size: 15px; font-weight: 600; color: #e8e6df; display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .wind svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .wind .gust-warm { color: #fac775; }
+    .wind .gust-hot { color: #f09595; }
+    .wind .bf { color: #b4b2a9; font-weight: 500; font-size: 13px; }
+    .ahead { margin-left: auto; font-size: 14px; font-weight: 700; color: #b4b2a9; }
+    .ahead.future { color: #fac775; }
     /* Slider below the map, so a hand on it doesn't cover the map. */
     .time-section { padding: 6px 12px 2px; background: #14161a; }
     .time-title { display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 2px; }
@@ -182,7 +189,7 @@
     .map-wrap { position: relative; flex: 1; min-height: 0; margin: 0 8px; border-radius: 14px; overflow: hidden; }
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
     .legend {
-      display: none; position: absolute; left: 8px; top: 8px; background: rgba(20,22,26,0.94);
+      display: none; position: absolute; left: 8px; top: 68px; background: rgba(20,22,26,0.94);
       border: 1px solid #3a3d42; border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.9; max-width: 260px;
     }
     .legend.open { display: block; }
@@ -228,14 +235,17 @@
 
   <div class="map-wrap">
     <canvas id="coastCanvas"></canvas>
-    <div class="clock-box" aria-live="polite">
-      <div class="clock-row">
-        <div id="coastClock" class="clock">--:--</div>
-        <div id="coastAhead" class="ahead">Now</div>
+    <div class="info-bar" aria-live="polite">
+      <div class="ib-row">
+        <span id="coastTide" class="tide">Loading…</span>
+        <span id="coastTideSub" class="tide-sub"></span>
+        <span id="coastNextTide" class="next-tide" hidden></span>
       </div>
-      <div id="coastTide" class="tide">Loading…</div>
-      <div id="coastTideSub" class="tide-sub">&nbsp;</div>
-      <div id="coastNextTide" class="next-tide" hidden></div>
+      <div class="ib-row">
+        <span id="coastWind" class="wind">Wind: loading…</span>
+        <span id="coastAhead" class="ahead">Now</span>
+      </div>
+      <span id="coastClock" hidden></span>
     </div>
     <div id="coastLegend" class="legend">
       <div><span class="sw" style="background:rgb(43,95,138)"></span>Covered by the tide</div>

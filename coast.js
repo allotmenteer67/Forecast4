@@ -269,6 +269,79 @@ function setTideText(main, sub) {
   $("coastTideSub").textContent = sub;
 }
 
+// The top of the map that's free (below the tide and wind bar), so the
+// scale bar, fitting and labels keep clear of it.
+function mapTopInset() {
+  const bar = document.querySelector(".info-bar");
+  return bar ? bar.offsetTop + bar.offsetHeight + 4 : 8;
+}
+
+// ---- Wind (second line of the bar) ----
+// For the time the map shows. Taken from the Callout screen's last
+// download if it covers that hour (no extra data), otherwise downloaded
+// once for the spot. Speed in the units chosen in Settings.
+const WIND_UNITS_KEY = "forecast-compare:conditionUnits";
+const CALLOUT_CACHE_KEY_COAST = "cloude-callout:cache";
+const BEAUFORT_MPH = [1, 4, 8, 13, 19, 25, 32, 39, 47, 55, 64, 73];
+const COMPASS_16_NAMES = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+
+function windSpot() {
+  const p = readJson(CALLOUT_SPOT_KEY, null);
+  return p && typeof p.lat === "number" ? { lat: p.lat, lon: p.lon } : { lat: 51.79, lon: -5.17 };
+}
+
+function windHourly() {
+  if (coast.windData) return coast.windData;
+  const spot = windSpot();
+  const key = `${spot.lat.toFixed(3)},${spot.lon.toFixed(3)}`;
+  const all = readJson(CALLOUT_CACHE_KEY_COAST, {});
+  const h = all[key] && all[key].forecast && all[key].forecast.data && all[key].forecast.data.hourly;
+  return h && Array.isArray(h.time) ? h : null;
+}
+
+async function loadWind() {
+  const h = windHourly();
+  const lastNeeded = Date.now() / 1000 + 6 * 3600;
+  if (h && h.time[h.time.length - 1] >= lastNeeded && h.time[0] <= Date.now() / 1000) { renderWind(); return; }
+  try {
+    const spot = windSpot();
+    const url = "https://api.open-meteo.com/v1/forecast" +
+      `?latitude=${spot.lat}&longitude=${spot.lon}` +
+      "&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m" +
+      "&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC&forecast_days=2";
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.hourly && Array.isArray(data.hourly.time)) coast.windData = data.hourly;
+    }
+  } catch { /* no signal: whatever the Callout screen last had */ }
+  renderWind();
+}
+
+function renderWind() {
+  const el = $("coastWind");
+  if (!el) return;
+  const h = windHourly();
+  const t = slideTime().getTime() / 1000;
+  let i = -1;
+  if (h) for (let k = 0; k < h.time.length; k++) if (h.time[k] <= t + 1800) i = k;
+  if (!h || i < 0 || t - h.time[i] > 3 * 3600 || typeof h.wind_speed_10m[i] !== "number") {
+    el.textContent = "Wind: not available";
+    return;
+  }
+  let kmh = false;
+  try { kmh = (JSON.parse(localStorage.getItem(WIND_UNITS_KEY) || "{}").wind === "metric"); } catch { /* mph */ }
+  const v = mph => Math.round(kmh ? mph * 1.60934 : mph);
+  const sp = h.wind_speed_10m[i], gu = h.wind_gusts_10m[i], dir = h.wind_direction_10m[i];
+  let force = BEAUFORT_MPH.findIndex(lim => sp < lim);
+  if (force < 0) force = 12;
+  const from = COMPASS_16_NAMES[Math.round(((dir % 360) + 360) % 360 / 22.5) % 16];
+  // The arrow points the way the wind is blowing (downwind).
+  const arrow = `<svg viewBox="0 0 16 16" aria-hidden="true" style="transform:rotate(${(dir + 180) % 360}deg)"><path d="M8 1.5 L12.5 9 L9.2 8.2 L9.2 14.5 L6.8 14.5 L6.8 8.2 L3.5 9 Z" fill="currentColor"/></svg>`;
+  const gCls = gu >= 30 ? "gust-hot" : gu >= 20 ? "gust-warm" : "";
+  el.innerHTML = `${arrow}<span>${from} ${v(sp)} ${kmh ? "km/h" : "mph"}, gusts <span class="${gCls}">${typeof gu === "number" ? v(gu) : "—"}</span> <span class="bf">F${force}</span></span>`;
+}
+
 function updateTimeLabel() {
   const t = slideTime();
   const h = Math.floor(coast.offsetMin / 60), m = coast.offsetMin % 60;
@@ -280,6 +353,7 @@ function updateTimeLabel() {
   $("coastAhead").textContent = ahead;
   $("coastTime").textContent = coast.offsetMin === 0 ? `Now · ${clockTime(t)}` : `${clockTime(t)} (in ${span})`;
   $("coastAhead").classList.toggle("future", coast.offsetMin !== 0);
+  renderWind();
   const lv = levelsForSlider();
   if (!lv) return;
   const shown = coast.tide.cdOffset !== null ? lv.now - coast.tide.cdOffset : lv.now;
@@ -287,7 +361,9 @@ function updateTimeLabel() {
   const abs = Math.abs(lv.rate);
   const state = abs < 0.25 ? "Turning" : (lv.rate > 0 ? "Rising" : "Falling") + (abs >= 0.9 ? " fast" : "");
   setTideText(`Tide ${shown.toFixed(1)} m${datum} · ${state}`,
-    `${lv.rate >= 0 ? "+" : "−"}${abs.toFixed(1)} m per hour · ${coast.tide.label}`);
+    `${lv.rate >= 0 ? "+" : "−"}${abs.toFixed(1)} m/h`);
+  const bar = document.querySelector(".info-bar");
+  if (bar) bar.title = `Tide from ${coast.tide.label}`;
   renderNextTide(t);
 }
 
@@ -310,7 +386,7 @@ function renderNextTide(t) {
   const od = applyTideFudge(next.level, tide.fudge);
   const level = tide.cdOffset !== null ? od - tide.cdOffset : od;
   const when = clockTime(new Date(tide.epochMs + next.hours * 3600000));
-  el.textContent = `Next ${next.type === "high" ? "high" : "low"} ${when} · ${level.toFixed(1)} m`;
+  el.textContent = `${next.type === "high" ? "High" : "Low"} ${when} · ${level.toFixed(1)} m`;
   el.hidden = false;
 }
 
@@ -648,7 +724,7 @@ function fitMeAndTarget() {
   if (!tgt) { coast.view.lat = me.lat; coast.view.lon = me.lon; clampView(); return; }
   const card = $("coastPinCard");
   const cardH = card && !card.hidden ? card.offsetHeight + 16 : 0;
-  const top = 140, bottom = coast.h - cardH;
+  const top = mapTopInset() + 40, bottom = coast.h - cardH;
   const band = Math.max(bottom - top, 120);
   const fix = computeFix();
   const pad = fix && !fix.none ? fix.radiusM * 1.2 : 150;
@@ -1452,6 +1528,26 @@ function clearCutoff() {
   queueDraw();
 }
 
+// Towns and villages round the bay, inland as well, so there's always a
+// familiar name to go by. Added to the OS names (which are mostly the
+// coast itself); positions are the middle of each place, roughly.
+const REFERENCE_PLACES = [
+  { name: "Haverfordwest", lat: 51.8015, lon: -4.9690 },
+  { name: "Milford Haven", lat: 51.7144, lon: -5.0427 },
+  { name: "St Davids", lat: 51.8818, lon: -5.2655 },
+  { name: "Solva", lat: 51.8747, lon: -5.1965 },
+  { name: "Roch", lat: 51.8488, lon: -5.0757 },
+  { name: "Simpson Cross", lat: 51.8155, lon: -5.0710 },
+  { name: "Druidston", lat: 51.8000, lon: -5.1035 },
+  { name: "Marloes", lat: 51.7262, lon: -5.2132 },
+  { name: "Martin's Haven", lat: 51.7367, lon: -5.2460 },
+  { name: "Dale", lat: 51.7070, lon: -5.1700 },
+  { name: "Broad Haven", lat: 51.7820, lon: -5.1030 },
+  { name: "Little Haven", lat: 51.7735, lon: -5.1090 },
+  { name: "Nolton Haven", lat: 51.8155, lon: -5.1070 },
+  { name: "Newgale", lat: 51.8530, lon: -5.1220 },
+];
+
 async function loadNames() {
   try {
     const res = await fetch(COAST_BASE + "names.json");
@@ -1462,8 +1558,12 @@ async function loadNames() {
       "Villages and places": 0, "Islands and islets": 1, "Headlands and points": 2,
       "Bays, coves and sounds": 3, "Beaches": 4, "Rocks and reefs": 5
     }[k] ?? 6);
-    coast.names = (data.names || []).slice().sort((a, b) => rank(a.kind) - rank(b.kind));
-  } catch { /* names are optional */ }
+    const have = new Set((data.names || []).map(n => n.name));
+    const extra = REFERENCE_PLACES.filter(r => !have.has(r.name)).map(r => ({ ...r, kind: "Villages and places", ref: true }));
+    coast.names = (data.names || []).concat(extra).sort((a, b) => rank(a.kind) - rank(b.kind));
+  } catch {
+    coast.names = REFERENCE_PLACES.map(r => ({ ...r, kind: "Villages and places", ref: true }));
+  }
 }
 
 function tileEntry(meta) {
@@ -1627,7 +1727,7 @@ function draw() {
 
   drawLowWater();
   if (coast.view.mpp <= CUTOFF_MPP) drawAccess();
-  if (coast.view.mpp <= NAMES_MPP) drawNames();
+  drawNames(); // always: at least a name or two for reference, whatever the zoom
   if (coast.view.mpp <= CUTOFF_MPP) drawBeachTimes();
   drawPinAndMe();
   scheduleCutoff();
@@ -1639,7 +1739,7 @@ function draw() {
 function fitPinAnd(target) {
   const pin = coast.pin;
   const ptA = toScreen(pin.lat, pin.lon), ptB = toScreen(target.lat, target.lon);
-  const inView = p => p.x > 30 && p.x < coast.w - 30 && p.y > 130 && p.y < coast.h - 130;
+  const inView = p => p.x > 30 && p.x < coast.w - 30 && p.y > mapTopInset() + 40 && p.y < coast.h - 130;
   if (inView(ptA) && inView(ptB)) return;
   coast.view.lat = (pin.lat + target.lat) / 2;
   coast.view.lon = (pin.lon + target.lon) / 2;
@@ -1912,24 +2012,85 @@ function drawBeachTimes() {
 
 function drawNames() {
   const { ctx } = coast;
-  ctx.font = "600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
   ctx.textBaseline = "middle";
   const placed = [];
-  const showAll = coast.view.mpp <= 4;
-  for (const n of coast.names) {
-    // Further out, only the bigger features, to keep it readable.
-    if (!showAll && !["Villages and places", "Islands and islets", "Headlands and points", "Bays, coves and sounds", "Beaches"].includes(n.kind)) continue;
-    const s = toScreen(n.lat, n.lon);
-    if (s.x < -50 || s.y < -20 || s.x > coast.w + 50 || s.y > coast.h + 20) continue;
+  const mpp = coast.view.mpp;
+  const top = mapTopInset();
+  // Which kinds at this zoom: towns and villages always; more as you close in.
+  const kinds = mpp <= 4 ? null
+    : mpp <= NAMES_MPP ? ["Villages and places", "Islands and islets", "Headlands and points", "Bays, coves and sounds", "Beaches"]
+    : mpp <= 25 ? ["Villages and places", "Islands and islets", "Headlands and points"]
+    : ["Villages and places", "Islands and islets"];
+  let villagesShown = 0;
+  const label = (n, s, big) => {
+    ctx.font = `${big ? 700 : 600} ${big ? 13 : 12}px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
     const w = ctx.measureText(n.name).width;
-    const box = { x: s.x + 5, y: s.y - 8, w: w + 4, h: 16 };
-    if (placed.some(b => box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y)) continue;
+    // Name to the right of its dot, or to the left if it would run off the edge.
+    const left = s.x + 6 + w > coast.w - 4;
+    const box = left ? { x: s.x - 9 - w, y: s.y - 8, w: w + 4, h: 16 } : { x: s.x + 5, y: s.y - 8, w: w + 4, h: 16 };
+    if (box.y < top) return false;
+    if (placed.some(b => box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y)) return false;
     placed.push(box);
     ctx.fillStyle = "#f2efe6";
-    ctx.beginPath(); ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(s.x, s.y, big ? 3 : 2.5, 0, Math.PI * 2); ctx.fill();
     ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.85)";
-    ctx.strokeText(n.name, s.x + 6, s.y);
-    ctx.fillText(n.name, s.x + 6, s.y);
+    ctx.textAlign = left ? "right" : "left";
+    const tx = left ? s.x - 6 : s.x + 6;
+    ctx.strokeText(n.name, tx, s.y);
+    ctx.fillText(n.name, tx, s.y);
+    ctx.textAlign = "left";
+    return true;
+  };
+  for (const n of coast.names) {
+    if (kinds && !kinds.includes(n.kind)) continue;
+    const s = toScreen(n.lat, n.lon);
+    if (s.x < 2 || s.y < 0 || s.x > coast.w - 2 || s.y > coast.h) continue; // dot must be on screen
+    const village = n.kind === "Villages and places";
+    if (label(n, s, village && mpp > NAMES_MPP) && village && s.x > 0 && s.x < coast.w && s.y > top && s.y < coast.h) villagesShown++;
+  }
+  // Fewer than two towns or villages on screen: point to the nearest
+  // off-screen ones from the edge, with how far they are from the middle.
+  if (villagesShown >= 2) return;
+  const centre = { lat: coast.view.lat, lon: coast.view.lon };
+  const off = coast.names.filter(n => n.kind === "Villages and places").map(n => ({ n, s: toScreen(n.lat, n.lon), d: distanceM(centre, n) }))
+    .filter(o => o.s.x < 0 || o.s.x > coast.w || o.s.y < top || o.s.y > coast.h)
+    .sort((a, b) => a.d - b.d);
+  const used = new Set();
+  let need = 2 - villagesShown;
+  const card = $("coastPinCard");
+  const bottom = coast.h - (card && !card.hidden ? card.offsetHeight + 16 : 0) - 14;
+  for (const o of off) {
+    if (need <= 0) break;
+    if (used.has(o.n.name)) continue;
+    used.add(o.n.name);
+    const cx = coast.w / 2, cy = coast.h / 2;
+    const ang = Math.atan2(o.s.y - cy, o.s.x - cx);
+    const arrows = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"];
+    const arrow = arrows[((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8];
+    const text = `${o.n.name} ${distText(o.d)} ${arrow}`;
+    ctx.font = "700 13px -apple-system, BlinkMacSystemFont, sans-serif";
+    const w = ctx.measureText(text).width + 14;
+    // Where the line from the middle towards the place meets the edge.
+    const dx = Math.cos(ang), dy = Math.sin(ang);
+    const halfW = coast.w / 2 - w / 2 - 6, topY = top + 30, botY = Math.max(topY + 40, bottom);
+    let k = Infinity;
+    if (dx) k = Math.min(k, halfW / Math.abs(dx));
+    if (dy < 0) k = Math.min(k, (cy - topY) / -dy);
+    if (dy > 0) k = Math.min(k, (botY - cy) / dy);
+    let x = cx + dx * k, y = cy + dy * k;
+    x = Math.max(w / 2 + 6, Math.min(coast.w - w / 2 - 6, x));
+    y = Math.max(topY, Math.min(botY, y));
+    const box = { x: x - w / 2, y: y - 11, w, h: 22 };
+    if (placed.some(b => box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y)) { y += 26; box.y += 26; }
+    placed.push(box);
+    ctx.fillStyle = "rgba(14,17,22,0.85)";
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(box.x, box.y, box.w, box.h, 7); else ctx.rect(box.x, box.y, box.w, box.h);
+    ctx.fill();
+    ctx.fillStyle = "#d3d1c7"; ctx.textAlign = "center";
+    ctx.fillText(text, x, y + 0.5);
+    ctx.textAlign = "left";
+    need--;
   }
 }
 
@@ -1952,7 +2113,7 @@ function drawScaleBar() {
   const px = pick * nm / mpp;
   // Top left (the bottom of the map is for the pin card; the time pill
   // is top right).
-  const x = 14, y = 34;
+  const x = 14, y = mapTopInset() + 24;
   ctx.strokeStyle = "#f2efe6"; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x, y); ctx.lineTo(x + px, y); ctx.lineTo(x + px, y - 5); ctx.stroke();
   ctx.font = "600 12px -apple-system, BlinkMacSystemFont, sans-serif";
@@ -2124,6 +2285,8 @@ async function initCoast() {
   await Promise.all([loadMask().catch(() => {}), loadNames(), loadAccessAndBeaches(), loadLowWater()]);
   queueDraw();
   loadTide().then(() => { if (coast.pin) describePin(); });
+  loadWind();
+  setInterval(() => { coast.windData = null; loadWind(); }, 30 * 60000);
   prefetchAllTiles();
   // Keep "now" honest if the page is left open.
   setInterval(() => {
