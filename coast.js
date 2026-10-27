@@ -738,6 +738,7 @@ function fitMeAndTarget() {
 }
 
 function toggleMe() {
+  if (typeof compass !== "undefined" && compass.running && (coast.me || coast.meWatch !== null)) closeCompassPanel();
   if (coast.me && coast.me.practice) {
     coast.me = null; coast.meError = "";
     $("coastMeBtn").classList.remove("on");
@@ -800,14 +801,11 @@ function updatePinCard() {
   if (hideLines && coast.lines.length) {
     lines.push(`<div class="pc-dim">${coast.lines.length} bearing${coast.lines.length > 1 ? "s" : ""} hidden${fix && !fix.none ? `; circle within about ${distText(Math.round(fix.radiusM))}` : ""} — tap Me to show them.</div>`);
   } else if (fix && fix.none) {
-    lines.push(`<div class="pc-warn">These lines don't cross ahead of the observers — check the bearings.</div>`);
-  } else if (fix) {
-    const g = gridText(fix.centre.lat, fix.centre.lon);
-    lines.push(`<div class="pc-fix"><b>${fix.lineCount >= 3 && fix.triangle ? "Best guess (middle of the three lines)" : "Lines cross"}</b>: ${degMin(fix.centre.lat, fix.centre.lon)}${g ? ` · ${g}` : ""}<br>Within about <b>${distText(Math.round(fix.radiusM))}</b>, allowing ${BEARING_ERROR_DEG}° error in each bearing` +
-      `<button class="pc-mini pc-setfix" type="button">Set pin here</button></div>`);
-    if (fix.poor) lines.push(`<div class="pc-warn">Poor cut: the lines cross at a narrow angle, so the position could be well along them. A bearing from further round would pin it down.</div>`);
+    lines.push(`<div class="pc-warn">These bearings don't cross ahead of the observers — check them.</div>`);
+  } else if (fix && fix.poor) {
+    lines.push(`<div class="pc-warn">Poor cut: narrow angle, so the position could be well along the lines.</div>`);
   } else if (coast.lines.length === 1) {
-    lines.push(`<div class="pc-dim">Somewhere along the line. Add a second bearing from another place to see where they cross, or a distance to set the pin.</div>`);
+    lines.push(`<div class="pc-dim">Add a second bearing to see where they cross.</div>`);
   }
   if (coast.me) {
     const acc = Math.round(coast.me.acc);
@@ -818,6 +816,7 @@ function updatePinCard() {
     const tgt = meTarget();
     if (tgt) line += `<div class="pc-track">To ${escapeHtml(tgt.name)}: <b>${distText(distanceM(coast.me, tgt))}</b> ${bearingText(bearingT(coast.me, tgt))}</div>`;
     if (practice) line += `<div class="pc-dim">A pretend position for practice — tap Me to end it.</div>`;
+    if (typeof openCompassPanel === "function") line += `<button class="pc-compass" type="button">🧭 Take a bearing with the phone's compass</button>`;
     lines.push(line);
   } else if (coast.meError) {
     lines.push(`<div class="pc-dim">${coast.meError}</div>`);
@@ -841,12 +840,7 @@ function updatePinCard() {
   on("[data-remove]", el => removePin(Number(el.dataset.remove)));
   on("[data-line]", el => removeLine(el.dataset.line));
   on("[data-editline]", el => openEntryForLine(el.dataset.editline));
-  on(".pc-setfix", () => {
-    const f = computeFix();
-    if (!f || f.none) return;
-    const ids = coast.lines.map(l => l.id).join(", ");
-    setPin(f.centre.lat, f.centre.lon, `where lines ${ids} cross (within about ${distText(Math.round(f.radiusM))})`, coast.pins.length > 0 && coast.pins.length < MAX_PINS);
-  });
+  on(".pc-compass", () => openCompassPanel());
   on(".pc-tap", el => {
     const which = el.dataset.show;
     coast.show[which] = !coast.show[which];
@@ -1851,6 +1845,25 @@ function drawTrack() {
   ctx.restore();
 }
 
+// Tap inside the crossing circle: a pin goes in its middle (the best
+// guess), as a new pin if there's room, else the selected pin moves.
+function pinFromCircleTap(x, y) {
+  const f = computeFix();
+  if (!f || f.none) return false;
+  const c = toScreen(f.centre.lat, f.centre.lon);
+  const r = Math.max(f.radiusM / coast.view.mpp, 24);
+  if (Math.hypot(x - c.x, y - c.y) > r) return false;
+  if (pinAtFix(f)) return false; // already pinned there
+  const ids = coast.lines.map(l => l.id).join(", ");
+  setPin(f.centre.lat, f.centre.lon, `where bearings ${ids} cross (within about ${distText(Math.round(f.radiusM))})`,
+    coast.pins.length > 0 && coast.pins.length < MAX_PINS);
+  return true;
+}
+
+function pinAtFix(f) {
+  return coast.pins.some(p => distanceM(p, f.centre) < Math.max(10, f.radiusM * 0.05));
+}
+
 // The crossing (or cocked hat) and its circle.
 function drawFix() {
   const fix = computeFix();
@@ -1876,6 +1889,19 @@ function drawFix() {
   ctx.beginPath(); ctx.moveTo(c.x - 8, c.y); ctx.lineTo(c.x + 8, c.y); ctx.moveTo(c.x, c.y - 8); ctx.lineTo(c.x, c.y + 8); ctx.stroke();
   ctx.lineWidth = 2; ctx.strokeStyle = "#ffffff";
   ctx.beginPath(); ctx.moveTo(c.x - 8, c.y); ctx.lineTo(c.x + 8, c.y); ctx.moveTo(c.x, c.y - 8); ctx.lineTo(c.x, c.y + 8); ctx.stroke();
+  // Until a pin is dropped there: a small "tap to pin" label under the circle.
+  if (!pinAtFix(fix)) {
+    const text = "Tap circle to pin";
+    ctx.font = "700 12px -apple-system, BlinkMacSystemFont, sans-serif";
+    const w = ctx.measureText(text).width + 12;
+    const ly = c.y + r + 14;
+    ctx.fillStyle = "rgba(14,17,22,0.88)";
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(c.x - w / 2, ly - 10, w, 20, 6); else ctx.rect(c.x - w / 2, ly - 10, w, 20);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(text, c.x, ly + 0.5);
+  }
   ctx.restore();
 }
 
@@ -1892,6 +1918,7 @@ function drawPinAndMe() {
   if (pin && coast.show.shore) drawRouteLine(pin.shore, "#ffe08a");
   if (pin && coast.show.way) drawRouteLine(pin.wayOff, "#5fe08a");
   if (me) drawTrack();
+  if (me && typeof drawCompassWedge === "function") drawCompassWedge();
   if (me) {
     const s = toScreen(me.lat, me.lon);
     const r = Math.max(me.acc / coast.view.mpp, 8);
@@ -2206,6 +2233,8 @@ function setUpGestures() {
       const asNew = coast.pinMode === "new";
       coast.pinMode = false;
       setPin(ll.lat, ll.lon, null, asNew);
+    } else if (wasTap) {
+      pinFromCircleTap(ev.offsetX, ev.offsetY);
     }
   });
   c.addEventListener("pointercancel", end);

@@ -413,7 +413,16 @@
 // and bearings shown magnetic (WMM2025).
 // Bumped to v93: coast map — hatched foreshore now from Ordnance Survey
 // (dries at low tide, height unknown); key, credits and Help updated.
-// Bumped to v105: coast map's time box becomes a two-line bar across the
+// Bumped to v108: coast map data credits moved from the Key to Help
+// ("Coast map credits", help.html#coast-credits), linked from the
+// coast map footer.
+// v107: coast map card drops the crossing details and "Set pin
+// here" (tap the circle to pin its middle); footer cut to the one
+// safety line, credits and notes moved into the Key.
+// v106: phone compass on the coast map (coast-compass.js, in
+// SHELL_FILES): take a bearing from Me by pointing the phone, plus a
+// heading wedge on the Me dot.
+// v105: coast map's time box becomes a two-line bar across the
 // top (tide, next high/low, wind with arrow and force; no clock), and
 // place names always show, with town names and pointers to the nearest
 // off-screen ones.
@@ -452,7 +461,7 @@
 // v94: coast map — Ordnance Survey mean low water line drawn
 // as a white dotted line (data/coast/stbrides/low-water.json, made by
 // the coast-heights workflow); key and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v105";
+const SHELL_CACHE_NAME = "cloude-shell-v108";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -474,6 +483,7 @@ const SHELL_FILES = [
   "moon.js",
   "osgrid.js",
   "night.js",
+  "coast-compass.js",
   "sunvis.js",
   "coast.html",
   "coast.js",
