@@ -103,7 +103,22 @@
     .pin-card {
       position: absolute; left: 8px; right: 8px; bottom: 8px; background: rgba(14,17,22,0.9);
       border-radius: 12px; padding: 8px 12px; font-size: 14px; line-height: 1.45; pointer-events: none;
+      max-height: 48%; overflow-y: auto; -webkit-overflow-scrolling: touch;
     }
+    .pin-card button { pointer-events: auto; }
+    .pc-top { display: flex; justify-content: flex-end; gap: 6px; margin: 0 0 4px; }
+    .pc-topbtn { padding: 4px 10px; font-size: 13px; }
+    .pc-mini { padding: 2px 8px; font-size: 12px; margin-left: 4px; vertical-align: 1px; }
+    .pc-other {
+      pointer-events: auto; cursor: pointer; display: flex; align-items: baseline; gap: 5px; flex-wrap: wrap;
+      margin: 2px -6px; padding: 3px 6px; border-radius: 8px; -webkit-tap-highlight-color: transparent;
+    }
+    .pc-pin.other { background: #9b3a3e; }
+    .pc-fix { margin: 4px -6px 2px; padding: 5px 6px; border-radius: 8px; border-left: 3px solid #ffffff; background: rgba(255,255,255,0.06); }
+    .pc-setfix { display: block; margin: 5px 0 1px; padding: 5px 12px; font-size: 14px; font-weight: 600; background: #185fa5; border-color: #185fa5; color: #fff; }
+    .pc-warn { color: #fac775; font-size: 13px; margin: 2px 0; }
+    .ent-new { display: flex; gap: 8px; align-items: center; margin: 0 0 10px; font-size: 15px; color: #d3d1c7; }
+    .ent-new input { width: 20px; height: 20px; }
     .pin-card b { font-variant-numeric: tabular-nums; }
     .pc-title { font-weight: 600; margin-top: 2px; }
     .pc-dim { color: #b4b2a9; font-weight: 400; }
@@ -266,8 +281,9 @@
         </div>
       </div>
       <div id="entPreview" class="ent-preview"></div>
+      <label id="entNewWrap" class="ent-new" hidden><input id="entAsNew" type="checkbox"> <span id="entNewText">Add as a new pin</span></label>
       <button id="entGo" class="ent-go" type="button">Set pin</button>
-      <p class="ent-note">Compass points (SW, NE…) are map directions. A bearing in degrees is magnetic unless you pick °T. A 6-figure grid reference (SM 812 093) is a 100 m square, so the pin goes in its middle; 8 figures is a 10 m square. "Miles" means land miles (as someone on shore might say); at sea, use nm. <span id="entVariation"></span> A quick picture only — check positions against the coastguard's own.</p>
+      <p class="ent-note">Leave the distance empty to draw a bearing line; up to three lines (A, B, C) can be drawn from different places, and the map circles where they cross. Compass points (SW, NE…) are map directions. A bearing in degrees is magnetic unless you pick °T. A 6-figure grid reference (SM 812 093) is a 100 m square, so the pin goes in its middle; 8 figures is a 10 m square. "Miles" means land miles (as someone on shore might say); at sea, use nm. <span id="entVariation"></span> A quick picture only — check positions against the coastguard's own.</p>
       </div>
     </div>
     <div id="coastMessage" class="message" hidden></div>

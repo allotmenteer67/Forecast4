@@ -568,7 +568,7 @@ function renderPinLine() {
   el.innerHTML = `<span class="dot"></span><span class="pin-text">Pin set on the Coast map: weather and sea are for the pin${parts.length ? "<br>" + parts.join(" · ") : ""}</span><button id="calloutPinClear" type="button">Clear</button>`;
   el.hidden = false;
   calloutEl("calloutPinClear").addEventListener("click", () => {
-    try { localStorage.removeItem(CALLOUT_SPOT_KEY); localStorage.removeItem("cloude-coast:line"); } catch { /* ignore */ }
+    try { localStorage.removeItem(CALLOUT_SPOT_KEY); localStorage.removeItem("cloude-coast:line"); localStorage.removeItem("cloude-coast:pins"); } catch { /* ignore */ }
     renderPinLine();
     renderFromCache();
     refreshCallout();
@@ -623,7 +623,7 @@ function backToNormal() {
   try {
     localStorage.removeItem(CALLOUT_ACTIVE_KEY);
     localStorage.removeItem(CALLOUT_SPOT_KEY); // the pin ends with the callout
-    localStorage.removeItem("cloude-coast:line"); // and so does a reported bearing line
+    localStorage.removeItem("cloude-coast:line"); localStorage.removeItem("cloude-coast:pins"); // and so does a reported bearing line
   } catch { /* nothing to clear */ }
   window.location.href = "index.html";
 }

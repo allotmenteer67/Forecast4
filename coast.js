@@ -72,7 +72,11 @@ const COAST_VIEW_KEY = "cloude-coast:view";
 const CALLOUT_SPOT_KEY = "cloude-callout:spot"; // shared with callout.js
 const NM = 1852;
 const STATUTE_MILE = 1609.344;
-const LINE_KEY = "cloude-coast:line"; // a bearing line with no distance yet
+const LINE_KEY = "cloude-coast:line"; // bearing lines with no distance (up to 3; once a single line)
+const PINS_KEY = "cloude-coast:pins"; // all pins (up to 3) and which is selected
+const MAX_PINS = 3, MAX_LINES = 3;
+const LINE_COLOURS = { A: "#ff9a3c", B: "#e6ef4a", C: "#c39bff" };
+const BEARING_ERROR_DEG = 5; // allowed error in a reported bearing, for the circle round a fix
 // Magnetic variation (declination) for St Brides Bay (51.78°N 5.17°W)
 // from the World Magnetic Model WMM2025, which is exactly linear in time
 // over its life (2025.0-2030.0): about 0.5° west in late 2026, passing
@@ -171,7 +175,10 @@ const coast = {
   cutoffKey: null,     // what the current cut-off overlay was worked out for
   cutoffTimer: null,
   pin: null,           // { lat, lon, ... } as saved under CALLOUT_SPOT_KEY
-  pinMode: false,      // next tap on the map places the pin
+  pinMode: false,      // false, "move" (next tap moves the selected pin) or "new" (adds one)
+  pins: [],            // { id, label, lat, lon, source, setAt, shore, wayOff }
+  sel: 0,              // which pin is selected; coast.pin is that one
+  lines: [],           // bearing lines: { id: "A"|"B"|"C", lat, lon, bearingT, label }
   me: null,            // { lat, lon, acc } from the phone's GPS
   show: { shore: false, way: false }, // lines drawn from the pin when its card lines are tapped
   line: null,          // { lat, lon, bearingT, label } a reported bearing with no distance
@@ -333,28 +340,203 @@ function degMin(lat, lon) {
   return `${f(lat, "N", "S", 2)} ${f(lon, "E", "W", 1)}`;
 }
 
-// ---- Pin ----
-function loadPin() {
-  const p = readJson(CALLOUT_SPOT_KEY, null);
-  coast.pin = p && typeof p.lat === "number" && typeof p.lon === "number" ? p : null;
+// ---- Pins ----
+// Up to three pins (e.g. "Last seen", "Car"). The selected one is
+// coast.pin: it's the one distances, dry ground and ways off are worked
+// from, and it's saved on its own under CALLOUT_SPOT_KEY too, so the
+// Callout screen's weather follows it as before.
+function syncPin() {
+  if (coast.sel >= coast.pins.length) coast.sel = Math.max(0, coast.pins.length - 1);
+  coast.pin = coast.pins[coast.sel] || null;
 }
 
-async function setPin(lat, lon, source) {
-  coast.pin = { lat, lon, setAt: Date.now() };
-  if (source) coast.pin.source = source;
-  coast.show = { shore: false, way: false };
+function loadPin() {
+  const saved = readJson(PINS_KEY, null);
+  const spot = readJson(CALLOUT_SPOT_KEY, null);
+  const ok = p => p && typeof p.lat === "number" && typeof p.lon === "number";
+  if (saved && Array.isArray(saved.pins) && ok(spot)) {
+    coast.pins = saved.pins.filter(ok).slice(0, MAX_PINS);
+    coast.sel = Number.isInteger(saved.sel) ? saved.sel : 0;
+  } else if (ok(spot)) {
+    coast.pins = [{ id: 1, label: "Pin 1", ...spot }]; // a pin from before there could be several
+    coast.sel = 0;
+  } else {
+    coast.pins = []; // no spot means the Callout screen cleared it: all pins went with it
+  }
+  syncPin();
+}
+
+function savePins() {
+  syncPin();
+  if (!coast.pins.length) {
+    try { localStorage.removeItem(PINS_KEY); localStorage.removeItem(CALLOUT_SPOT_KEY); } catch { /* ignore */ }
+    return;
+  }
+  writeJson(PINS_KEY, { sel: coast.sel, pins: coast.pins });
   writeJson(CALLOUT_SPOT_KEY, coast.pin);
+}
+
+function nextPinId() {
+  for (let i = 1; i <= MAX_PINS; i++) if (!coast.pins.some(p => p.id === i)) return i;
+  return coast.pins.length + 1;
+}
+
+// Moves the selected pin there, or adds a new one (asNew, or none yet).
+async function setPin(lat, lon, source, asNew) {
+  if (asNew || !coast.pins.length) {
+    if (coast.pins.length >= MAX_PINS) asNew = false;
+  }
+  if ((asNew || !coast.pins.length) && coast.pins.length < MAX_PINS) {
+    const id = nextPinId();
+    coast.pins.push({ id, label: `Pin ${id}`, lat, lon, setAt: Date.now() });
+    coast.sel = coast.pins.length - 1;
+  } else {
+    const p = coast.pins[coast.sel];
+    p.lat = lat; p.lon = lon; p.setAt = Date.now();
+    delete p.shore; delete p.wayOff; delete p.source;
+  }
+  if (source) coast.pins[coast.sel].source = source;
+  coast.show = { shore: false, way: false };
+  savePins();
   updatePinCard();
   queueDraw();
   await describePin();
 }
 
-function clearPin() {
-  coast.pin = null;
-  coast.line = null;
-  try { localStorage.removeItem(CALLOUT_SPOT_KEY); localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
+function selectPin(i) {
+  if (i === coast.sel || !coast.pins[i]) return;
+  coast.sel = i;
+  coast.show = { shore: false, way: false };
+  savePins();
   updatePinCard();
   queueDraw();
+  describePin();
+}
+
+function removePin(i) {
+  const p = coast.pins[i];
+  if (!p || !confirm(`Remove ${p.label}?`)) return;
+  coast.pins.splice(i, 1);
+  if (coast.sel >= i && coast.sel > 0) coast.sel--;
+  coast.show = { shore: false, way: false };
+  savePins();
+  updatePinCard();
+  queueDraw();
+  if (coast.pin) describePin();
+}
+
+function renamePin(i) {
+  const p = coast.pins[i];
+  if (!p) return;
+  const name = prompt("Name for this pin (e.g. Last seen, Car):", p.label);
+  if (name === null) return;
+  p.label = name.trim().slice(0, 24) || `Pin ${p.id}`;
+  savePins();
+  updatePinCard();
+  queueDraw();
+}
+
+// Clear on the card: every pin and every line.
+function clearPin() {
+  coast.pins = [];
+  coast.sel = 0;
+  coast.lines = [];
+  try { localStorage.removeItem(CALLOUT_SPOT_KEY); localStorage.removeItem(PINS_KEY); localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
+  syncPin();
+  updatePinCard();
+  queueDraw();
+}
+
+// ---- Bearing lines and where they cross ----
+function loadLines() {
+  const saved = readJson(LINE_KEY, null);
+  const list = Array.isArray(saved) ? saved : (saved && typeof saved.lat === "number" ? [{ id: "A", ...saved }] : []);
+  coast.lines = list.filter(l => typeof l.lat === "number" && typeof l.bearingT === "number").slice(0, MAX_LINES);
+}
+
+function saveLines() {
+  if (coast.lines.length) writeJson(LINE_KEY, coast.lines);
+  else try { localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
+}
+
+function addLine(line) {
+  if (coast.lines.length >= MAX_LINES) return false;
+  const id = ["A", "B", "C"].find(x => !coast.lines.some(l => l.id === x));
+  coast.lines.push({ id, ...line });
+  coast.lines.sort((a, b) => a.id.localeCompare(b.id));
+  saveLines();
+  return true;
+}
+
+function removeLine(id) {
+  coast.lines = coast.lines.filter(l => l.id !== id);
+  saveLines();
+  updatePinCard();
+  queueDraw();
+}
+
+// Where the lines cross, worked on a flat local grid (fine over a few
+// miles). With two lines: the crossing. With three: the point closest to
+// all three (the middle of the "cocked hat" triangle), and the triangle.
+// The circle allows each bearing to be BEARING_ERROR_DEG out, so it's
+// bigger when the observers are far away or the lines cross at a narrow
+// angle; under 30° between lines counts as a poor cut.
+function computeFix() {
+  const L = coast.lines;
+  if (L.length < 2) return null;
+  const lat0 = L.reduce((t, l) => t + l.lat, 0) / L.length, lon0 = L.reduce((t, l) => t + l.lon, 0) / L.length;
+  const kx = 111320 * Math.cos(lat0 * Math.PI / 180);
+  const toXY = p => ({ x: (p.lon - lon0) * kx, y: (p.lat - lat0) * KY });
+  const toLL = q => ({ lat: lat0 + q.y / KY, lon: lon0 + q.x / kx });
+  const rays = L.map(l => {
+    const b = l.bearingT * Math.PI / 180;
+    return { l, o: toXY(l), d: { x: Math.sin(b), y: Math.cos(b) } };
+  });
+  const maxRange = 14 * NM;
+  const crossings = [];
+  for (let i = 0; i < rays.length; i++) for (let j = i + 1; j < rays.length; j++) {
+    const A = rays[i], B = rays[j];
+    const det = A.d.x * B.d.y - A.d.y * B.d.x; // sine of the angle between them
+    const angle = Math.asin(Math.min(1, Math.abs(det))) * 180 / Math.PI;
+    if (Math.abs(det) < Math.sin(3 * Math.PI / 180)) continue; // as good as parallel
+    const wx = B.o.x - A.o.x, wy = B.o.y - A.o.y;
+    const t = (wx * B.d.y - wy * B.d.x) / det;
+    const u = (wx * A.d.y - wy * A.d.x) / det;
+    if (t <= 0 || u <= 0 || t > maxRange || u > maxRange) continue; // they meet behind an observer, or miles off
+    const xy = { x: A.o.x + t * A.d.x, y: A.o.y + t * A.d.y };
+    const err = Math.tan(BEARING_ERROR_DEG * Math.PI / 180);
+    const radius = Math.sqrt((t * err) ** 2 + (u * err) ** 2) / Math.max(Math.abs(det), 0.05);
+    crossings.push({ a: A.l.id, b: B.l.id, xy, angle, radius });
+  }
+  if (!crossings.length) return { none: true };
+  let centre;
+  if (rays.length >= 3 && crossings.length === 3) {
+    // Least squares: the point with the smallest total squared distance to the lines.
+    let sxx = 0, sxy = 0, syy = 0, bx = 0, by = 0;
+    for (const r of rays) {
+      const n = { x: r.d.y, y: -r.d.x }; // normal to the line
+      const c = n.x * r.o.x + n.y * r.o.y;
+      sxx += n.x * n.x; sxy += n.x * n.y; syy += n.y * n.y; bx += n.x * c; by += n.y * c;
+    }
+    const D = sxx * syy - sxy * sxy;
+    centre = Math.abs(D) > 1e-9 ? { x: (bx * syy - by * sxy) / D, y: (by * sxx - bx * sxy) / D } :
+      { x: crossings.reduce((t, c) => t + c.xy.x, 0) / 3, y: crossings.reduce((t, c) => t + c.xy.y, 0) / 3 };
+  } else {
+    // Two lines, or three where not every pair meets: the best-angled crossing.
+    centre = crossings.slice().sort((p, q) => q.angle - p.angle)[0].xy;
+  }
+  const best = crossings.slice().sort((p, q) => p.radius - q.radius)[0];
+  const spread = Math.max(0, ...crossings.map(c => Math.hypot(c.xy.x - centre.x, c.xy.y - centre.y)));
+  const radiusM = Math.max(best.radius, spread * 1.1, 25);
+  const worstAngle = Math.max(...crossings.map(c => c.angle));
+  return {
+    centre: toLL(centre),
+    radiusM,
+    triangle: crossings.length === 3 ? crossings.map(c => toLL(c.xy)) : null,
+    crossings: crossings.map(c => ({ ...c, ll: toLL(c.xy) })),
+    poor: worstAngle < 30,
+    lineCount: rays.length,
+  };
 }
 
 // Nearest dry ground (now) and nearest way off, saved with the pin so
@@ -377,7 +559,7 @@ async function describePin() {
       kind: way.a.kind, cut: ct ? (ct.state === "now" ? "cut now" : ct.state === "at" ? `cut ${clockTime(ct.time)}` : "above high tide") : null
     };
   } else pin.wayOff = null;
-  writeJson(CALLOUT_SPOT_KEY, pin);
+  savePins();
   updatePinCard();
 }
 
@@ -464,43 +646,80 @@ function updatePinCard() {
   const card = $("coastPinCard");
   const lines = [];
   const pin = coast.pin;
-  if (pin) {
-    lines.push(`<div class="pc-title"><span class="pc-pin"></span>Pin · ${degMin(pin.lat, pin.lon)}</div>`);
-    const pinGrid = gridText(pin.lat, pin.lon);
+  const many = coast.pins.length > 1;
+  coast.pins.forEach((p, i) => {
+    const selected = i === coast.sel;
+    if (!selected) {
+      // Other pins: one line, tap to select.
+      const rel = pin ? ` · ${distText(distanceM(pin, p))} ${bearingText(bearingT(pin, p))} from ${escapeHtml(pin.label)}` : "";
+      lines.push(`<div class="pc-other" data-sel="${i}"><span class="pc-pin other"></span>${escapeHtml(p.label)}<span class="pc-dim">${rel}</span><span class="pc-show">select</span></div>`);
+      return;
+    }
+    lines.push(`<div class="pc-title"><span class="pc-pin"></span>${many || p.label !== "Pin 1" ? `${escapeHtml(p.label)} · ` : "Pin · "}${degMin(p.lat, p.lon)}` +
+      ` <button class="pc-mini" type="button" data-rename="${i}">Name</button>${many ? ` <button class="pc-mini" type="button" data-remove="${i}" aria-label="Remove this pin">✕</button>` : ""}</div>`);
+    const pinGrid = gridText(p.lat, p.lon);
     if (pinGrid) lines.push(`<div class="pc-grid">Grid ref ${pinGrid}</div>`);
-    if (pin.source) lines.push(`<div class="pc-dim">Reported: ${escapeHtml(pin.source)}</div>`);
+    if (p.source) lines.push(`<div class="pc-dim">Reported: ${escapeHtml(p.source)}</div>`);
     // These two lines can be tapped to draw the route from the pin.
-    if (pin.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(pin.shore.distM)}</b> ${bearingText(pin.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
-    if (pin.wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">Nearest way off: <b>${distText(pin.wayOff.distM)}</b> ${bearingText(pin.wayOff.bearing)}${pin.wayOff.cut ? ` · ${pin.wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
+    if (p.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(p.shore.distM)}</b> ${bearingText(p.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
+    if (p.wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">Nearest way off: <b>${distText(p.wayOff.distM)}</b> ${bearingText(p.wayOff.bearing)}${p.wayOff.cut ? ` · ${p.wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
+  });
+  for (const L of coast.lines) {
+    lines.push(`<div class="pc-title"><span class="pc-line" style="background:${LINE_COLOURS[L.id]}"></span>${L.id} · ${escapeHtml(L.label)} <button class="pc-mini" type="button" data-line="${L.id}" aria-label="Remove line ${L.id}">✕</button></div>`);
   }
-  if (coast.line) {
-    lines.push(`<div class="pc-title"><span class="pc-line"></span>Line ${escapeHtml(coast.line.label)}</div><div class="pc-dim">Somewhere along the orange line — add a distance with Position to set the pin.</div>`);
+  const fix = computeFix();
+  if (fix && fix.none) {
+    lines.push(`<div class="pc-warn">These lines don't cross ahead of the observers — check the bearings.</div>`);
+  } else if (fix) {
+    const g = gridText(fix.centre.lat, fix.centre.lon);
+    lines.push(`<div class="pc-fix"><b>${fix.lineCount >= 3 && fix.triangle ? "Best guess (middle of the three lines)" : "Lines cross"}</b>: ${degMin(fix.centre.lat, fix.centre.lon)}${g ? ` · ${g}` : ""}<br>Within about <b>${distText(Math.round(fix.radiusM))}</b>, allowing ${BEARING_ERROR_DEG}° error in each bearing` +
+      `<button class="pc-mini pc-setfix" type="button">Set pin here</button></div>`);
+    if (fix.poor) lines.push(`<div class="pc-warn">Poor cut: the lines cross at a narrow angle, so the position could be well along them. A bearing from further round would pin it down.</div>`);
+  } else if (coast.lines.length === 1) {
+    lines.push(`<div class="pc-dim">Somewhere along the line. Add a second bearing from another place to see where they cross, or a distance to set the pin.</div>`);
   }
   if (coast.me) {
     const acc = Math.round(coast.me.acc);
     let line = `<div class="pc-title"><span class="pc-me"></span>You · ${degMin(coast.me.lat, coast.me.lon)} <span class="pc-dim">±${acc} m</span></div>`;
     const meGrid = gridText(coast.me.lat, coast.me.lon);
     if (meGrid) line += `<div class="pc-grid">Grid ref ${meGrid}</div>`;
-    if (pin) line += `<div>To pin: <b>${distText(distanceM(coast.me, pin))}</b> ${bearingText(bearingT(coast.me, pin))}</div>`;
+    if (pin) line += `<div>To ${many ? escapeHtml(pin.label) : "pin"}: <b>${distText(distanceM(coast.me, pin))}</b> ${bearingText(bearingT(coast.me, pin))}</div>`;
     lines.push(line);
   } else if (coast.meError) {
     lines.push(`<div class="pc-dim">${coast.meError}</div>`);
   }
-  if (coast.pinMode) lines.unshift(`<div class="pc-hint">Tap the map to place the pin</div>`);
-  // Clear (pin and line) lives on the card, so the button row fits a phone.
-  if (pin || coast.line) lines.unshift(`<button class="pc-clear" type="button">Clear</button>`);
+  if (coast.pinMode) lines.unshift(`<div class="pc-hint">${coast.pinMode === "new" ? "Tap the map to place the new pin" : coast.pins.length ? `Tap the map to move ${escapeHtml(pin.label)}` : "Tap the map to place the pin"}</div>`);
+  // Clear (pins and lines) and "Another pin" live on the card, so the button row fits a phone.
+  const top = [];
+  if (coast.pins.length && coast.pins.length < MAX_PINS) top.push(`<button class="pc-topbtn pc-add" type="button">+ Another pin</button>`);
+  if (coast.pins.length || coast.lines.length) top.push(`<button class="pc-topbtn" type="button" data-clearall="1">Clear all</button>`);
+  if (top.length) lines.unshift(`<div class="pc-top">${top.join("")}</div>`);
   card.innerHTML = lines.join("");
-  const clearBtn = card.querySelector(".pc-clear");
-  if (clearBtn) clearBtn.addEventListener("click", () => { coast.pinMode = false; clearPin(); });
   card.hidden = lines.length === 0;
-  card.querySelectorAll(".pc-tap").forEach(el => el.addEventListener("click", () => {
+  const on = (sel, fn) => card.querySelectorAll(sel).forEach(el => el.addEventListener("click", ev => { ev.stopPropagation(); fn(el); }));
+  on("[data-clearall]", () => {
+    if (!confirm("Clear all pins and bearing lines?")) return;
+    coast.pinMode = false; clearPin();
+  });
+  on(".pc-add", () => { coast.pinMode = coast.pinMode === "new" ? false : "new"; updatePinCard(); });
+  on("[data-sel]", el => selectPin(Number(el.dataset.sel)));
+  on("[data-rename]", el => renamePin(Number(el.dataset.rename)));
+  on("[data-remove]", el => removePin(Number(el.dataset.remove)));
+  on("[data-line]", el => removeLine(el.dataset.line));
+  on(".pc-setfix", () => {
+    const f = computeFix();
+    if (!f || f.none) return;
+    const ids = coast.lines.map(l => l.id).join(", ");
+    setPin(f.centre.lat, f.centre.lon, `where lines ${ids} cross (within about ${distText(Math.round(f.radiusM))})`, coast.pins.length > 0 && coast.pins.length < MAX_PINS);
+  });
+  on(".pc-tap", el => {
     const which = el.dataset.show;
     coast.show[which] = !coast.show[which];
     const target = which === "shore" ? coast.pin && coast.pin.shore : coast.pin && coast.pin.wayOff;
     if (coast.show[which] && target && typeof target.lat === "number") fitPinAnd(target);
     updatePinCard();
-  }));
-  $("coastPinBtn").classList.toggle("on", coast.pinMode);
+  });
+  $("coastPinBtn").classList.toggle("on", !!coast.pinMode);
   $("coastPinBtn").setAttribute("aria-label", pin ? "Move the pin" : "Place a pin");
   queueDraw();
 }
@@ -553,8 +772,8 @@ function placeMatches(q) {
   const out = [];
   const nq = normName(q);
   if (coast.me) out.push({ name: "My position", lat: coast.me.lat, lon: coast.me.lon, special: true });
-  if (coast.pin) out.push({ name: "The pin", lat: coast.pin.lat, lon: coast.pin.lon, special: true });
-  if (!nq) return out.slice(0, 2);
+  coast.pins.forEach(p => out.push({ name: coast.pins.length > 1 || p.label !== "Pin 1" ? p.label : "The pin", lat: p.lat, lon: p.lon, special: true }));
+  if (!nq) return out.slice(0, 1 + coast.pins.length);
   const scored = [];
   for (const n of coast.names) {
     const all = [n.name, ...(n.alt || [])];
@@ -570,8 +789,16 @@ function placeMatches(q) {
   return [...out.filter(p => normName(p.name).includes(nq)), ...scored.slice(0, 8)];
 }
 
+// "Add as a new pin" in the Position screen: only offered when there's
+// already a pin and room for another; otherwise Set pin moves the pin.
+function entryAsNew() {
+  const box = $("entAsNew");
+  return !!(box && box.checked && coast.pins.length && coast.pins.length < MAX_PINS);
+}
+
 function openEntry() {
   $("coastEntry").hidden = false;
+  if ($("entAsNew")) $("entAsNew").checked = false;
   coast.pinMode = false;
   renderEntry();
   updatePinCard();
@@ -590,6 +817,9 @@ function renderEntry() {
   document.querySelectorAll("#entUnits button").forEach(b => b.classList.toggle("on", b.dataset.unit === e.unit));
   document.querySelectorAll("#entBType button").forEach(b => b.classList.toggle("on", b.dataset.bt === e.bearingType));
   $("entPlaceChosen").textContent = e.place ? `✓ ${e.place.name}` : "";
+  const canAdd = coast.pins.length > 0 && coast.pins.length < MAX_PINS;
+  $("entNewWrap").hidden = !canAdd;
+  if (canAdd) $("entNewText").textContent = `Add as a new pin (keep ${coast.pins.length > 1 ? "the others" : coast.pin.label})`;
   updateEntryPreview();
 }
 
@@ -664,7 +894,18 @@ function updateEntryPreview() {
   const r = placeResult();
   el.classList.toggle("bad", !!r.error);
   if (r.error) { el.textContent = r.error; $("entGo").textContent = "Set"; return; }
-  if (r.line) { el.textContent = `Line ${r.line.label} — no distance, so no pin yet`; $("entGo").textContent = "Draw line"; return; }
+  if (r.line) {
+    if (coast.lines.length >= MAX_LINES) {
+      el.textContent = "Three lines are drawn already — remove one on the map card first";
+      el.classList.add("bad");
+      $("entGo").textContent = "Draw line";
+      return;
+    }
+    const id = ["A", "B", "C"].find(x => !coast.lines.some(l => l.id === x));
+    el.textContent = `Line ${id}: ${r.line.label} — no distance, so no pin${coast.lines.length ? "; the card will show where the lines cross" : ""}`;
+    $("entGo").textContent = `Draw line ${id}`;
+    return;
+  }
   el.textContent = `Pin ${r.source} = ${degMin(r.point.lat, r.point.lon)}`;
   $("entGo").textContent = "Set pin";
 }
@@ -675,23 +916,23 @@ function applyEntry() {
     const p = coast.entry.mode === "grid" ? null : parseLatLon(text);
     const g = p ? null : gridEntry(text);
     if (!p && !g) return;
-    coast.line = null;
-    try { localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
-    if (p) setPin(p.lat, p.lon); // the card already shows the position
-    else setPin(g.lat, g.lon, `Grid ref ${g.text}${squareNote(g)}`);
+    const asNew = entryAsNew();
+    if (p) setPin(p.lat, p.lon, null, asNew); // the card already shows the position
+    else setPin(g.lat, g.lon, `Grid ref ${g.text}${squareNote(g)}`, asNew);
     centreOn(p || g);
   } else {
     const r = placeResult();
     if (r.error) return;
     if (r.line) {
-      coast.line = r.line;
-      writeJson(LINE_KEY, r.line);
-      const far = destination(r.line, r.line.bearingT, 3 * NM);
-      centreOn({ lat: (r.line.lat + far.lat) / 2, lon: (r.line.lon + far.lon) / 2 }, 3.5 * NM);
+      if (!addLine(r.line)) return;
+      const fix = computeFix();
+      if (fix && !fix.none) centreOn(fix.centre, Math.max(fix.radiusM * 4, 1.5 * NM));
+      else {
+        const far = destination(r.line, r.line.bearingT, 3 * NM);
+        centreOn({ lat: (r.line.lat + far.lat) / 2, lon: (r.line.lon + far.lon) / 2 }, 3.5 * NM);
+      }
     } else {
-      coast.line = null;
-      try { localStorage.removeItem(LINE_KEY); } catch { /* ignore */ }
-      setPin(r.point.lat, r.point.lon, r.source);
+      setPin(r.point.lat, r.point.lon, r.source, entryAsNew());
       centreOn(r.point);
     }
   }
@@ -1306,32 +1547,65 @@ function drawRouteLine(target, colour) {
   ctx.restore();
 }
 
-// A reported bearing with no distance: an orange line from the point
-// out to 12 nm, with ticks every nautical mile so a distance can be
-// judged against it.
+// Reported bearings with no distance: a line from each observer out to
+// 12 nm in its own colour (A orange, B yellow, C violet), lettered at the
+// start, with ticks every nautical mile so a distance can be judged.
 function drawBearingLine() {
-  const L = coast.line;
-  if (!L) return;
   const { ctx } = coast;
-  const end = destination(L, L.bearingT, 12 * NM);
-  const a = toScreen(L.lat, L.lon), b = toScreen(end.lat, end.lon);
-  ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineWidth = 6; ctx.strokeStyle = "rgba(10,12,16,0.75)";
-  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-  ctx.lineWidth = 3; ctx.strokeStyle = "#ff9a3c";
-  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-  ctx.font = "600 11px -apple-system, BlinkMacSystemFont, sans-serif";
-  ctx.textBaseline = "middle";
-  for (let n = 1; n <= 12; n++) {
-    const p = destination(L, L.bearingT, n * NM);
-    const s2 = toScreen(p.lat, p.lon);
-    if (s2.x < -20 || s2.y < -20 || s2.x > coast.w + 20 || s2.y > coast.h + 20) continue;
-    ctx.beginPath(); ctx.arc(s2.x, s2.y, 4, 0, Math.PI * 2); ctx.fillStyle = "#ff9a3c"; ctx.fill();
-    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
-    ctx.strokeText(`${n} nm`, s2.x + 7, s2.y); ctx.fillStyle = "#ffd2a8"; ctx.fillText(`${n} nm`, s2.x + 7, s2.y);
+  for (const L of coast.lines) {
+    const colour = LINE_COLOURS[L.id] || "#ff9a3c";
+    const end = destination(L, L.bearingT, 12 * NM);
+    const a = toScreen(L.lat, L.lon), b = toScreen(end.lat, end.lon);
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 6; ctx.strokeStyle = "rgba(10,12,16,0.75)";
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.lineWidth = 3; ctx.strokeStyle = colour;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.font = "600 11px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.textBaseline = "middle";
+    for (let n = 1; n <= 12; n++) {
+      const p = destination(L, L.bearingT, n * NM);
+      const s2 = toScreen(p.lat, p.lon);
+      if (s2.x < -20 || s2.y < -20 || s2.x > coast.w + 20 || s2.y > coast.h + 20) continue;
+      ctx.beginPath(); ctx.arc(s2.x, s2.y, 4, 0, Math.PI * 2); ctx.fillStyle = colour; ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
+      ctx.strokeText(`${n} nm`, s2.x + 7, s2.y); ctx.fillStyle = "#f1efe8"; ctx.fillText(`${n} nm`, s2.x + 7, s2.y);
+    }
+    ctx.beginPath(); ctx.arc(a.x, a.y, 9, 0, Math.PI * 2); ctx.fillStyle = colour; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = "#0e1116"; ctx.stroke();
+    ctx.font = "800 11px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.textAlign = "center"; ctx.fillStyle = "#0e1116"; ctx.fillText(L.id, a.x, a.y + 0.5);
+    ctx.restore();
   }
-  ctx.beginPath(); ctx.arc(a.x, a.y, 6, 0, Math.PI * 2); ctx.fillStyle = "#ff9a3c"; ctx.fill();
+  drawFix();
+}
+
+// The crossing (or cocked hat) and its circle.
+function drawFix() {
+  const fix = computeFix();
+  if (!fix || fix.none) return;
+  const { ctx } = coast;
+  const c = toScreen(fix.centre.lat, fix.centre.lon);
+  const r = Math.max(fix.radiusM / coast.view.mpp, 10);
+  ctx.save();
+  if (fix.triangle) {
+    ctx.beginPath();
+    fix.triangle.forEach((p, i) => { const q = toScreen(p.lat, p.lon); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,255,255,0.22)"; ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = fix.poor ? "rgba(250,199,117,0.10)" : "rgba(255,255,255,0.08)"; ctx.fill();
+  ctx.setLineDash([7, 5]);
+  ctx.lineWidth = 4; ctx.strokeStyle = "rgba(10,12,16,0.7)"; ctx.stroke();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = fix.poor ? "#fac775" : "#ffffff"; ctx.stroke();
+  ctx.setLineDash([]);
+  // A cross at the best guess.
+  ctx.lineWidth = 4; ctx.strokeStyle = "rgba(10,12,16,0.8)";
+  ctx.beginPath(); ctx.moveTo(c.x - 8, c.y); ctx.lineTo(c.x + 8, c.y); ctx.moveTo(c.x, c.y - 8); ctx.lineTo(c.x, c.y + 8); ctx.stroke();
+  ctx.lineWidth = 2; ctx.strokeStyle = "#ffffff";
+  ctx.beginPath(); ctx.moveTo(c.x - 8, c.y); ctx.lineTo(c.x + 8, c.y); ctx.moveTo(c.x, c.y - 8); ctx.lineTo(c.x, c.y + 8); ctx.stroke();
   ctx.restore();
 }
 
@@ -1364,18 +1638,37 @@ function drawPinAndMe() {
     ctx.fillStyle = "#3d8bff"; ctx.fill();
     ctx.lineWidth = 2.5; ctx.strokeStyle = "#ffffff"; ctx.stroke();
   }
-  if (pin) {
-    const s = toScreen(pin.lat, pin.lon);
-    // A map pin: a red head on a short stem, the point at the spot.
-    ctx.lineWidth = 2; ctx.strokeStyle = "#0e1116";
-    ctx.beginPath();
-    ctx.moveTo(s.x, s.y);
-    ctx.bezierCurveTo(s.x - 4, s.y - 10, s.x - 10, s.y - 14, s.x - 10, s.y - 21);
-    ctx.arc(s.x, s.y - 21, 10, Math.PI, 0);
-    ctx.bezierCurveTo(s.x + 10, s.y - 14, s.x + 4, s.y - 10, s.x, s.y);
-    ctx.fillStyle = "#e5484d"; ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(s.x, s.y - 21, 3.5, 0, Math.PI * 2); ctx.fillStyle = "#ffffff"; ctx.fill();
+  // Pins: the selected one red, others dark red; names beside them once
+  // there's more than one (or one has been named).
+  const named = coast.pins.length > 1 || (coast.pins[0] && coast.pins[0].label !== "Pin 1");
+  coast.pins.forEach((p, i) => {
+    if (i === coast.sel) return;
+    drawOnePin(p, false, named);
+  });
+  if (pin) drawOnePin(pin, true, named);
+}
+
+function drawOnePin(p, selected, named) {
+  const { ctx } = coast;
+  const s = toScreen(p.lat, p.lon);
+  // A map pin: a head on a short stem, the point at the spot.
+  ctx.save();
+  ctx.lineWidth = 2; ctx.strokeStyle = "#0e1116";
+  ctx.beginPath();
+  ctx.moveTo(s.x, s.y);
+  ctx.bezierCurveTo(s.x - 4, s.y - 10, s.x - 10, s.y - 14, s.x - 10, s.y - 21);
+  ctx.arc(s.x, s.y - 21, 10, Math.PI, 0);
+  ctx.bezierCurveTo(s.x + 10, s.y - 14, s.x + 4, s.y - 10, s.x, s.y);
+  ctx.fillStyle = selected ? "#e5484d" : "#9b3a3e"; ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(s.x, s.y - 21, 3.5, 0, Math.PI * 2); ctx.fillStyle = selected ? "#ffffff" : "#e0b4b6"; ctx.fill();
+  if (named) {
+    ctx.font = `${selected ? 700 : 600} 12px -apple-system, BlinkMacSystemFont, sans-serif`;
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
+    ctx.strokeText(p.label, s.x + 13, s.y - 21);
+    ctx.fillStyle = selected ? "#ffffff" : "#d3d1c7"; ctx.fillText(p.label, s.x + 13, s.y - 21);
   }
+  ctx.restore();
 }
 
 // Ways off: a green disc with an up arrow while open, grey with a cross
@@ -1570,14 +1863,15 @@ function setUpGestures() {
     tap = null;
     if (wasTap && coast.pinMode) {
       const ll = toLatLon(ev.offsetX, ev.offsetY);
+      const asNew = coast.pinMode === "new";
       coast.pinMode = false;
-      setPin(ll.lat, ll.lon);
+      setPin(ll.lat, ll.lon, null, asNew);
     }
   });
   c.addEventListener("pointercancel", end);
   c.addEventListener("wheel", ev => { ev.preventDefault(); zoomAt(ev.deltaY > 0 ? 1.2 : 1 / 1.2, ev.offsetX, ev.offsetY); }, { passive: false });
 
-  $("coastPinBtn").addEventListener("click", () => { coast.pinMode = !coast.pinMode; updatePinCard(); });
+  $("coastPinBtn").addEventListener("click", () => { coast.pinMode = coast.pinMode ? false : "move"; updatePinCard(); });
   $("coastMeBtn").addEventListener("click", toggleMe);
   $("coastZoomIn").addEventListener("click", () => zoomAt(0.5, coast.w / 2, coast.h / 2));
   $("coastZoomOut").addEventListener("click", () => zoomAt(2, coast.w / 2, coast.h / 2));
@@ -1621,8 +1915,7 @@ async function initCoast() {
   const saved = readJson(COAST_VIEW_KEY, null);
   coast.view = saved && typeof saved.lat === "number" ? saved : { ...COAST_START };
   loadPin();
-  const savedLine = readJson(LINE_KEY, null);
-  if (savedLine && typeof savedLine.lat === "number") coast.line = savedLine;
+  loadLines();
   // Opened with a pin (e.g. from the callout screen): start there.
   if (coast.pin) { coast.view.lat = coast.pin.lat; coast.view.lon = coast.pin.lon; }
   resetBaseTime();
