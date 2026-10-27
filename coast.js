@@ -617,7 +617,57 @@ async function nearestDryGround(pt) {
 }
 
 // ---- Own position ----
+// "Me" is on: real GPS, or a practice position. While it's on, the
+// bearing lines step aside, leaving the boat, its track and the distance
+// to the target (the middle of the crossing circle, or else the pin).
+function meOn() { return coast.meWatch !== null || !!(coast.me && coast.me.practice); }
+
+function meTarget() {
+  const fix = computeFix();
+  if (fix && !fix.none) return { lat: fix.centre.lat, lon: fix.centre.lon, name: "the middle of the circle" };
+  if (coast.pin) return { lat: coast.pin.lat, lon: coast.pin.lon, name: coast.pins.length > 1 || coast.pin.label !== "Pin 1" ? coast.pin.label : "the pin" };
+  return null;
+}
+
+// A pretend position for practising with the map away from the bay.
+function setPracticeMe(lat, lon) {
+  if (coast.meWatch !== null) { navigator.geolocation.clearWatch(coast.meWatch); coast.meWatch = null; }
+  coast.me = { lat, lon, acc: 5, practice: true };
+  coast.meError = "";
+  $("coastMeBtn").classList.add("on");
+  updatePinCard();
+  fitMeAndTarget();
+  queueDraw();
+}
+
+// Get Me and the target (and its circle) both on screen, in the band
+// between the time pill at the top and the card at the bottom.
+function fitMeAndTarget() {
+  const me = coast.me, tgt = meTarget();
+  if (!me) return;
+  if (!tgt) { coast.view.lat = me.lat; coast.view.lon = me.lon; clampView(); return; }
+  const card = $("coastPinCard");
+  const cardH = card && !card.hidden ? card.offsetHeight + 16 : 0;
+  const top = 140, bottom = coast.h - cardH;
+  const band = Math.max(bottom - top, 120);
+  const fix = computeFix();
+  const pad = fix && !fix.none ? fix.radiusM * 1.2 : 150;
+  const dx = Math.abs(tgt.lon - me.lon) * KX + 2 * pad, dy = Math.abs(tgt.lat - me.lat) * KY + 2 * pad;
+  coast.view.mpp = Math.max(dx / Math.max(coast.w - 40, 100), dy / band, 2);
+  const midLat = (tgt.lat + me.lat) / 2, midLon = (tgt.lon + me.lon) / 2;
+  const wantY = (top + bottom) / 2;
+  coast.view.lat = midLat - (coast.h / 2 - wantY) * coast.view.mpp / KY;
+  coast.view.lon = midLon;
+  clampView();
+}
+
 function toggleMe() {
+  if (coast.me && coast.me.practice) {
+    coast.me = null; coast.meError = "";
+    $("coastMeBtn").classList.remove("on");
+    updatePinCard(); queueDraw();
+    return;
+  }
   if (coast.meWatch !== null) {
     navigator.geolocation.clearWatch(coast.meWatch);
     coast.meWatch = null; coast.me = null; coast.meError = "";
@@ -633,7 +683,7 @@ function toggleMe() {
   coast.meWatch = navigator.geolocation.watchPosition(pos => {
     coast.me = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy };
     coast.meError = "";
-    if (first) { first = false; coast.view.lat = coast.me.lat; coast.view.lon = coast.me.lon; clampView(); }
+    if (first) { first = false; updatePinCard(); fitMeAndTarget(); }
     updatePinCard(); queueDraw();
   }, err => {
     coast.meError = err.code === 1 ? "Location permission is off for this app" : "Can't get a position right now";
@@ -664,11 +714,16 @@ function updatePinCard() {
     if (p.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(p.shore.distM)}</b> ${bearingText(p.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
     if (p.wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">Nearest way off: <b>${distText(p.wayOff.distM)}</b> ${bearingText(p.wayOff.bearing)}${p.wayOff.cut ? ` · ${p.wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
   });
-  for (const L of coast.lines) {
-    lines.push(`<div class="pc-title"><span class="pc-line" style="background:${LINE_COLOURS[L.id]}"></span>${L.id} · ${escapeHtml(L.label)} <button class="pc-mini" type="button" data-line="${L.id}" aria-label="Remove line ${L.id}">✕</button></div>`);
+  const hideLines = !!(meOn() && coast.me);
+  // With Me on, the card keeps to the boat, the track and the target:
+  // the bearings list and the crossing details come back with Me off.
+  if (!hideLines) for (const L of coast.lines) {
+    lines.push(`<div class="pc-lineitem${hideLines ? " dim" : ""}" data-editline="${L.id}"><span class="pc-line" style="background:${LINE_COLOURS[L.id]}"></span><b>Bearing ${L.id}</b> · ${escapeHtml(L.label)}<span class="pc-show">edit</span><button class="pc-mini" type="button" data-line="${L.id}" aria-label="Remove bearing ${L.id}">✕</button></div>`);
   }
   const fix = computeFix();
-  if (fix && fix.none) {
+  if (hideLines && coast.lines.length) {
+    lines.push(`<div class="pc-dim">${coast.lines.length} bearing${coast.lines.length > 1 ? "s" : ""} hidden${fix && !fix.none ? `; circle within about ${distText(Math.round(fix.radiusM))}` : ""} — tap Me to show them.</div>`);
+  } else if (fix && fix.none) {
     lines.push(`<div class="pc-warn">These lines don't cross ahead of the observers — check the bearings.</div>`);
   } else if (fix) {
     const g = gridText(fix.centre.lat, fix.centre.lon);
@@ -680,10 +735,13 @@ function updatePinCard() {
   }
   if (coast.me) {
     const acc = Math.round(coast.me.acc);
-    let line = `<div class="pc-title"><span class="pc-me"></span>You · ${degMin(coast.me.lat, coast.me.lon)} <span class="pc-dim">±${acc} m</span></div>`;
+    const practice = coast.me.practice;
+    let line = `<div class="pc-title"><span class="pc-me${practice ? " practice" : ""}"></span>${practice ? "You (PRACTICE)" : "You"} · ${degMin(coast.me.lat, coast.me.lon)} ${practice ? "" : `<span class="pc-dim">±${acc} m</span>`}</div>`;
     const meGrid = gridText(coast.me.lat, coast.me.lon);
     if (meGrid) line += `<div class="pc-grid">Grid ref ${meGrid}</div>`;
-    if (pin) line += `<div>To ${many ? escapeHtml(pin.label) : "pin"}: <b>${distText(distanceM(coast.me, pin))}</b> ${bearingText(bearingT(coast.me, pin))}</div>`;
+    const tgt = meTarget();
+    if (tgt) line += `<div class="pc-track">To ${escapeHtml(tgt.name)}: <b>${distText(distanceM(coast.me, tgt))}</b> ${bearingText(bearingT(coast.me, tgt))}</div>`;
+    if (practice) line += `<div class="pc-dim">A pretend position for practice — tap Me to end it.</div>`;
     lines.push(line);
   } else if (coast.meError) {
     lines.push(`<div class="pc-dim">${coast.meError}</div>`);
@@ -706,6 +764,7 @@ function updatePinCard() {
   on("[data-rename]", el => renamePin(Number(el.dataset.rename)));
   on("[data-remove]", el => removePin(Number(el.dataset.remove)));
   on("[data-line]", el => removeLine(el.dataset.line));
+  on("[data-editline]", el => openEntryForLine(el.dataset.editline));
   on(".pc-setfix", () => {
     const f = computeFix();
     if (!f || f.none) return;
@@ -796,14 +855,37 @@ function entryAsNew() {
   return !!(box && box.checked && coast.pins.length && coast.pins.length < MAX_PINS);
 }
 
+// Open Position with a bearing line's details filled in, to change it.
+function openEntryForLine(id) {
+  const L = coast.lines.find(l => l.id === id);
+  if (!L) return;
+  const e = coast.entry;
+  e.mode = "place";
+  e.editId = id;
+  e.place = L.from ? { ...L.from } : { name: "the start of the line", lat: L.lat, lon: L.lon };
+  e.dir = L.dir || null;
+  if (L.bearingType) e.bearingType = L.bearingType;
+  $("coastEntry").hidden = false;
+  if ($("entAsNew")) $("entAsNew").checked = false;
+  coast.pinMode = false;
+  $("entPlaceInput").value = e.place.name;
+  $("entPlaceList").innerHTML = "";
+  $("entBearing").value = L.bearingNum !== null && L.bearingNum !== undefined ? L.bearingNum
+    : (L.dir ? "" : String(Math.round(e.bearingType === "M" ? trueToMag(L.bearingT) : L.bearingT) % 360));
+  $("entDist").value = "";
+  renderEntry();
+  updatePinCard();
+}
+
 function openEntry() {
+  coast.entry.editId = null;
   $("coastEntry").hidden = false;
   if ($("entAsNew")) $("entAsNew").checked = false;
   coast.pinMode = false;
   renderEntry();
   updatePinCard();
 }
-function closeEntry() { $("coastEntry").hidden = true; }
+function closeEntry() { $("coastEntry").hidden = true; coast.entry.editId = null; }
 
 function renderEntry() {
   const e = coast.entry;
@@ -817,6 +899,11 @@ function renderEntry() {
   document.querySelectorAll("#entUnits button").forEach(b => b.classList.toggle("on", b.dataset.unit === e.unit));
   document.querySelectorAll("#entBType button").forEach(b => b.classList.toggle("on", b.dataset.bt === e.bearingType));
   $("entPlaceChosen").textContent = e.place ? `✓ ${e.place.name}` : "";
+  // Which bearing this is: the one being changed, or the next letter free.
+  const nextId = ["A", "B", "C"].find(x => !coast.lines.some(l => l.id === x));
+  const tag = e.editId ? `Changing bearing ${e.editId}` : nextId ? `Bearing ${nextId}${coast.lines.length ? ` (A${coast.lines.length > 1 ? ", B" : ""} already drawn)` : ""}` : "Three bearings drawn — change one from the map card";
+  $("entLineTag").textContent = tag;
+  $("entLineTag").style.borderLeftColor = LINE_COLOURS[e.editId || nextId] || "#888780";
   const canAdd = coast.pins.length > 0 && coast.pins.length < MAX_PINS;
   $("entNewWrap").hidden = !canAdd;
   if (canAdd) $("entNewText").textContent = `Add as a new pin (keep ${coast.pins.length > 1 ? "the others" : coast.pin.label})`;
@@ -855,7 +942,12 @@ function placeResult() {
   if (bT === null) return { error: "Choose a direction, or type a bearing" };
   const dist = parseFloat($("entDist").value);
   if (isNaN(dist) || dist <= 0) {
-    return { line: { lat: e.place.lat, lon: e.place.lon, bearingT: bT, label: `${dirText} from ${e.place.name}` } };
+    return { line: {
+      lat: e.place.lat, lon: e.place.lon, bearingT: bT, label: `${dirText} from ${e.place.name}`,
+      // What was typed, so the line can be opened again and changed.
+      from: { name: e.place.name, lat: e.place.lat, lon: e.place.lon },
+      bearingNum: isNaN(bearingNum) ? null : bearingNum, bearingType: e.bearingType, dir: isNaN(bearingNum) ? e.dir : null,
+    } };
   }
   const unitM = e.unit === "nm" ? NM : e.unit === "mi" ? STATUTE_MILE : 1;
   const unitText = e.unit === "nm" ? "nm" : e.unit === "mi" ? (dist === 1 ? "mile" : "miles") : "m";
@@ -894,6 +986,11 @@ function updateEntryPreview() {
   const r = placeResult();
   el.classList.toggle("bad", !!r.error);
   if (r.error) { el.textContent = r.error; $("entGo").textContent = "Set"; return; }
+  if (r.line && coast.entry.editId) {
+    el.textContent = `Bearing ${coast.entry.editId}: ${r.line.label}`;
+    $("entGo").textContent = `Update bearing ${coast.entry.editId}`;
+    return;
+  }
   if (r.line) {
     if (coast.lines.length >= MAX_LINES) {
       el.textContent = "Three lines are drawn already — remove one on the map card first";
@@ -902,8 +999,8 @@ function updateEntryPreview() {
       return;
     }
     const id = ["A", "B", "C"].find(x => !coast.lines.some(l => l.id === x));
-    el.textContent = `Line ${id}: ${r.line.label} — no distance, so no pin${coast.lines.length ? "; the card will show where the lines cross" : ""}`;
-    $("entGo").textContent = `Draw line ${id}`;
+    el.textContent = `Bearing ${id}: ${r.line.label} — no distance, so no pin${coast.lines.length ? "; the map will circle where the lines cross" : ""}`;
+    $("entGo").textContent = `Draw bearing ${id}`;
     return;
   }
   el.textContent = `Pin ${r.source} = ${degMin(r.point.lat, r.point.lon)}`;
@@ -923,7 +1020,11 @@ function applyEntry() {
   } else {
     const r = placeResult();
     if (r.error) return;
-    if (r.line) {
+    if (r.line && coast.entry.editId) {
+      const i = coast.lines.findIndex(l => l.id === coast.entry.editId);
+      if (i >= 0) coast.lines[i] = { id: coast.entry.editId, ...r.line };
+      saveLines();
+    } else if (r.line) {
       if (!addLine(r.line)) return;
       const fix = computeFix();
       if (fix && !fix.none) centreOn(fix.centre, Math.max(fix.radiusM * 4, 1.5 * NM));
@@ -938,6 +1039,23 @@ function applyEntry() {
   }
   closeEntry();
   updatePinCard();
+  queueDraw();
+}
+
+// "Use as practice position": the point the Position screen would pin,
+// used as a pretend Me instead (for trying the map out away from the bay).
+function applyPractice() {
+  let pt = null;
+  if (coast.entry.mode === "latlon" || coast.entry.mode === "grid") {
+    const text = coast.entry.mode === "grid" ? $("entGridInput").value : $("entLatLonInput").value;
+    pt = (coast.entry.mode === "grid" ? null : parseLatLon(text)) || gridEntry(text);
+  } else {
+    const r = placeResult();
+    if (r.point) pt = r.point;
+  }
+  if (!pt) { $("entPreview").textContent = "Needs a position: lat/long, a grid ref, or a place with a distance"; $("entPreview").classList.add("bad"); return; }
+  closeEntry();
+  setPracticeMe(pt.lat, pt.lon); // also fits Me and the target on screen
   queueDraw();
 }
 
@@ -967,6 +1085,7 @@ function setUpEntry() {
   document.querySelectorAll("#entUnits button").forEach(b => b.addEventListener("click", () => { coast.entry.unit = b.dataset.unit; renderEntry(); }));
   document.querySelectorAll("#entBType button").forEach(b => b.addEventListener("click", () => { coast.entry.bearingType = b.dataset.bt; renderEntry(); }));
   $("entGo").addEventListener("click", applyEntry);
+  $("entPractice").addEventListener("click", applyPractice);
   $("entVariation").textContent = `Magnetic variation here: ${Math.abs(declinationNow()).toFixed(1)}° ${declinationNow() < 0 ? "W" : "E"} (WMM2025).`;
 }
 
@@ -1552,6 +1671,8 @@ function drawRouteLine(target, colour) {
 // start, with ticks every nautical mile so a distance can be judged.
 function drawBearingLine() {
   const { ctx } = coast;
+  // While Me is on, only the crossing's circle stays (drawn with the track).
+  if (meOn() && coast.me) { drawFix(); return; }
   for (const L of coast.lines) {
     const colour = LINE_COLOURS[L.id] || "#ff9a3c";
     const end = destination(L, L.bearingT, 12 * NM);
@@ -1562,16 +1683,7 @@ function drawBearingLine() {
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     ctx.lineWidth = 3; ctx.strokeStyle = colour;
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    ctx.font = "600 11px -apple-system, BlinkMacSystemFont, sans-serif";
-    ctx.textBaseline = "middle";
-    for (let n = 1; n <= 12; n++) {
-      const p = destination(L, L.bearingT, n * NM);
-      const s2 = toScreen(p.lat, p.lon);
-      if (s2.x < -20 || s2.y < -20 || s2.x > coast.w + 20 || s2.y > coast.h + 20) continue;
-      ctx.beginPath(); ctx.arc(s2.x, s2.y, 4, 0, Math.PI * 2); ctx.fillStyle = colour; ctx.fill();
-      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
-      ctx.strokeText(`${n} nm`, s2.x + 7, s2.y); ctx.fillStyle = "#f1efe8"; ctx.fillText(`${n} nm`, s2.x + 7, s2.y);
-    }
+    drawTicks(L, L.bearingT, 12 * NM, colour);
     ctx.beginPath(); ctx.arc(a.x, a.y, 9, 0, Math.PI * 2); ctx.fillStyle = colour; ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = "#0e1116"; ctx.stroke();
     ctx.font = "800 11px -apple-system, BlinkMacSystemFont, sans-serif";
@@ -1579,6 +1691,64 @@ function drawBearingLine() {
     ctx.restore();
   }
   drawFix();
+}
+
+// Ticks across a line from `from`, every scale-bar step (no labels: the
+// scale bar says what one step is), in the line's own colour.
+function drawTicks(from, bearingTrue, lengthM, colour) {
+  const { ctx } = coast;
+  const stepM = scaleStepNm() * NM;
+  const n = Math.floor(lengthM / stepM);
+  if (n > 400) return;
+  const b = bearingTrue * Math.PI / 180;
+  // Screen direction across the line (map north is up).
+  const px = Math.cos(b), py = Math.sin(b);
+  ctx.save();
+  ctx.lineCap = "round";
+  for (let i = 1; i <= n; i++) {
+    const p = destination(from, bearingTrue, i * stepM);
+    const s2 = toScreen(p.lat, p.lon);
+    if (s2.x < -10 || s2.y < -10 || s2.x > coast.w + 10 || s2.y > coast.h + 10) continue;
+    const big = i % 4 === 0, h = big ? 9 : 6;
+    ctx.beginPath(); ctx.moveTo(s2.x - px * h, s2.y - py * h); ctx.lineTo(s2.x + px * h, s2.y + py * h);
+    ctx.lineWidth = 5; ctx.strokeStyle = "rgba(10,12,16,0.8)"; ctx.stroke();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = colour; ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// The boat's track: from Me to the target, white, ticked at the scale
+// step, with the distance and magnetic bearing in a label part way along.
+function drawTrack() {
+  if (!coast.me) return;
+  const tgt = meTarget();
+  if (!tgt) return;
+  const { ctx } = coast;
+  const a = toScreen(coast.me.lat, coast.me.lon), b = toScreen(tgt.lat, tgt.lon);
+  const bT = bearingT(coast.me, tgt), dM = distanceM(coast.me, tgt);
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineWidth = 6; ctx.strokeStyle = "rgba(10,12,16,0.75)";
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.lineWidth = 3; ctx.strokeStyle = "#ffffff";
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.restore();
+  drawTicks(coast.me, bT, dM, "#ffffff");
+  // Label: a dark pill at the middle of the track.
+  const text = `${distText(dM)} · ${bearingText(bT)}`;
+  ctx.save();
+  ctx.font = "700 14px -apple-system, BlinkMacSystemFont, sans-serif";
+  const w = ctx.measureText(text).width + 14;
+  const mx = Math.max(w / 2 + 6, Math.min(coast.w - w / 2 - 6, (a.x + b.x) / 2));
+  const my = Math.max(40, Math.min(coast.h - 20, (a.y + b.y) / 2 - 18));
+  ctx.fillStyle = "rgba(14,17,22,0.92)";
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(mx - w / 2, my - 12, w, 24, 8); else ctx.rect(mx - w / 2, my - 12, w, 24);
+  ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = "#ffffff"; ctx.stroke();
+  ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(text, mx, my + 0.5);
+  ctx.restore();
 }
 
 // The crossing (or cocked hat) and its circle.
@@ -1621,13 +1791,7 @@ function drawPinAndMe() {
   drawBearingLine();
   if (pin && coast.show.shore) drawRouteLine(pin.shore, "#ffe08a");
   if (pin && coast.show.way) drawRouteLine(pin.wayOff, "#5fe08a");
-  if (pin && me) {
-    const a = toScreen(me.lat, me.lon), b = toScreen(pin.lat, pin.lon);
-    ctx.save();
-    ctx.setLineDash([6, 5]); ctx.lineWidth = 2; ctx.strokeStyle = "rgba(255,255,255,0.85)";
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    ctx.restore();
-  }
+  if (me) drawTrack();
   if (me) {
     const s = toScreen(me.lat, me.lon);
     const r = Math.max(me.acc / coast.view.mpp, 8);
@@ -1636,7 +1800,15 @@ function drawPinAndMe() {
     ctx.lineWidth = 1; ctx.strokeStyle = "rgba(120,180,255,0.6)"; ctx.stroke();
     ctx.beginPath(); ctx.arc(s.x, s.y, 7, 0, Math.PI * 2);
     ctx.fillStyle = "#3d8bff"; ctx.fill();
-    ctx.lineWidth = 2.5; ctx.strokeStyle = "#ffffff"; ctx.stroke();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = me.practice ? "#fac775" : "#ffffff"; ctx.stroke();
+    if (me.practice) {
+      ctx.save();
+      ctx.font = "700 11px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
+      ctx.strokeText("PRACTICE", s.x + 11, s.y); ctx.fillStyle = "#fac775"; ctx.fillText("PRACTICE", s.x + 11, s.y);
+      ctx.restore();
+    }
   }
   // Pins: the selected one red, others dark red; names beside them once
   // there's more than one (or one has been named).
@@ -1762,14 +1934,21 @@ function drawNames() {
 }
 
 // Scale bar in nautical miles (or cables when close in) and metres.
+// The scale bar's length in nautical miles at this zoom. Bearing and
+// track lines are ticked at the same spacing, so a distance along them
+// can be counted off against the bar.
+function scaleStepNm() {
+  const choices = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5];
+  let pick = choices[0];
+  for (const c of choices) if (c * NM / coast.view.mpp <= 110) pick = c;
+  return pick;
+}
+
 function drawScaleBar() {
   const { ctx } = coast;
   const mpp = coast.view.mpp;
-  const targetPx = 110;
   const nm = 1852;
-  const choices = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5]; // nautical miles
-  let pick = choices[0];
-  for (const c of choices) if (c * nm / mpp <= targetPx) pick = c;
+  const pick = scaleStepNm();
   const px = pick * nm / mpp;
   // Top left (the bottom of the map is for the pin card; the time pill
   // is top right).

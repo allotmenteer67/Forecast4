@@ -413,7 +413,11 @@
 // and bearings shown magnetic (WMM2025).
 // Bumped to v93: coast map — hatched foreshore now from Ordnance Survey
 // (dries at low tide, height unknown); key, credits and Help updated.
-// Bumped to v103: coast map takes up to three pins (named, one selected)
+// Bumped to v104: coast map bearing lines lose their "n nm" labels for
+// ticks at the scale-bar spacing; with Me on they hide, leaving the track
+// (ticked, with distance and bearing) to the circle's middle or the pin;
+// bearings can be reopened and changed; practice position for Me.
+// v103: coast map takes up to three pins (named, one selected)
 // and up to three bearing lines A-C; where lines cross is circled
 // (cocked hat with three), with "Set pin here" and a poor-cut warning.
 // v102: night mode (night.js, added to SHELL_FILES): a Night
@@ -444,7 +448,7 @@
 // v94: coast map — Ordnance Survey mean low water line drawn
 // as a white dotted line (data/coast/stbrides/low-water.json, made by
 // the coast-heights workflow); key and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v103";
+const SHELL_CACHE_NAME = "cloude-shell-v104";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
