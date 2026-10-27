@@ -53,6 +53,8 @@
     /* Title centred and buttons on the right: on an iPad in a window the
        system's window dots sit over the top-left corner. */
     .top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+    .top .top-left { grid-column: 1; justify-self: start; }
+    .top .title { grid-column: 2; }
     .title { font-size: 17px; font-weight: 600; grid-column: 2; }
     .top-right { grid-column: 3; justify-self: end; }
     button {
@@ -176,10 +178,13 @@
       document.addEventListener("dblclick", function (e) { e.preventDefault(); }, { passive: false });
     })();
   </script>
+  <script src="night.js"></script>
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><filter id="nightRed" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.26 0.52 0.10 0 0.015  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter></svg>
   <header>
     <div class="top">
+      <button id="nightToggle" class="night-toggle top-left" type="button" aria-pressed="false" aria-label="Night mode"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.8 1.6a6.6 6.6 0 1 0 3.6 10.6A5.6 5.6 0 0 1 10.8 1.6z" fill="currentColor"/></svg><span class="night-label">Night</span></button>
       <span class="title">Coast map</span>
       <button id="coastBack" class="top-right" type="button">‹ Back</button>
     </div>

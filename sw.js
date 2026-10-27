@@ -413,7 +413,10 @@
 // and bearings shown magnetic (WMM2025).
 // Bumped to v93: coast map — hatched foreshore now from Ordnance Survey
 // (dries at low tide, height unknown); key, credits and Help updated.
-// Bumped to v101: OS grid references on the coast map (Grid ref tab in
+// Bumped to v102: night mode (night.js, added to SHELL_FILES): a Night
+// button on the Callout screen and the Coast map turns both pages dim
+// red to keep night vision; one shared setting.
+// v101: OS grid references on the coast map (Grid ref tab in
 // Position, and the pin's and your own grid ref on the card; osgrid.js),
 // and the moon on the Callout screen's Light box (moon.js). Both added
 // to SHELL_FILES.
@@ -438,7 +441,7 @@
 // v94: coast map — Ordnance Survey mean low water line drawn
 // as a white dotted line (data/coast/stbrides/low-water.json, made by
 // the coast-heights workflow); key and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v101";
+const SHELL_CACHE_NAME = "cloude-shell-v102";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -459,6 +462,7 @@ const SHELL_FILES = [
   "callout-detail.js",
   "moon.js",
   "osgrid.js",
+  "night.js",
   "sunvis.js",
   "coast.html",
   "coast.js",
