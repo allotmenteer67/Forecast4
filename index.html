@@ -75,15 +75,42 @@
     <!-- Callout button: only shown when "Show Callout button" is ticked
          in Settings, so nobody else sees any change. Styled inline so it
          looks the same in every Appearance theme. -->
-    <a id="calloutButton" href="callout.html" hidden
-       style="display:none;margin:0 0 0.8em;padding:0.7em 1em;border-radius:12px;background:#a32d2d;color:#fff;font-weight:600;font-size:1.05em;text-align:center;text-decoration:none;-webkit-tap-highlight-color:transparent;">Callout</a>
+    <a id="calloutButton" href="callout.html" hidden>Callout</a>
+    <style>
+      /* With the Callout button switched on, it sits in the title bar as
+         a small red pill between the place name and the settings icon,
+         instead of a full-width bar taking room from the map. The title
+         shrinks to make space, and the place name joins the row's normal
+         flow (rather than being centred over it) so nothing overlaps.
+         Colours are fixed so it looks the same in every Appearance theme.
+         With the button switched off, none of this applies. */
+      #calloutButton {
+        display: none; align-items: center; justify-content: center; flex: 0 0 auto; order: 2;
+        min-height: 36px; padding: 0 14px; border-radius: 999px;
+        background: #a32d2d; color: #fff; font-weight: 700; font-size: 15px;
+        text-decoration: none; -webkit-tap-highlight-color: transparent; white-space: nowrap;
+      }
+      #calloutButton:active { background: #8a2525; }
+      .title-bar.has-callout #calloutButton { display: inline-flex; }
+      .title-bar.has-callout h1 { font-size: 22px; flex: 0 0 auto; }
+      .title-bar.has-callout .title-bar-right {
+        position: static; order: 1; flex: 1 1 auto; min-width: 0; justify-content: center;
+      }
+      .title-bar.has-callout .place-chip { padding: 0 11px; }
+      .title-bar.has-callout .settings-icon-button { order: 3; width: 40px; }
+    </style>
     <script>
       (function () {
         try {
           if (localStorage.getItem("cloude-callout:showButton") === "1") {
             var b = document.getElementById("calloutButton");
-            b.hidden = false;
-            b.style.display = "block";
+            var bar = document.querySelector(".title-bar");
+            var icon = bar && bar.querySelector(".settings-icon-button");
+            if (b && bar && icon) {
+              bar.insertBefore(b, icon);
+              bar.classList.add("has-callout");
+              b.hidden = false;
+            }
           }
         } catch {}
       })();

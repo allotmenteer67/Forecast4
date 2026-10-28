@@ -413,7 +413,12 @@
 // and bearings shown magnetic (WMM2025).
 // Bumped to v93: coast map — hatched foreshore now from Ordnance Survey
 // (dries at low tide, height unknown); key, credits and Help updated.
-// Bumped to v108: coast map data credits moved from the Key to Help
+// Bumped to v110: front page Callout button moves into the title bar as
+// a small red pill (between the place name and settings) when switched
+// on, instead of a full-width bar.
+// v109: "Can't do pickup" can send a plain "called out"
+// message when no pickup is named or ticked (wording under More options).
+// v108: coast map data credits moved from the Key to Help
 // ("Coast map credits", help.html#coast-credits), linked from the
 // coast map footer.
 // v107: coast map card drops the crossing details and "Set pin
@@ -461,7 +466,7 @@
 // v94: coast map — Ordnance Survey mean low water line drawn
 // as a white dotted line (data/coast/stbrides/low-water.json, made by
 // the coast-heights workflow); key and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v108";
+const SHELL_CACHE_NAME = "cloude-shell-v110";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
