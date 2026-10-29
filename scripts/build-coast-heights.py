@@ -32,6 +32,12 @@
 #           ground as Foreshore (between the mean low and mean high water
 #           marks, OS OpenMap Local): it dries at low tide, height
 #           unknown. The map hatches these.
+#           3 where the ground had no survey data inside the OS foreshore
+#           but its height has been ESTIMATED (red holds the estimate): a
+#           smooth slope from the surveyed beach above it down to mean low
+#           water (MLW_OD) at the sea's edge. The map colours these with
+#           the tide like real ground, but hatched, as a guess.
+#           2 is only left where no estimate could be made.
 #           1 (only if the OS download failed, as before): no survey data
 #           but surveyed foreshore below +1 m OD within about 40 m.
 #           0 everywhere else — including no-data cells outside the OS
@@ -50,12 +56,23 @@
 # marked as at beach level or not, so a cliff-top path that merely
 # passes close to a beach in plan isn't shown as a way off.
 #
+# Estimated foreshore heights: every patch of OS foreshore the survey
+# couldn't see is filled with the smoothest surface that meets the
+# surveyed ground round it (its height kept between mean low and mean
+# high water) and meets the sea at mean low water — like a sheet stretched
+# between the beach and the low water mark. It's solved over the tile plus
+# ESTIMATE_PAD cells all round, so patches crossing a tile edge join up.
+# Mean low and high water are for Milford Haven (Admiralty tide tables):
+# MLWS 0.7, MLWN 2.5, MHWN 5.2, MHWS 7.0 m above Chart Datum, which is
+# 3.71 m below Ordnance Datum.
+#
 # Source and licence: Welsh Government LiDAR 2020-2023, 1 m DTM,
 # published on DataMapWales under the Open Government Licence v3.0.
 #
 # The sea itself usually gives no laser return, so it shows as "no
 # data". Foreshore that was underwater when the survey plane flew over
-# is missing too; the map will show it as unknown rather than guess.
+# is missing too; where OS maps it as foreshore its height is estimated
+# (blue = 3, above), and the map shows it hatched as a guess.
 
 import json
 import math
@@ -102,6 +119,9 @@ RELIEF_MIN_M = 4.0          # steepness only counts where height changes this mu
 RELIEF_HALF = 3             # ... within 3 cells each way (a 7 x 7 cell, ~14 m window)
 UNSURVEYED_LOW_M = 1.0      # surveyed ground this low counts as foreshore
 UNSURVEYED_REACH = 20       # unsurveyed cells within 20 cells (~40 m) of it are flagged
+MLW_OD = -2.1               # mean low water at Milford Haven, m OD ((0.7 + 2.5) / 2 - 3.71)
+MHW_OD = 2.4                # mean high water, m OD ((5.2 + 7.0) / 2 - 3.71)
+ESTIMATE_PAD = 128          # cells (~250 m) of surroundings used when estimating
 
 OUT_DIR = os.path.join("data", "coast", AREA_ID)
 HEIGHTS_DIR = os.path.join(OUT_DIR, "heights")
@@ -415,6 +435,53 @@ def shape_bounds(geom):
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def estimate_foreshore(h, fmask):
+    """Estimated heights for the cells with no survey height (NaN in h)
+    inside the OS foreshore (fmask): the smooth surface (Laplace's
+    equation) that meets the surveyed ground next to it, clipped to mean
+    low..mean high water, and meets mean low water where it touches cells
+    with no height outside the foreshore (the sea). The edge of the grid
+    is left free. Returns a float array, NaN except at estimated cells,
+    or None if there's nothing to estimate."""
+    import scipy.sparse as sp
+    from scipy.sparse.linalg import spsolve
+    unknown = np.isnan(h) & fmask
+    n = int(unknown.sum())
+    if n == 0:
+        return None
+    rows, cols = h.shape
+    idx = -np.ones(h.shape, dtype=np.int64)
+    idx[unknown] = np.arange(n)
+    edge = np.where(np.isnan(h), MLW_OD, np.clip(h, MLW_OD, MHW_OD))
+    diag = np.zeros(n)
+    b = np.zeros(n)
+    ii, jj = [], []
+    uy, ux = np.nonzero(unknown)
+    me = idx[uy, ux]
+    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        ny, nx = uy + dy, ux + dx
+        ok = (ny >= 0) & (ny < rows) & (nx >= 0) & (nx < cols)
+        m, yy, xx = me[ok], ny[ok], nx[ok]
+        diag[m] += 1
+        nb = idx[yy, xx]
+        inner = nb >= 0
+        ii.append(m[inner]); jj.append(nb[inner])
+        np.add.at(b, m[~inner], edge[yy[~inner], xx[~inner]])
+    # A whisper of pull towards low water, only so that a patch touching
+    # nothing but the grid's edge still has an answer.
+    eps = 1e-8
+    diag += eps
+    b += eps * MLW_OD
+    ii = np.concatenate(ii); jj = np.concatenate(jj)
+    a = sp.csc_matrix((np.concatenate([diag, -np.ones(len(ii))]),
+                       (np.concatenate([np.arange(n), ii]), np.concatenate([np.arange(n), jj]))),
+                      shape=(n, n))
+    x = spsolve(a, b)
+    out = np.full(h.shape, np.nan, dtype=np.float32)
+    out[unknown] = np.clip(x, MLW_OD, MHW_OD)
+    return out
+
+
 def encode_height(h):
     code = np.zeros(h.shape, dtype=np.uint8)
     valid = ~np.isnan(h)
@@ -501,6 +568,7 @@ def main():
         # steepness at tile edges) without reading off the grid's edge.
         fine_t = from_origin(WEST - D_LON, NORTH + D_LAT, D_LON, D_LAT)
         tiles = []
+        est_cells = est_tiles = 0
         with WarpedVRT(src, crs="EPSG:4326", transform=fine_t,
                        width=tile_cols * TILE + 2, height=tile_rows * TILE + 2,
                        resampling=Resampling.average, src_nodata=nodata, nodata=np.nan,
@@ -534,6 +602,15 @@ def main():
                                           transform=from_origin(west, north, D_LON, D_LAT),
                                           fill=0, default_value=1, dtype="uint8").astype(bool)
                         rgb[..., 2] = (np.isnan(h) & fmask).astype(np.uint8) * 2
+                        if (rgb[..., 2] == 2).any():
+                            est = estimate_tile(vrt, r, c, tile_rows, tile_cols, foreshore, fs_bounds)
+                            if est is not None:
+                                done = (rgb[..., 2] == 2) & ~np.isnan(est)
+                                rgb[..., 0][done] = encode_height(est)[done]
+                                rgb[..., 1][done] = 0
+                                rgb[..., 2][done] = 3
+                                est_cells += int(done.sum())
+                                est_tiles += 1
                 else:
                     low = (~np.isnan(h)) & (h <= UNSURVEYED_LOW_M)
                     unsurveyed = np.isnan(h) & grow(low, UNSURVEYED_REACH)
@@ -545,6 +622,9 @@ def main():
                               "north": round(north, 6), "east": round(east, 6)})
                 if n % 10 == 0 or n == len(wanted):
                     print(f"  built {n}/{len(wanted)}")
+        if foreshore is not None:
+            print(f"Foreshore heights estimated: {est_cells} cells "
+                  f"(about {est_cells * 4 / 1e6:.2f} km²) in {est_tiles} tiles")
 
     # Remove tiles left over from an earlier run that aren't built now.
     keep = {t["file"] for t in tiles}
@@ -559,10 +639,13 @@ def main():
         "encoding": {
             "red": "ground height: 0 = no data (usually sea); 1-254 = (red - 1) / 10 - 6 metres above Ordnance Datum; 255 = above 19.3 m, or land more than about 250 m from the sea (kept without detail)",
             "green": "steepness in degrees",
-            "blue": ("2 = no survey data, but Ordnance Survey foreshore (between mean low and mean high water): dries at low tide, height unknown; 0 otherwise (no-data outside it is sea)"
+            "blue": ("3 = no survey data, Ordnance Survey foreshore, height ESTIMATED (red holds the estimate: a smooth slope from the surveyed beach down to mean low water at the sea's edge); 2 = OS foreshore, no survey data and no estimate: dries at low tide, height unknown; 0 otherwise (no-data outside the foreshore is sea)"
                      if foreshore is not None else
                      "1 = no survey data but almost certainly foreshore or shallows (within ~40 m of surveyed ground below +1 m OD); 0 otherwise"),
             "foreshoreSource": "Ordnance Survey OpenMap Local (Contains OS data © Crown copyright and database right, OGL)" if foreshore is not None else None,
+            "estimate": ({"meanLowWaterOD": MLW_OD, "meanHighWaterOD": MHW_OD,
+                          "method": "smoothest surface between the surveyed ground (kept within mean low..mean high water) and mean low water at the sea"}
+                         if foreshore is not None else None),
             "heightMin": HEIGHT_MIN, "heightMax": HEIGHT_MAX, "heightStep": 0.1,
         },
         "landmask": {"file": "landmask.png", "dLat": D_LAT * COARSE, "dLon": D_LON * COARSE,
@@ -578,6 +661,31 @@ def main():
     check_access(tiles)
     size = sum(os.path.getsize(os.path.join(HEIGHTS_DIR, t["file"])) for t in tiles)
     print(f"Done: {len(tiles)} tiles, {size / 1e6:.1f} MB")
+
+
+def estimate_tile(vrt, r, c, tile_rows, tile_cols, foreshore, fs_bounds):
+    """Estimated foreshore heights for one tile (TILE x TILE, NaN where not
+    estimated), worked out over the tile plus ESTIMATE_PAD cells round it."""
+    full_w, full_h = tile_cols * TILE + 2, tile_rows * TILE + 2
+    # Tile cell (0, 0) is the detailed grid's cell (r*TILE+1, c*TILE+1).
+    y0 = max(0, r * TILE + 1 - ESTIMATE_PAD); y1 = min(full_h, r * TILE + 1 + TILE + ESTIMATE_PAD)
+    x0 = max(0, c * TILE + 1 - ESTIMATE_PAD); x1 = min(full_w, c * TILE + 1 + TILE + ESTIMATE_PAD)
+    h = clean(vrt.read(1, window=Window(x0, y0, x1 - x0, y1 - y0)), np.nan)
+    north = NORTH + D_LAT - y0 * D_LAT
+    west = WEST - D_LON + x0 * D_LON
+    south = north - (y1 - y0) * D_LAT
+    east = west + (x1 - x0) * D_LON
+    here = [g for g, (gx0, gy0, gx1, gy1) in zip(foreshore, fs_bounds)
+            if gx1 >= west and gx0 <= east and gy1 >= south and gy0 <= north]
+    if not here:
+        return None
+    fmask = rasterize(here, out_shape=h.shape, transform=from_origin(west, north, D_LON, D_LAT),
+                      fill=0, default_value=1, dtype="uint8").astype(bool)
+    est = estimate_foreshore(h, fmask)
+    if est is None:
+        return None
+    oy, ox = r * TILE + 1 - y0, c * TILE + 1 - x0
+    return est[oy:oy + TILE, ox:ox + TILE]
 
 
 def read_tile(t):
@@ -607,6 +715,9 @@ def make_preview(tiles, tile_rows, tile_cols):
         out[land & (slope >= 30)] = (230, 160, 40)
         out[land & (slope >= 55)] = (200, 50, 40)
         out[(code == 0) & (flag >= 1)] = (110, 110, 120)  # foreshore not surveyed
+        est = flag == 3
+        out[est] = (170, 160, 130)  # foreshore height estimated: muted sand
+        out[est & (h <= -1.0)] = (125, 135, 140)  # ... and dries only near low water
         img[t["r"] * per:(t["r"] + 1) * per, t["c"] * per:(t["c"] + 1) * per] = out
     Image.fromarray(img, "RGB").save(os.path.join(HEIGHTS_DIR, "preview.png"), optimize=True)
 
@@ -633,8 +744,9 @@ def check_access(tiles):
             # Lowest ground within 3 cells (6 m): the point is the path's
             # nearest vertex to the beach, so allow a little slack.
             r0, c0 = row % TILE, col % TILE
-            block = cache[key][max(0, r0 - 3):r0 + 4, max(0, c0 - 3):c0 + 4, 0].astype(int)
-            block = block[block > 0]
+            cells = cache[key][max(0, r0 - 3):r0 + 4, max(0, c0 - 3):c0 + 4]
+            # Surveyed heights only, not the estimated foreshore.
+            block = cells[..., 0].astype(int)[(cells[..., 0] > 0) & (cells[..., 2] != 3)]
             if block.size:
                 code = int(block.min())
                 ground = None if code == 255 else round((code - 1) / 10 - 6, 1)
