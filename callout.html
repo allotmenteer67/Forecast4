@@ -166,6 +166,7 @@
     .sheet details summary { font-weight: 600; color: #85b7eb; font-size: 15px; }
     .sheet details ol { padding-left: 20px; margin: 8px 0; }
     .sheet details li { margin-bottom: 6px; }
+    .sheet details ul { padding-left: 18px; margin: 6px 0 0; }
     /* Tap a box for its next 12 hours (callout-detail.js). */
     .box.tappable { position: relative; cursor: pointer; -webkit-tap-highlight-color: transparent; }
     .box.tappable:active { background: #262a30; }
@@ -272,6 +273,7 @@
       <label for="pickupIfUnable">If they can't, contact</label>
       <input id="pickupIfUnable" type="text" placeholder="e.g. Dad on 07700 900123, or Sarah" autocomplete="off">
 
+      <p id="pickupNoneNote" class="hint" hidden>No pickup named or ticked, so this sends just the "called out" message below.</p>
       <button id="pickupSendNow" class="send-now" type="button">Send now</button>
       <p id="pickupStatus" class="status"></p>
 
@@ -283,6 +285,8 @@
         <summary>More options</summary>
         <label for="pickupOpening">First line</label>
         <textarea id="pickupOpening"></textarea>
+        <label for="pickupCalledOut">Message when there's no pickup</label>
+        <textarea id="pickupCalledOut"></textarea>
         <label class="check"><input id="pickupIncludePos" type="checkbox"> Include my current position</label>
         <div class="row-buttons">
           <button id="pickupDelete" type="button">Delete saved message</button>
@@ -293,12 +297,18 @@
         <summary>How to set up the shortcut (once)</summary>
         <p>Cloude writes the message; an iPhone Shortcut called <b>Cloude Pickup</b> sends it from your own number and email without asking. Set it up in the Shortcuts app:</p>
         <ol>
-          <li>Open <b>Shortcuts</b>, tap <b>+</b>, and name the new shortcut exactly <b>Cloude Pickup</b>.</li>
-          <li>Add the action <b>Send Message</b>. Tap <b>Message</b> and choose <b>Shortcut Input</b>. Tap <b>Recipients</b> and pick up to 3 people. Open the action's little arrow and turn <b>Show When Run</b> off.</li>
-          <li>Add the action <b>Send Email</b>. Put <b>Shortcut Input</b> as the message, pick up to 3 people, and type a subject such as <i>Pickup needed</i>. Open its arrow and turn <b>Show Compose Sheet</b> off.</li>
+          <li>Open <b>Shortcuts</b>, tap <b>+</b>, then tap the name at the top and call it exactly <b>Cloude Pickup</b>.</li>
+          <li>In <b>Search Actions</b> type <i>Send Message</i> and tap it. It reads <b>Send Message to 0 +</b>.
+            <ul>
+              <li>Tap the pale blue <b>Message</b> and choose <b>Shortcut Input</b> from the row above the keyboard (or tap <b>Select Variable</b>, then <b>Shortcut Input</b>).</li>
+              <li>Tap the blue <b>+</b> and pick up to 3 people.</li>
+              <li>Tap the blue <b>⌄</b> at the end and check <b>Show Compose Sheet</b> is off.</li>
+            </ul>
+          </li>
+          <li>In <b>Search Actions</b> type <i>Send Email</i> and tap it. Tap <b>Message</b> and choose <b>Shortcut Input</b> again, add up to 3 people, and type a subject such as <i>Pickup needed</i>. Tap its <b>⌄</b> and turn <b>Show Compose Sheet</b> off.</li>
           <li>Tap <b>Done</b>.</li>
         </ol>
-        <p>Test it first with only your own number and email as the recipients, then swap in the real people. The first time it runs, the iPhone asks whether the shortcut may send messages: choose <b>Always Allow</b>. If the test arrives empty, open the shortcut, tap its top line, and turn on <b>Share Sheet</b>.</p>
+        <p>Test it first with only your own number and email as the recipients, then swap in the real people. The first time it runs, the iPhone asks whether the shortcut may send messages: choose <b>Always Allow</b>. If the test arrives empty, open the shortcut, tap <b>ⓘ</b> at the bottom, and turn on <b>Show in Share Sheet</b>.</p>
         <p>To change who gets it, edit the shortcut in the Shortcuts app.</p>
       </details>
     </div>

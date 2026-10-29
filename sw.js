@@ -470,7 +470,10 @@
 // estimated heights (blue 3 in the tiles, from build-coast-heights.py):
 // coloured with the tide but hatched, walkable when dry, never pink,
 // never the pin's "nearest dry ground". Key and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v111";
+// Bumped to v112: callout.html — the Cloude Pickup shortcut set-up steps
+// match the current Shortcuts app ("Send Message to 0 +", the blue ⌄
+// arrow, Show Compose Sheet, ⓘ → Show in Share Sheet).
+const SHELL_CACHE_NAME = "cloude-shell-v112";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
