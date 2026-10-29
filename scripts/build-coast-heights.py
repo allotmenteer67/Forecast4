@@ -98,12 +98,21 @@ SOURCE_URL = os.environ.get(
 )
 
 AREA_ID = "stbrides"
-# Same outline as scripts/collect-coast-names.mjs: Newgale round the bay,
-# Skomer and Skokholm, the Marloes peninsula, down to Dale.
-NORTH, SOUTH, WEST, EAST = 51.875, 51.690, -5.360, -5.050
+# Solva and the coast from there to Newgale, round the bay, Skomer and
+# Skokholm, the Marloes peninsula, down to Dale and round St Ann's Head.
+# - North: up to 51.885, taking in Solva harbour (the village is at about
+#   51.875 N) and the coast west of it to Porth y Rhaw (5.23 W). The
+#   area used to stop at 51.875 and at 5.14 W north of 51.835, leaving
+#   out everything from Newgale west to Solva.
+# - South: St Ann's Head's tip is about 51.677 N; the area used to stop
+#   at 51.690 and cut it off. The Dale peninsula's east side (Dale
+#   Point, Watwick) reaches past 5.15 W, so that corner is wider.
+# Keep scripts/collect-coast-names.mjs's outline the same, so names and
+# ways off cover the same ground.
+NORTH, SOUTH, WEST, EAST = 51.885, 51.665, -5.360, -5.050
 COAST_OUTLINE = [
-    (51.875, -5.140), (51.875, -5.050), (51.735, -5.050), (51.735, -5.150),
-    (51.690, -5.150), (51.690, -5.360), (51.835, -5.360), (51.835, -5.140),
+    (51.885, -5.230), (51.885, -5.050), (51.735, -5.050), (51.735, -5.135),
+    (51.665, -5.135), (51.665, -5.360), (51.835, -5.360), (51.835, -5.230),
 ]
 
 # About 2 m per cell at this latitude, in both directions.
