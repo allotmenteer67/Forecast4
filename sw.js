@@ -473,7 +473,9 @@
 // Bumped to v112: callout.html — the Cloude Pickup shortcut set-up steps
 // match the current Shortcuts app ("Send Message to 0 +", the blue ⌄
 // arrow, Show Compose Sheet, ⓘ → Show in Share Sheet).
-const SHELL_CACHE_NAME = "cloude-shell-v112";
+// Bumped to v113: shortcut steps end with Show Notification and Go to
+// Home Screen, so Shortcuts doesn't stay on screen after sending.
+const SHELL_CACHE_NAME = "cloude-shell-v113";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
