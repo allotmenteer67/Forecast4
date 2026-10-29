@@ -466,7 +466,11 @@
 // v94: coast map — Ordnance Survey mean low water line drawn
 // as a white dotted line (data/coast/stbrides/low-water.json, made by
 // the coast-heights workflow); key and Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v110";
+// Bumped to v111: coast map — foreshore the survey couldn't see now has
+// estimated heights (blue 3 in the tiles, from build-coast-heights.py):
+// coloured with the tide but hatched, walkable when dry, never pink,
+// never the pin's "nearest dry ground". Key and Help updated.
+const SHELL_CACHE_NAME = "cloude-shell-v111";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

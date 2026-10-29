@@ -109,6 +109,13 @@ const SERIES_HOURS = 30;
 // almost certainly exposed sand or rock — and as water above it. Without
 // this, a low-tide beach next to unsurveyed sand showed as cut off.
 const UNSURVEYED_DRY_OD = -1.0;
+// Blue 3 in a tile: foreshore the survey couldn't see whose height the
+// build has ESTIMATED (a smooth slope from the surveyed beach down to
+// mean low water at the sea's edge). It's coloured with the tide like
+// real ground, but hatched; it can be walked on when the estimate says
+// it's dry, but is never itself shown cut off (pink), and never counts
+// as the "nearest dry ground" for a pin.
+const FLAG_ESTIMATED = 3;
 // Pink (cut off) is only shown for stranded patches that come within
 // this many cells (~60 m) of land above beach height — the whole patch,
 // so a wide stranded beach is pink right down to the water's edge. Out
@@ -128,6 +135,7 @@ const C = {
   cliff: [205, 70, 60],
   cutoff: [214, 72, 190],         // dry, but no dry way out
   unsurveyed: [92, 96, 108],      // foreshore the survey couldn't see
+  estSand: [196, 180, 138],       // estimated foreshore, dry: sand, a touch muted
   unsurveyedHatch: [122, 126, 138],
   // Plain land (inland, and the coarse outline) is drawn at the shade
   // typical of gently sloping fields, so the joins with detailed land
@@ -669,7 +677,7 @@ async function nearestDryGround(pt) {
       const gy = meta.r * T + y;
       for (let x = 0; x < T; x++) {
         const code = e.codes[y * T + x];
-        if (code === 0 || code <= cover) continue;
+        if (code === 0 || code <= cover || e.flags[y * T + x] === FLAG_ESTIMATED) continue;
         const gx = meta.c * T + x;
         const dy = (gy - row) * g.dLat * KY, dx = (gx - col) * g.dLon * KX;
         const d2 = dx * dx + dy * dy;
@@ -1501,7 +1509,7 @@ function computeCutoff() {
       for (let x = 0; x < T; x++) {
         const k = dst + x;
         const code = e.codes[src + x];
-        if (state[k] === 4 && code !== 0 && code <= sandCode) {
+        if (state[k] === 4 && code !== 0 && code <= sandCode && e.flags[src + x] !== FLAG_ESTIMATED) {
           if (!cut) cut = new Uint8Array(T * T);
           cut[src + x] = 1;
         }
@@ -1642,6 +1650,15 @@ function renderTile(e, lv) {
   for (let i = 0, j = 0; i < n; i++, j += 4) {
     const code = e.codes[i];
     let col;
+    if (code !== 0 && e.flags && e.flags[i] === FLAG_ESTIMATED) {
+      // Estimated foreshore: the tide's colours, with a fine diagonal
+      // hatch of darker lines so it reads as a guess.
+      col = code <= coverCode ? C.covered : code <= soonCode ? C.soon : C.estSand;
+      const x = i % size, y = (i / size) | 0;
+      const k = ((x + y) % 6) < 2 ? 0.74 : 1;
+      p[j] = col[0] * k; p[j + 1] = col[1] * k; p[j + 2] = col[2] * k; p[j + 3] = 255;
+      continue;
+    }
     if (code === 0) {
       // Foreshore the survey couldn't see (blue channel 2: Ordnance
       // Survey foreshore, between mean low and mean high water; 1 in
