@@ -2,7 +2,7 @@
 //
 // Run by .github/workflows/coast-data.yml (by hand, from the Actions
 // tab — not on a schedule; this data hardly ever changes). Collects, for
-// one stretch of coast (COAST_AREA below: Solva to St Ann's Head):
+// one stretch of coast (COAST_AREA below: Ramsey to St Ann's Head):
 //
 //   names.json     every named coastal feature — headlands, points,
 //                  bays, beaches, rocks, islands, villages near the shore
@@ -42,23 +42,22 @@ import os from "node:os";
 // ---- The stretch of coast ----
 const COAST_AREA = {
   id: "stbrides",
-  label: "St Brides Bay — Solva to St Ann's Head, with Skomer and Skokholm",
+  label: "St Brides Bay — Ramsey and St Davids to St Ann's Head, with Skomer and Skokholm",
   south: 51.665,
-  west: -5.36,
+  west: -5.38,
   north: 51.885,
   east: -5.05
 };
 // The download box above is a simple rectangle, which also catches the
-// coast west of Solva (towards Ramsey and St Davids) and the inside of
-// Milford Haven east of Dale. Everything is trimmed to this outline
-// instead: Solva (and the coast west of it to Porth y Rhaw) along to
-// Newgale, round the bay, Skomer and Skokholm, the Marloes peninsula,
-// and down to Dale and round St Ann's Head. [lat, lon] corners. Kept the
-// same as scripts/build-coast-heights.py, so names, ways off and the
-// height tiles cover the same ground.
+// inside of Milford Haven east of Dale. Everything is trimmed to this
+// outline instead: the St Davids peninsula's south coast and Ramsey
+// Island, Solva along to Newgale, round the bay, Skomer and Skokholm, the
+// Marloes peninsula, and down to Dale and round St Ann's Head. [lat, lon]
+// corners. Kept the same as scripts/build-coast-heights.py, so names,
+// ways off and the height tiles cover the same ground.
 const COAST_OUTLINE = [
-  [51.885, -5.230], [51.885, -5.050], [51.735, -5.050], [51.735, -5.135],
-  [51.665, -5.135], [51.665, -5.360], [51.835, -5.360], [51.835, -5.230]
+  [51.885, -5.380], [51.885, -5.050], [51.735, -5.050], [51.735, -5.135],
+  [51.665, -5.135], [51.665, -5.380]
 ];
 
 // Names further than this from the coastline are left out (farms and
