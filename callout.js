@@ -312,6 +312,8 @@ function visibilityWord(metres) {
   return "Good";
 }
 const VIS_RANK = { "Good": 0, "Moderate": 1, "Poor": 2, "Very poor": 3 };
+const VIS_WARN_METRES = 1852;   // 1 nautical mile
+const VIS_WARN_HOURS = 3;       // how far ahead to look for it
 
 function visibilityDistance(metres, units) {
   if (units && units.visMiles) {
@@ -331,18 +333,33 @@ function renderVisibility(entry, units) {
     return;
   }
   const now = visibilityWord(h.visibility[idx]);
-  // First time in the next 12 hours that it gets a category worse.
   let line = `${visibilityDistance(h.visibility[idx], units)} now`;
-  for (let i = idx + 1; i <= idx + 12 && i < h.time.length; i++) {
-    if (typeof h.visibility[i] !== "number") continue;
-    const later = visibilityWord(h.visibility[i]);
-    if (VIS_RANK[later] > VIS_RANK[now]) {
-      line = `${later} after ${clockTime(new Date(h.time[i] * 1000))}`;
-      break;
+  // Warning: under 1 nautical mile now, or forecast to drop under it in
+  // the next VIS_WARN_HOURS (an inshore callout's length). Then the box
+  // turns amber (but stays white in night mode; see callout.html).
+  let warn = h.visibility[idx] < VIS_WARN_METRES;
+  if (!warn) {
+    for (let i = idx + 1; i <= idx + VIS_WARN_HOURS && i < h.time.length; i++) {
+      if (typeof h.visibility[i] === "number" && h.visibility[i] < VIS_WARN_METRES) {
+        warn = true;
+        line = `Under 1 nm by ${clockTime(new Date(h.time[i] * 1000))}`;
+        break;
+      }
     }
   }
-  const cls = VIS_RANK[now] >= 2 ? "warm" : "";
-  box.innerHTML = smallBoxHtml("Visibility", now, line, cls);
+  if (!warn) {
+    // First time in the next 12 hours that it gets a category worse.
+    for (let i = idx + 1; i <= idx + 12 && i < h.time.length; i++) {
+      if (typeof h.visibility[i] !== "number") continue;
+      const later = visibilityWord(h.visibility[i]);
+      if (VIS_RANK[later] > VIS_RANK[now]) {
+        line = `${later} after ${clockTime(new Date(h.time[i] * 1000))}`;
+        break;
+      }
+    }
+  }
+  box.innerHTML = smallBoxHtml("Visibility", now, line, warn ? "vis-warn" : "");
+  box.querySelector(".line").classList.toggle("vis-warn", warn);
 }
 
 // ---- Light box (worked out on the phone — no download needed) ----

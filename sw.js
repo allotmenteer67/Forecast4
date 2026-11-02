@@ -481,7 +481,10 @@
 // normal; Recipients then +; the blue circle arrow; Subject and From;
 // Go to Home Screen as its own step; save with ‹, not ▶), plus a
 // "Changing who gets it" section (••• on the tile, ⌫ to remove).
-const SHELL_CACHE_NAME = "cloude-shell-v114";
+// Bumped to v115: Callout visibility box turns amber when visibility is
+// under 1 nm now or forecast to drop under it within 3 hours ("Under 1
+// nm by 14:00"); stays white in night mode. Help updated.
+const SHELL_CACHE_NAME = "cloude-shell-v115";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

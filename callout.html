@@ -92,6 +92,9 @@
     .mid { font-size: 26px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
     .hot { color: #f09595; }
     .warm { color: #fac775; }
+    /* Visibility under 1 nm now or within 3 h: amber by day, white at night. */
+    .vis-warn { color: #fac775; }
+    html.night .vis-warn { color: inherit; }
     .unit { font-size: 15px; color: #b4b2a9; }
     .push { margin-left: auto; }
     .line { font-size: 14px; color: #b4b2a9; margin-top: 2px; }
