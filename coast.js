@@ -228,6 +228,146 @@ function viewBounds() {
   return { north: a.lat, west: a.lon, south: b.lat, east: b.lon };
 }
 
+// ---- Tide zones (the north end) ----
+// The map's tide comes from the Milford Haven gauge, which is right for
+// St Brides Bay. Round Solva and Ramsey Sound the tide comes a little
+// earlier or later and rises a little more or less. How much is taken
+// from Open-Meteo's tide model (DWD; too coarse to trust on its own
+// inshore, but fine for the DIFFERENCE between nearby places): the model
+// tide at each zone's point is compared with the model at the bay's
+// point, as a time lag and a range ratio of the main (M2) tide, and
+// applied to the gauge prediction. Worked out on the phone, kept for
+// TIDE_ZONE_MAX_AGE_DAYS, and the old figures are used with no signal.
+// The map uses the zone whose point is nearest the middle of the view,
+// but only north of TIDE_ZONE_NORTH_OF (the bay itself is the gauge's).
+const TIDE_ZONES = [
+  { id: "bay", label: "", lat: 51.770, lon: -5.200 },          // reference: the gauge as is
+  { id: "solva", label: "Solva", lat: 51.855, lon: -5.200 },   // just off Solva
+  { id: "ramsey", label: "Ramsey Sound", lat: 51.845, lon: -5.335 } // south end of the Sound
+];
+const TIDE_ZONE_NORTH_OF = 51.815;
+const TIDE_ZONES_KEY = "cloude-coast:tideZones";
+const TIDE_ZONE_MAX_AGE_DAYS = 21;
+const TIDE_ZONE_LIMITS = { lagH: 1.5, ratioMin: 0.6, ratioMax: 1.4 }; // anything outside: ignored
+
+// Amplitude and phase (degrees) of M2 in an hourly series, by least
+// squares with the other big constituents alongside so they don't
+// leak into it. times: unix seconds; levels: metres (null = no value).
+function modelM2(times, levels) {
+  const use = ["M2", "S2", "N2", "K1", "O1"].map(n => TIDE_CONSTITUENTS.find(c => c.name === n));
+  const cols = 1 + use.length * 2;
+  const XtX = Array.from({ length: cols }, () => new Array(cols).fill(0));
+  const Xty = new Array(cols).fill(0);
+  const row = new Array(cols);
+  let n = 0;
+  for (let i = 0; i < times.length; i++) {
+    const y = levels[i];
+    if (typeof y !== "number" || !Number.isFinite(y)) continue;
+    const hours = times[i] / 3600;
+    row[0] = 1;
+    use.forEach((c, k) => {
+      const th = ((c.speed * hours) % 360) * Math.PI / 180;
+      row[1 + k * 2] = Math.cos(th); row[2 + k * 2] = Math.sin(th);
+    });
+    for (let a = 0; a < cols; a++) { Xty[a] += row[a] * y; for (let b = 0; b < cols; b++) XtX[a][b] += row[a] * row[b]; }
+    n++;
+  }
+  if (n < 150) return null; // about a week of hours
+  const x = solveLinearSystem(XtX, Xty);
+  if (!x) return null;
+  return { amp: Math.hypot(x[1], x[2]), phase: Math.atan2(x[2], x[1]) * 180 / Math.PI };
+}
+
+// Lag (hours, + = later than the bay) and range ratio for each zone,
+// from model series. series: { id: { time, level } }.
+function zoneCorrections(series) {
+  const m2 = TIDE_CONSTITUENTS.find(c => c.name === "M2").speed;
+  const ref = series.bay && modelM2(series.bay.time, series.bay.level);
+  if (!ref || ref.amp < 0.3) return null;
+  const out = {};
+  for (const z of TIDE_ZONES) {
+    if (z.id === "bay" || !series[z.id]) continue;
+    const m = modelM2(series[z.id].time, series[z.id].level);
+    if (!m) continue;
+    let d = m.phase - ref.phase;
+    d = ((d + 540) % 360) - 180;
+    const lagH = d / m2, ratio = m.amp / ref.amp;
+    if (Math.abs(lagH) > TIDE_ZONE_LIMITS.lagH || ratio < TIDE_ZONE_LIMITS.ratioMin || ratio > TIDE_ZONE_LIMITS.ratioMax) continue;
+    out[z.id] = { lagH: Math.round(lagH * 1000) / 1000, ratio: Math.round(ratio * 1000) / 1000 };
+  }
+  return out;
+}
+
+// The gauge's fit, moved later by lagH and its range scaled by ratio
+// (mean level kept): every constituent's cos/sin pair is rotated by its
+// own speed x lag, so predictions, highs and lows all follow.
+function shiftedFit(fit, lagH, ratio) {
+  const c = fit.coeffs.slice();
+  TIDE_CONSTITUENTS.forEach((k, i) => {
+    const a = fit.coeffs[1 + i * 2], b = fit.coeffs[2 + i * 2];
+    const r = k.speed * lagH * Math.PI / 180;
+    c[1 + i * 2] = ratio * (a * Math.cos(r) - b * Math.sin(r));
+    c[2 + i * 2] = ratio * (a * Math.sin(r) + b * Math.cos(r));
+  });
+  return { ...fit, coeffs: c };
+}
+
+async function loadTideZones() {
+  const saved = readJson(TIDE_ZONES_KEY, null);
+  const fresh = saved && saved.zones && Date.now() - saved.fetchedAt < TIDE_ZONE_MAX_AGE_DAYS * 86400000;
+  if (!fresh) {
+    try {
+      const url = "https://marine-api.open-meteo.com/v1/marine" +
+        `?latitude=${TIDE_ZONES.map(z => z.lat).join(",")}` +
+        `&longitude=${TIDE_ZONES.map(z => z.lon).join(",")}` +
+        "&hourly=sea_level_height_msl&past_days=30&forecast_days=2&timeformat=unixtime&timezone=UTC";
+      const res = await fetchWithTimeout(url, {}, 20000);
+      if (res.ok) {
+        let data = await res.json();
+        if (!Array.isArray(data)) data = [data];
+        const series = {};
+        TIDE_ZONES.forEach((z, i) => {
+          const h = data[i] && data[i].hourly;
+          if (h && Array.isArray(h.time)) series[z.id] = { time: h.time, level: h.sea_level_height_msl };
+        });
+        const zones = zoneCorrections(series);
+        if (zones && Object.keys(zones).length) writeJson(TIDE_ZONES_KEY, { fetchedAt: Date.now(), zones });
+      }
+    } catch { /* no signal: keep whatever was saved */ }
+  }
+  applyTideZone(true);
+}
+
+// Which zone the view's middle is in.
+function currentTideZone() {
+  const v = coast.view;
+  if (!v || v.lat < TIDE_ZONE_NORTH_OF) return TIDE_ZONES[0];
+  let best = TIDE_ZONES[0], bestD = Infinity;
+  for (const z of TIDE_ZONES) {
+    const d = Math.hypot((z.lon - v.lon) * KX, (z.lat - v.lat) * KY);
+    if (d < bestD) { bestD = d; best = z; }
+  }
+  return best;
+}
+
+// Switch the tide to the view's zone if it has changed (or force).
+function applyTideZone(force) {
+  const t = coast.tide;
+  if (!t || !t.baseFit) return;
+  const z = currentTideZone();
+  const saved = readJson(TIDE_ZONES_KEY, null);
+  const corr = z.id !== "bay" && saved && saved.zones ? saved.zones[z.id] : null;
+  const id = corr ? z.id : "bay";
+  if (!force && id === t.zoneId) return;
+  t.zoneId = id;
+  t.zoneLabel = corr ? z.label : "";
+  t.fit = corr ? shiftedFit(t.baseFit, corr.lagH, corr.ratio) : t.baseFit;
+  buildSeries();
+  invalidateTiles();
+  coast.cutoffKey = null;
+  updateTimeLabel();
+}
+
 // ---- Tide ----
 function slideTime() { return new Date(coast.baseTime + coast.offsetMin * 60000); }
 
@@ -248,6 +388,9 @@ async function loadTide() {
     if (!built) throw new Error("no tide data");
     coast.tide = {
       fit: built.fit,
+      baseFit: built.fit,  // the gauge's own; fit may be moved for a zone
+      zoneId: "bay",
+      zoneLabel: "",
       epochMs: Date.parse(built.epochIso),
       fudge: loadTideFudge(station.id),
       cdOffset: typeof station.cdOffsetOD === "number" ? station.cdOffsetOD : null,
@@ -261,6 +404,7 @@ async function loadTide() {
   invalidateTiles();
   updateTimeLabel();
   queueDraw();
+  if (coast.tide) loadTideZones().then(queueDraw);
 }
 
 // Water level now and in 30 min, in m OD, for the slider time.
@@ -371,7 +515,9 @@ function updateTimeLabel() {
   setTideText(`Tide ${shown.toFixed(1)} m${datum} · ${state}`,
     `${lv.rate >= 0 ? "+" : "−"}${abs.toFixed(1)} m/h`);
   const bar = document.querySelector(".info-bar");
-  if (bar) bar.title = `Tide from ${coast.tide.label}`;
+  if (bar) bar.title = coast.tide.zoneLabel
+    ? `Tide for ${coast.tide.zoneLabel}: ${coast.tide.label} gauge, adjusted with Open-Meteo's tide model`
+    : `Tide from ${coast.tide.label}`;
   renderNextTide(t);
 }
 
@@ -1710,6 +1856,7 @@ function draw() {
   ctx.fillRect(0, 0, coast.w, coast.h);
   if (!coast.index) return;
   ctx.imageSmoothingEnabled = false;
+  applyTideZone(false);
 
   const g = coast.index.grid;
   // Coarse land outline under everything.
@@ -2165,6 +2312,13 @@ function drawScaleBar() {
   const label = pick < 0.1 ? `${Math.round(pick * nm)} m` : `${pick} nm (${Math.round(pick * nm)} m)`;
   ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.85)";
   ctx.strokeText(label, x, y - 7); ctx.fillText(label, x, y - 7);
+  // Under it, which place the tide is for when it isn't the bay's own.
+  if (coast.tide && coast.tide.zoneLabel) {
+    const z = `Tide for ${coast.tide.zoneLabel}`;
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#9fc3ff";
+    ctx.strokeText(z, x, y + 4); ctx.fillText(z, x, y + 4);
+  }
 }
 
 // ---- Size, pan and zoom ----

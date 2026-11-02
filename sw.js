@@ -484,7 +484,12 @@
 // Bumped to v115: Callout visibility box turns amber when visibility is
 // under 1 nm now or forecast to drop under it within 3 hours ("Under 1
 // nm by 14:00"); stays white in night mode. Help updated.
-const SHELL_CACHE_NAME = "cloude-shell-v115";
+// Bumped to v116: coast map tide zones — near Solva and Ramsey Sound the
+// Milford Haven tide is shifted in time and range by the difference
+// Open-Meteo's tide model gives between there and the bay (worked out
+// every 21 days, stored as cloude-coast:tideZones); "Tide for …" under
+// the scale bar. Help's coast map area and tide wording updated.
+const SHELL_CACHE_NAME = "cloude-shell-v116";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
