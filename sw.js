@@ -475,7 +475,13 @@
 // arrow, Show Compose Sheet, ⓘ → Show in Share Sheet).
 // Bumped to v113: shortcut steps end with Show Notification and Go to
 // Home Screen, so Shortcuts doesn't stay on screen after sending.
-const SHELL_CACHE_NAME = "cloude-shell-v113";
+// Bumped to v114: callout.html — shortcut steps rewritten after watching
+// a first-time user: six headed steps (rename via ⌄ › Rename; "In Search
+// Actions, type …" for each action; the Receive…from Nowhere box is
+// normal; Recipients then +; the blue circle arrow; Subject and From;
+// Go to Home Screen as its own step; save with ‹, not ▶), plus a
+// "Changing who gets it" section (••• on the tile, ⌫ to remove).
+const SHELL_CACHE_NAME = "cloude-shell-v114";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
