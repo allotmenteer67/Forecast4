@@ -283,6 +283,27 @@ function mapStripRainAt(grid, fr, fc, hourIndex) {
   return top + (bottom - top) * tr;
 }
 
+// The map's "now" — the grid slice that slider position 0 stands for.
+// It has to be the SAME hour the headline's slider starts from
+// (state.hourly.times[0], app.js), or every slider position shows one
+// hour on the headline and a different one on the map. Each used to
+// work out "now" for itself (first hour no earlier than 30 minutes ago)
+// at the moment its own data was fetched or reloaded — so if the
+// headline's forecast was loaded at 23:20 (starting 23:00) and the map's
+// at 23:33 (starting 00:00), the map ran an hour ahead all the way along
+// the slider (seen: slider 10:00, map "Wed 11:00", and the rain shown
+// for the wrong hour). Falls back to the grid's own start only if the
+// headline has no hours yet, or none that the grid has.
+function mapStripStartIdx(grid) {
+  const first = typeof state !== "undefined" ? state.hourly?.times?.[0] : null;
+  if (first && grid && grid.times) {
+    const t = new Date(first).getTime();
+    const i = grid.times.findIndex(x => new Date(x).getTime() === t);
+    if (i !== -1) return i;
+  }
+  return grid.startIdx;
+}
+
 function svgRainRects(view, centre, grid, palette) {
   if (!grid) return "";
   const maxIndex = grid.rainByHour[0][0].length - 1;
@@ -295,7 +316,7 @@ function svgRainRects(view, centre, grid, palette) {
   // dimension of the same idea, not a new technique. Skipped entirely
   // at a whole hour (hourFrac === 0) so the ordinary case pays no extra
   // cost, only Play's in-between frames do.
-  const rawIndex = Math.min(grid.startIdx + mapStripHourOffset, maxIndex);
+  const rawIndex = Math.min(mapStripStartIdx(grid) + mapStripHourOffset, maxIndex);
   const hourLo = Math.floor(rawIndex);
   const hourHi = Math.min(hourLo + 1, maxIndex);
   const hourFrac = rawIndex - hourLo;
@@ -321,7 +342,7 @@ function svgRainRects(view, centre, grid, palette) {
 function mapStripHourClock(grid, hoursAhead) {
   if (!grid || !grid.times || !grid.times.length) return "";
   const maxIdx = grid.times.length - 1;
-  const rawIdx = Math.min(Math.max(grid.startIdx + hoursAhead, 0), maxIdx);
+  const rawIdx = Math.min(Math.max(mapStripStartIdx(grid) + hoursAhead, 0), maxIdx);
   const lo = Math.floor(rawIdx);
   const hi = Math.min(lo + 1, maxIdx);
   const frac = rawIdx - lo;

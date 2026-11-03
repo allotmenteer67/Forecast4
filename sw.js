@@ -498,7 +498,11 @@
 // headline cells only with a mouse or trackpad ((hover: hover) and
 // (pointer: fine)); on an iPad a tapped fishing card kept a stuck
 // accent-coloured box inside it.
-const SHELL_CACHE_NAME = "cloude-shell-v118";
+// Bumped to v119: mapstrip3.js — the front-page map's hour now starts
+// from the same hour as the headline's slider (state.hourly.times[0])
+// instead of working out "now" for itself, which could leave the map's
+// time and rain an hour ahead of the slider.
+const SHELL_CACHE_NAME = "cloude-shell-v119";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
