@@ -1,7 +1,7 @@
 // ==== Coast map (step 3a) ====
 //
-// A close-up map of St Brides Bay (Newgale to Dale, with Skomer and
-// Skokholm) drawn from the Welsh Government LIDAR tiles built by
+// A close-up map of a stretch of coast (coast-areas.js: St Brides Bay,
+// or Lyme Regis and Charmouth) drawn from the LIDAR tiles built by
 // scripts/build-coast-heights.py, with the predicted tide laid over it:
 //
 //   - ground below the tide at the chosen time is shown as water
@@ -9,7 +9,7 @@
 //     next 30 minutes is picked out in bright cyan: the width of that
 //     band is how fast the water's edge is moving across the ground
 //   - steep ground (30° and over) amber, cliffs (55° and over) red
-//   - place names from data/coast/stbrides/names.json when zoomed in
+//   - place names from data/coast/<area>/names.json when zoomed in
 //
 // Opened from the callout screen's Coast map button. Like callout.js it
 // does NOT load app.js; it loads tide.js for the same Milford Haven
@@ -62,13 +62,34 @@
 // Magnetic Model (WMM2025) for the middle of the bay; across the bay it
 // differs by under 0.1°. Distances are in nautical miles by default.
 
-const COAST_BASE = "data/coast/stbrides/";
+// Which stretch of coast this opening of the map shows (coast-areas.js):
+// the one named in the address (coast.html?area=charmouth, as the tide
+// sheet's link does), else the one used last, else the one nearest the
+// main app's current tide location, else St Brides. Switching area
+// (tap the title) reopens the page with ?area=.
+function pickCoastArea() {
+  const wanted = new URLSearchParams(window.location.search).get("area");
+  let area = wanted ? coastAreaById(wanted) : null;
+  if (!area) { try { area = coastAreaById(localStorage.getItem(COAST_AREA_KEY)); } catch { /* ignore */ } }
+  if (!area && typeof loadTideLocations === "function") {
+    try {
+      const locs = loadTideLocations();
+      const cur = locs.find(l => l.id === loadCurrentTideLocationId()) || locs[0];
+      if (cur && typeof cur.lat === "number") area = coastAreaNear(cur.lat, cur.lon, 15);
+    } catch { /* ignore */ }
+  }
+  if (!area) area = COAST_AREAS[0];
+  try { localStorage.setItem(COAST_AREA_KEY, area.id); } catch { /* ignore */ }
+  return area;
+}
+const COAST_AREA = pickCoastArea();
+const COAST_BASE = `data/coast/${COAST_AREA.id}/`;
 const COAST_TILE_DIR = COAST_BASE + "heights/";
-// The tide gauge for the whole bay (tide.js picks Milford Haven).
-const COAST_TIDE_POINT = { lat: 51.75, lon: -5.15 };
-// Where the map opens if nothing else is chosen: Little Haven.
-const COAST_START = { lat: 51.775, lon: -5.11, mpp: 6 };
-const COAST_VIEW_KEY = "cloude-coast:view";
+// The tide gauge for the area is the one nearest this point (tide.js).
+const COAST_TIDE_POINT = COAST_AREA.tide.point;
+// Where the map opens if nothing else is chosen.
+const COAST_START = COAST_AREA.start;
+const COAST_VIEW_KEY = COAST_AREA.viewKey;
 const CALLOUT_SPOT_KEY = "cloude-callout:spot"; // shared with callout.js
 const NM = 1852;
 const STATUTE_MILE = 1609.344;
@@ -77,11 +98,12 @@ const PINS_KEY = "cloude-coast:pins"; // all pins (up to 3) and which is selecte
 const MAX_PINS = 3, MAX_LINES = 3;
 const LINE_COLOURS = { A: "#ff9a3c", B: "#e6ef4a", C: "#c39bff" };
 const BEARING_ERROR_DEG = 5; // allowed error in a reported bearing, for the circle round a fix
-// Magnetic variation (declination) for St Brides Bay (51.78°N 5.17°W)
-// from the World Magnetic Model WMM2025, which is exactly linear in time
-// over its life (2025.0-2030.0): about 0.5° west in late 2026, passing
-// through zero around the end of 2029. East is positive.
-const WMM = { epoch: 2025.0, decl: -0.872, perYear: 0.1865, validTo: 2030.0 };
+// Magnetic variation (declination) for the area's middle from the World
+// Magnetic Model WMM2025, which is exactly linear in time over its life
+// (2025.0-2030.0). St Brides: about 0.5° west in late 2026, passing
+// through zero around the end of 2029. Lyme Bay: about 0.3° east in late
+// 2026. East is positive.
+const WMM = COAST_AREA.wmm;
 function declinationNow() {
   const now = new Date();
   const year = now.getUTCFullYear() + (now - Date.UTC(now.getUTCFullYear(), 0, 1)) / (365.25 * 86400000);
@@ -108,7 +130,7 @@ const SERIES_HOURS = 30;
 // 2.7 m above Chart Datum at Milford Haven) — around low water it's
 // almost certainly exposed sand or rock — and as water above it. Without
 // this, a low-tide beach next to unsurveyed sand showed as cut off.
-const UNSURVEYED_DRY_OD = -1.0;
+const UNSURVEYED_DRY_OD = COAST_AREA.unsurveyedDryOD;
 // Blue 3 in a tile: foreshore the survey couldn't see whose height the
 // build has ESTIMATED (a smooth slope from the surveyed beach down to
 // mean low water at the sea's edge). It's coloured with the tide like
@@ -144,10 +166,10 @@ const C = {
 };
 const PLAIN_LAND_SHADE = 0.92;
 
-// Fixed east-west scale for the whole bay, so the map doesn't stretch
+// Fixed east-west scale for the whole area, so the map doesn't stretch
 // as you pan north or south.
 const KY = 110574;
-const KX = 111320 * Math.cos(51.78 * Math.PI / 180);
+const KX = 111320 * Math.cos(COAST_AREA.midLat * Math.PI / 180);
 
 // tide.js calls fetchWithTimeout, normally from app.js (not loaded here).
 async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
@@ -240,13 +262,14 @@ function viewBounds() {
 // TIDE_ZONE_MAX_AGE_DAYS, and the old figures are used with no signal.
 // The map uses the zone whose point is nearest the middle of the view,
 // but only north of TIDE_ZONE_NORTH_OF (the bay itself is the gauge's).
-const TIDE_ZONES = [
-  { id: "bay", label: "", lat: 51.770, lon: -5.200 },          // reference: the gauge as is
-  { id: "solva", label: "Solva", lat: 51.855, lon: -5.200 },   // just off Solva
-  { id: "ramsey", label: "Ramsey Sound", lat: 51.845, lon: -5.335 } // south end of the Sound
-];
-const TIDE_ZONE_NORTH_OF = 51.815;
-const TIDE_ZONES_KEY = "cloude-coast:tideZones";
+// Each area has its own zones (coast-areas.js); the first is the
+// reference, near the gauge. At Lyme Bay the gauge is Weymouth, and the
+// one zone (just off Lyme Regis) covers the whole area — unless the main
+// app's tide location there has been checked against Admiralty, which is
+// used instead (see loadTide).
+const TIDE_ZONES = COAST_AREA.tide.zones;
+const TIDE_ZONE_NORTH_OF = COAST_AREA.tide.zonesNorthOf;
+const TIDE_ZONES_KEY = COAST_AREA.zonesKey;
 const TIDE_ZONE_MAX_AGE_DAYS = 21;
 const TIDE_ZONE_LIMITS = { lagH: 1.5, ratioMin: 0.6, ratioMax: 1.4 }; // anything outside: ignored
 
@@ -282,11 +305,12 @@ function modelM2(times, levels) {
 // from model series. series: { id: { time, level } }.
 function zoneCorrections(series) {
   const m2 = TIDE_CONSTITUENTS.find(c => c.name === "M2").speed;
-  const ref = series.bay && modelM2(series.bay.time, series.bay.level);
+  const refId = TIDE_ZONES[0].id;
+  const ref = series[refId] && modelM2(series[refId].time, series[refId].level);
   if (!ref || ref.amp < 0.3) return null;
   const out = {};
   for (const z of TIDE_ZONES) {
-    if (z.id === "bay" || !series[z.id]) continue;
+    if (z.id === refId || !series[z.id]) continue;
     const m = modelM2(series[z.id].time, series[z.id].level);
     if (!m) continue;
     let d = m.phase - ref.phase;
@@ -351,21 +375,93 @@ function currentTideZone() {
 }
 
 // Switch the tide to the view's zone if it has changed (or force).
+// Not used when the tide comes from an Admiralty-checked location
+// (t.fixed): that is already for the place itself.
 function applyTideZone(force) {
   const t = coast.tide;
-  if (!t || !t.baseFit) return;
+  if (!t || !t.baseFit || t.fixed) return;
+  const refId = TIDE_ZONES[0].id;
   const z = currentTideZone();
   const saved = readJson(TIDE_ZONES_KEY, null);
-  const corr = z.id !== "bay" && saved && saved.zones ? saved.zones[z.id] : null;
-  const id = corr ? z.id : "bay";
+  const corr = z.id !== refId && saved && saved.zones ? saved.zones[z.id] : null;
+  const id = corr ? z.id : refId;
   if (!force && id === t.zoneId) return;
   t.zoneId = id;
-  t.zoneLabel = corr ? z.label : "";
+  t.zoneLabel = corr ? z.label : (COAST_AREA.tide.needsAdjust ? `${t.label} (not adjusted yet)` : "");
   t.fit = corr ? shiftedFit(t.baseFit, corr.lagH, corr.ratio) : t.baseFit;
+  // Chart Datum (roughly the lowest tide) is about as far below mean sea
+  // level as the tide's range allows, so where the range is scaled the
+  // datum is scaled with it (Lyme Bay from Plymouth). St Brides keeps
+  // Milford Haven's datum, as it always has.
+  if (corr && COAST_AREA.tide.scaleChartDatum && t.baseCdOffset !== null) {
+    const mean = t.baseFit.coeffs[0];
+    t.cdOffset = mean + (t.baseCdOffset - mean) * corr.ratio;
+  } else {
+    t.cdOffset = t.baseCdOffset;
+  }
+  t.sourceText = corr
+    ? `Tide for ${z.label}: ${t.label} gauge, adjusted with Open-Meteo's tide model`
+    : (COAST_AREA.tide.needsAdjust ? `Tide from ${t.label}, not yet adjusted for here (needs a signal once)` : `Tide from ${t.label}`);
   buildSeries();
   invalidateTiles();
   coast.cutoffKey = null;
   updateTimeLabel();
+}
+
+// The main app's tide location for this area that has been "Checked
+// against Admiralty" (Settings), if there is one: its learned
+// correction turns the gauge's tide into the place's own, the same as
+// on the tide card. { loc, offset } or null.
+function savedAdmiraltyLocation() {
+  const cfg = COAST_AREA.tide;
+  if (!cfg.useSavedLocation || typeof loadTideLocations !== "function" || typeof loadSecondaryOffset !== "function") return null;
+  let best = null, bestD = Infinity;
+  for (const loc of loadTideLocations()) {
+    if (!loc || typeof loc.lat !== "number" || !loc.station || !loc.discoveryStation) continue;
+    if (typeof loc.station.cdOffsetOD !== "number") continue;
+    const offset = loadSecondaryOffset(loc.discoveryStation.id);
+    if (!offset) continue;
+    const d = coastAreaDistanceKm(COAST_AREA, loc.lat, loc.lon);
+    if (d <= (cfg.savedWithinKm || 15) && d < bestD) { best = { loc, offset }; bestD = d; }
+  }
+  return best;
+}
+
+// A tide fit for the place itself, from the gauge's prediction (with
+// its own learned fudge) put through the location's Admiralty
+// correction every 15 minutes for 30 days either side of now, then
+// fitted again, so everything on the map (the colours, cut-offs, next
+// high or low) can use it as it uses any fit. Heights come back in
+// Chart Datum at the place; to compare with the ground they're turned
+// back into Ordnance Datum by matching mean sea level, which is nearly
+// the same all along a short stretch of coast (the gauge's mean, in OD,
+// is the place's mean too). Returns { fit, cdOffset, rmsM } or null.
+function admiraltyLocalFit(built, fudge, station, offset) {
+  const epochMs = Date.parse(built.epochIso);
+  const nowH = (Date.now() - epochMs) / 3600000;
+  const pts = [];
+  let sumCD = 0, sumOD = 0;
+  for (let h = nowH - 30 * 24; h <= nowH + 30 * 24; h += 0.25) {
+    const od = applyTideFudge(predictTideLevel(built.fit, h), fudge);
+    const r = applySecondaryOffset(built.fit, h, od, station, offset);
+    if (!r || !Number.isFinite(r.levelCD) || !Number.isFinite(r.hours)) continue;
+    pts.push(r);
+    sumCD += r.levelCD; sumOD += od;
+  }
+  if (pts.length < 2000) return null;
+  const cdOffset = sumOD / pts.length - sumCD / pts.length;
+  const readings = pts.map(r => ({ hours: r.hours, level: r.levelCD + cdOffset }));
+  const fit = fitTideHarmonics(readings);
+  if (!fit) return null;
+  let sq = 0;
+  for (const r of readings) sq += (predictTideLevel(fit, r.hours) - r.level) ** 2;
+  return { fit, cdOffset, rmsM: Math.sqrt(sq / readings.length) };
+}
+
+function shortPlace(label) {
+  const text = String(label || "");
+  const i = text.indexOf(",");
+  return i === -1 ? text : text.slice(0, i).trim();
 }
 
 // ---- Tide ----
@@ -380,22 +476,46 @@ function tideOdAt(date) {
 
 async function loadTide() {
   if (typeof nearestTideStation !== "function") return;
-  const station = nearestTideStation(COAST_TIDE_POINT.lat, COAST_TIDE_POINT.lon);
+  const cfg = COAST_AREA.tide;
+  const saved = savedAdmiraltyLocation();
+  const station = saved ? saved.loc.station
+    : ((cfg.stationId && typeof EA_TIDE_STATIONS !== "undefined" && EA_TIDE_STATIONS.find(s => s.id === cfg.stationId))
+      || nearestTideStation(COAST_TIDE_POINT.lat, COAST_TIDE_POINT.lon));
   if (!station) return;
   setTideText("Loading tide…", "");
+  coast.tide = null;
   try {
     const built = await getOrBuildTideFit(station);
     if (!built) throw new Error("no tide data");
-    coast.tide = {
-      fit: built.fit,
-      baseFit: built.fit,  // the gauge's own; fit may be moved for a zone
-      zoneId: "bay",
-      zoneLabel: "",
-      epochMs: Date.parse(built.epochIso),
-      fudge: loadTideFudge(station.id),
-      cdOffset: typeof station.cdOffsetOD === "number" ? station.cdOffsetOD : null,
-      label: station.label
-    };
+    const epochMs = Date.parse(built.epochIso);
+    const fudge = loadTideFudge(station.id);
+    const cdOffset = typeof station.cdOffsetOD === "number" ? station.cdOffsetOD : null;
+    const local = saved ? admiraltyLocalFit(built, fudge, station, saved.offset) : null;
+    if (local) {
+      const place = shortPlace(saved.loc.label);
+      coast.tide = {
+        fit: local.fit, baseFit: local.fit, fixed: true,
+        zoneId: "admiralty",
+        zoneLabel: `${place} (Admiralty-checked)`,
+        epochMs, fudge: null,
+        cdOffset: local.cdOffset, baseCdOffset: local.cdOffset,
+        label: station.label,
+        sourceText: `Tide for ${place}: ${station.label} gauge with ${place}'s Admiralty correction, as on the tide card (fit within ${Math.round(local.rmsM * 100)} cm)`
+      };
+    } else {
+      coast.tide = {
+        fit: built.fit,
+        baseFit: built.fit,  // the gauge's own; fit may be moved for a zone
+        zoneId: null,
+        zoneLabel: "",
+        epochMs,
+        fudge,
+        cdOffset, baseCdOffset: cdOffset,
+        label: station.label,
+        sourceText: `Tide from ${station.label}`
+      };
+      applyTideZone(true);
+    }
     buildSeries();
   } catch {
     coast.tide = null;
@@ -404,7 +524,7 @@ async function loadTide() {
   invalidateTiles();
   updateTimeLabel();
   queueDraw();
-  if (coast.tide) loadTideZones().then(queueDraw);
+  if (coast.tide && !coast.tide.fixed) loadTideZones().then(queueDraw);
 }
 
 // Water level now and in 30 min, in m OD, for the slider time.
@@ -439,7 +559,8 @@ const COMPASS_16_NAMES = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S",
 
 function windSpot() {
   const p = readJson(CALLOUT_SPOT_KEY, null);
-  return p && typeof p.lat === "number" ? { lat: p.lat, lon: p.lon } : { lat: 51.79, lon: -5.17 };
+  return p && typeof p.lat === "number" && coastAreaDistanceKm(COAST_AREA, p.lat, p.lon) < 20
+    ? { lat: p.lat, lon: p.lon } : { ...COAST_AREA.windSpot };
 }
 
 function windHourly() {
@@ -515,9 +636,7 @@ function updateTimeLabel() {
   setTideText(`Tide ${shown.toFixed(1)} m${datum} · ${state}`,
     `${lv.rate >= 0 ? "+" : "−"}${abs.toFixed(1)} m/h`);
   const bar = document.querySelector(".info-bar");
-  if (bar) bar.title = coast.tide.zoneLabel
-    ? `Tide for ${coast.tide.zoneLabel}: ${coast.tide.label} gauge, adjusted with Open-Meteo's tide model`
-    : `Tide from ${coast.tide.label}`;
+  if (bar) bar.title = coast.tide.sourceText || `Tide from ${coast.tide.label}`;
   renderNextTide(t);
 }
 
@@ -1676,25 +1795,10 @@ function clearCutoff() {
   queueDraw();
 }
 
-// Towns and villages round the bay, inland as well, so there's always a
+// Towns and villages round the area, inland as well, so there's always a
 // familiar name to go by. Added to the OS names (which are mostly the
 // coast itself); positions are the middle of each place, roughly.
-const REFERENCE_PLACES = [
-  { name: "Haverfordwest", lat: 51.8015, lon: -4.9690 },
-  { name: "Milford Haven", lat: 51.7144, lon: -5.0427 },
-  { name: "St Davids", lat: 51.8818, lon: -5.2655 },
-  { name: "Solva", lat: 51.8747, lon: -5.1965 },
-  { name: "Roch", lat: 51.8488, lon: -5.0757 },
-  { name: "Simpson Cross", lat: 51.8155, lon: -5.0710 },
-  { name: "Druidston", lat: 51.8000, lon: -5.1035 },
-  { name: "Marloes", lat: 51.7262, lon: -5.2132 },
-  { name: "Martin's Haven", lat: 51.7367, lon: -5.2460 },
-  { name: "Dale", lat: 51.7070, lon: -5.1700 },
-  { name: "Broad Haven", lat: 51.7820, lon: -5.1030 },
-  { name: "Little Haven", lat: 51.7735, lon: -5.1090 },
-  { name: "Nolton Haven", lat: 51.8155, lon: -5.1070 },
-  { name: "Newgale", lat: 51.8530, lon: -5.1220 },
-];
+const REFERENCE_PLACES = COAST_AREA.places;
 
 async function loadNames() {
   try {
@@ -2448,6 +2552,43 @@ function resetBaseTime() {
   }
 }
 
+// ---- Choosing the stretch of coast ----
+// The title shows the area's name; tapping it opens the phone's own
+// list of areas. Picking one reopens the page for it (everything — tiles,
+// tide, names — belongs to one area).
+function setUpAreaPicker() {
+  const title = document.querySelector(".top .title");
+  if (!title) return;
+  document.title = `${COAST_AREA.name} — Coast map — Cloude`;
+  title.textContent = "";
+  const name = document.createElement("span");
+  name.className = "area-name";
+  name.textContent = COAST_AREA.short || COAST_AREA.name;
+  title.appendChild(name);
+  if (COAST_AREAS.length < 2) return;
+  title.classList.add("has-areas");
+  const caret = document.createElement("span");
+  caret.className = "area-caret";
+  caret.textContent = " ▾";
+  title.appendChild(caret);
+  const sel = document.createElement("select");
+  sel.className = "area-select";
+  sel.setAttribute("aria-label", "Choose the stretch of coast");
+  for (const a of COAST_AREAS) {
+    const o = document.createElement("option");
+    o.value = a.id;
+    o.textContent = a.name;
+    o.selected = a.id === COAST_AREA.id;
+    sel.appendChild(o);
+  }
+  sel.addEventListener("change", () => {
+    if (sel.value === COAST_AREA.id) return;
+    try { localStorage.setItem(COAST_AREA_KEY, sel.value); } catch { /* ignore */ }
+    window.location.replace(`coast.html?area=${encodeURIComponent(sel.value)}`);
+  });
+  title.appendChild(sel);
+}
+
 // ---- Start ----
 async function initCoast() {
   coast.canvas = $("coastCanvas");
@@ -2456,8 +2597,12 @@ async function initCoast() {
   coast.view = saved && typeof saved.lat === "number" ? saved : { ...COAST_START };
   loadPin();
   loadLines();
-  // Opened with a pin (e.g. from the callout screen): start there.
-  if (coast.pin) { coast.view.lat = coast.pin.lat; coast.view.lon = coast.pin.lon; }
+  // Opened with a pin (e.g. from the callout screen): start there, if
+  // it's in this area.
+  if (coast.pin && coastAreaDistanceKm(COAST_AREA, coast.pin.lat, coast.pin.lon) < 2) {
+    coast.view.lat = coast.pin.lat; coast.view.lon = coast.pin.lon;
+  }
+  setUpAreaPicker();
   resetBaseTime();
   resize();
   window.addEventListener("resize", resize);

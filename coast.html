@@ -56,6 +56,19 @@
     .top .top-left { grid-column: 1; justify-self: start; }
     .top .title { grid-column: 2; }
     .title { font-size: 17px; font-weight: 600; grid-column: 2; }
+    /* With more than one stretch of coast the title is the area's name,
+       and tapping it opens the phone's own list (an invisible select
+       laid over the title). 16px keeps iOS from zooming on the list. */
+    .title.has-areas {
+      position: relative; font-size: 15px; text-align: center; line-height: 1.2;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 58vw;
+    }
+    .top-right { white-space: nowrap; }
+    .title .area-caret { color: #9fc3ff; }
+    .title .area-select {
+      position: absolute; inset: -6px -4px; width: calc(100% + 8px); opacity: 0;
+      font-size: 16px; -webkit-appearance: none; appearance: none; border: 0; background: transparent;
+    }
     .top-right { grid-column: 3; justify-self: end; }
     button {
       font: inherit; color: #d3d1c7; background: transparent;
@@ -375,6 +388,7 @@
 
   <script src="tide.js"></script>
   <script src="osgrid.js"></script>
+  <script src="coast-areas.js"></script>
   <script src="coast.js"></script>
   <script src="coast-compass.js"></script>
   <script>

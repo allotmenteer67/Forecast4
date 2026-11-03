@@ -400,6 +400,8 @@ async function openTideSheet() {
 
   sheetBody.appendChild(renderTideCurve(built.fit, fudge, built.epochIso, startHours, endHours, nowHours, location));
 
+  appendCoastMapLink(location);
+
   const secondary = location.discoveryStation && loadSecondaryOffset(location.discoveryStation.id);
   if (secondary) {
     sheetFootnote.textContent = `Corrected for ${location.label} specifically, using its own learned Admiralty offset — this is no longer just ${location.station.label}'s own curve.`;
@@ -408,6 +410,22 @@ async function openTideSheet() {
   } else {
     sheetFootnote.textContent = "";
   }
+}
+
+// A link to the Coast map when this tide place is on (or within 10 km
+// of) a stretch of coast it covers (coast-areas.js) — the way in for
+// anyone not using the Callout screen. The map opens on that stretch.
+function appendCoastMapLink(location) {
+  if (typeof coastAreaNear !== "function" || !location || typeof location.lat !== "number") return;
+  const area = coastAreaNear(location.lat, location.lon, 10);
+  if (!area) return;
+  const link = document.createElement("a");
+  link.href = `coast.html?area=${encodeURIComponent(area.id)}`;
+  link.className = "sheet-coast-link";
+  link.textContent = `Coast map — ${area.name} ›`;
+  link.style.cssText = "display:block;margin:12px 0 4px;padding:11px 14px;border-radius:12px;" +
+    "border:1px solid currentColor;text-align:center;font-weight:600;text-decoration:none;color:inherit;opacity:0.9;";
+  sheetBody.appendChild(link);
 }
 
 // Pixels of horizontal room per hour of tide data. At the old fixed

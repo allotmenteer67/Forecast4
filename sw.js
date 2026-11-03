@@ -489,7 +489,12 @@
 // Open-Meteo's tide model gives between there and the bay (worked out
 // every 21 days, stored as cloude-coast:tideZones); "Tide for …" under
 // the scale bar. Help's coast map area and tide wording updated.
-const SHELL_CACHE_NAME = "cloude-shell-v116";
+// Bumped to v117: a second stretch of coast — Lyme Regis & Charmouth
+// (Environment Agency LIDAR). New coast-areas.js (the list of areas,
+// loaded by coast.html and index.html); the Coast map's title picks the
+// area; the tide sheet links to the map; .html pages are matched in the
+// cache without their ?query, so coast.html?area=… works offline.
+const SHELL_CACHE_NAME = "cloude-shell-v117";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
@@ -515,6 +520,7 @@ const SHELL_FILES = [
   "sunvis.js",
   "coast.html",
   "coast.js",
+  "coast-areas.js",
   "mapstrip3.js",
   "app.js",
   "settings.js",
@@ -622,7 +628,11 @@ self.addEventListener("fetch", event => {
 
   event.respondWith(
     caches.open(cacheName).then(async cache => {
-      const cached = await cache.match(event.request);
+      // Pages are the same file whatever follows the "?" (coast.html?area=…),
+      // so a page is found in the cache without it — otherwise a page
+      // opened with a new ?query wouldn't load offline.
+      const cached = await cache.match(event.request) ||
+        (url.pathname.endsWith(".html") && url.search ? await cache.match(event.request, { ignoreSearch: true }) : undefined);
       const network = fetch(event.request)
         .then(response => {
           if (response.ok) cache.put(event.request, response.clone());
