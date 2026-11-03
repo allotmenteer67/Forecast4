@@ -163,6 +163,7 @@ def use_area(cfg):
     OUT_DIR = os.path.join("data", "coast", AREA_ID)
     HEIGHTS_DIR = os.path.join(OUT_DIR, "heights")
     SOURCE_URL = WALES_DTM_URL if cfg.get("lidar", "wales") == "wales" else None
+    OS_SEA["tidal"], OS_SEA["foreshore"] = None, []
 
 
 # ---- England: Environment Agency LIDAR, fetched into one local file ----
@@ -289,6 +290,7 @@ def fetch_ea_dtm():
                         np.copyto(dst, part, where=~np.isnan(part))
                     n += 1
             print(f"  fetched {n} squares")
+            mask_sea(mosaic, x0, y1)
             check_heights(mosaic)
             path = os.path.join(tempfile.mkdtemp(), f"{AREA_ID}-ea-dtm.tif")
             prof = dict(driver="GTiff", width=width, height=height, count=1, dtype="float32",
@@ -442,7 +444,7 @@ def _os_sources(tmpdir):
     if path:
         layers = [l[0] for l in pyogrio_list(path)]
         out = {}
-        for want in ("foreshore", "tidalboundary"):
+        for want in ("foreshore", "tidalboundary", "tidalwater"):
             l = _find_layer(layers, want)
             if l:
                 out[want] = (path, l)
@@ -458,7 +460,7 @@ def _os_sources(tmpdir):
         names = z.namelist()
         gpkg = [n for n in names if n.lower().endswith(".gpkg")]
         shps = [n for n in names if n.lower().endswith(".shp")]
-        for want in ("foreshore", "tidalboundary"):
+        for want in ("foreshore", "tidalboundary", "tidalwater"):
             hit = [n for n in shps if want in os.path.basename(n).lower().replace("_", "")]
             if hit:
                 # A shapefile is several files with the same stem.
@@ -470,7 +472,7 @@ def _os_sources(tmpdir):
         if not out and gpkg:
             g = z.extract(gpkg[0], tmpdir)
             layers = [l[0] for l in pyogrio_list(g)]
-            for want in ("foreshore", "tidalboundary"):
+            for want in ("foreshore", "tidalboundary", "tidalwater"):
                 l = _find_layer(layers, want)
                 if l:
                     out[want] = (g, l)
@@ -500,6 +502,41 @@ def _read(src, bng_box):
     return crs, shapes, table
 
 
+# England's terrain model has heights over the sea too (the water's
+# surface when the survey was flown), where Wales's is blank. The build
+# finds the coast by where the data stops, so for England the sea is
+# taken from Ordnance Survey instead: OS OpenMap Local's TidalWater
+# areas, less its Foreshore, are blanked out (see mask_sea). Filled in
+# by load_os, in British National Grid.
+OS_SEA = {"tidal": None, "foreshore": []}
+
+
+def _to_bng(crs, g):
+    import shapely
+    gj = shapely.geometry.mapping(g)
+    if str(crs).upper().endswith("27700"):
+        return gj
+    return transform_geom(crs, "EPSG:27700", gj)
+
+
+def mask_sea(mosaic, x0, y1):
+    """Blank (NaN) the cells of a 1 m British National Grid mosaic (top
+    left corner x0, y1) that OS maps as tidal water and not foreshore."""
+    if not OS_SEA.get("tidal"):
+        raise RuntimeError("the Ordnance Survey tidal water areas weren't found, and without them the sea "
+                           "in England's terrain model reads as flat land — the map would be wrong")
+    tr = from_origin(x0, y1, 1.0, 1.0)
+    sea = rasterize(OS_SEA["tidal"], out_shape=mosaic.shape, transform=tr, fill=0, default_value=1,
+                    dtype="uint8").astype(bool)
+    if OS_SEA["foreshore"]:
+        fs = rasterize(OS_SEA["foreshore"], out_shape=mosaic.shape, transform=tr, fill=0, default_value=1,
+                       dtype="uint8").astype(bool)
+        sea &= ~fs
+    had = int((sea & ~np.isnan(mosaic)).sum())
+    mosaic[sea] = np.nan
+    print(f"  sea from OS tidal water: {sea.mean():.0%} of the area; {had / 1e6:.1f} km² of water-surface heights removed")
+
+
 def load_os(bng_box):
     """Ordnance Survey foreshore polygons and the mean low water line over
     the area, in lat/lon: (foreshore, low_water). foreshore is a list of
@@ -521,11 +558,20 @@ def load_os(bng_box):
                 crs, geoms, _t = _read(srcs["foreshore"], bng_box)
                 foreshore = [transform_geom(crs, "EPSG:4326", shapely.geometry.mapping(g))
                              for g in geoms if g is not None and not g.is_empty]
+                OS_SEA["foreshore"] = [_to_bng(crs, g) for g in geoms if g is not None and not g.is_empty]
                 print(f"OS foreshore: {len(foreshore)} areas over the area")
             except Exception as err:  # noqa: BLE001
                 print(f"OS foreshore couldn't be read ({type(err).__name__}: {err}) — using the old 40 m rule")
         else:
             print("OS foreshore not found — using the old 40 m rule")
+        if "tidalwater" in srcs and SOURCE_URL is None:
+            # England only: where the sea is (see mask_sea).
+            try:
+                crs, geoms, _t = _read(srcs["tidalwater"], bng_box)
+                OS_SEA["tidal"] = [_to_bng(crs, g) for g in geoms if g is not None and not g.is_empty]
+                print(f"OS tidal water: {len(OS_SEA['tidal'])} areas over the area")
+            except Exception as err:  # noqa: BLE001
+                print(f"OS tidal water couldn't be read ({type(err).__name__}: {err})")
         if "tidalboundary" in srcs:
             try:
                 low_water = low_water_lines(srcs["tidalboundary"], bng_box)
