@@ -756,7 +756,10 @@ header p {
    headline cell already uses. */
 
 /* Press feedback only while a finger is actually down (:active), plus
-   a hover look ONLY on devices with a real pointer. iOS treats the last
+   a hover look ONLY on devices with a real pointer. "(hover: hover)" on
+   its own wasn't enough: iPad Safari says it can hover even with just a
+   finger, so a tapped fishing card kept a stuck accent-coloured box
+   inside it. "(pointer: fine)" (a mouse or trackpad) is required too. iOS treats the last
    tapped element as "hovered" and keeps it that way until something
    else is tapped — so a plain :hover rule left whichever card had just
    been tapped, swiped or refreshed stuck in this cream colour, and the
@@ -773,7 +776,7 @@ header p {
   background: var(--accent-light);
 }
 
-@media (hover: hover) {
+@media (hover: hover) and (pointer: fine) {
   .tide-row:hover {
     background: var(--accent-light);
   }
@@ -882,7 +885,7 @@ header p {
   background: rgba(255, 255, 255, .5);
 }
 
-@media (hover: hover) {
+@media (hover: hover) and (pointer: fine) {
   .headline-cell:hover {
     background: rgba(255, 255, 255, .5);
   }
@@ -903,7 +906,7 @@ header p {
   background: #d3e6f5;
 }
 
-@media (hover: hover) {
+@media (hover: hover) and (pointer: fine) {
   .headline-cell-frost:hover {
     background: #d3e6f5;
   }

@@ -494,7 +494,11 @@
 // loaded by coast.html and index.html); the Coast map's title picks the
 // area; the tide sheet links to the map; .html pages are matched in the
 // cache without their ?query, so coast.html?area=… works offline.
-const SHELL_CACHE_NAME = "cloude-shell-v117";
+// Bumped to v118: style.css — hover looks on the tide/fishing cards and
+// headline cells only with a mouse or trackpad ((hover: hover) and
+// (pointer: fine)); on an iPad a tapped fishing card kept a stuck
+// accent-coloured box inside it.
+const SHELL_CACHE_NAME = "cloude-shell-v118";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
