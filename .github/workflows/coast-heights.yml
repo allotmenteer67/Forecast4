@@ -1,10 +1,12 @@
 # Coast map data, step 2 — run by hand from the Actions tab ("Run
 # workflow"), after coast-data (step 1) has run at least once.
-# Reads the Welsh Government 1 m LIDAR terrain model for St Brides Bay
-# (only the parts needed, straight from its online copy) and saves
-# compact height-and-steepness tiles under data/coast/stbrides/heights/,
-# plus a preview picture and the Ordnance Survey mean low water line
-# (data/coast/stbrides/low-water.json). Foreshore the survey couldn't see
+# For each stretch of coast in scripts/coast-areas.json (or the one
+# picked when running), reads the 1 m LIDAR terrain model — Welsh
+# Government for St Brides Bay, Environment Agency for Lyme Regis and
+# Charmouth — only the parts needed, and saves compact
+# height-and-steepness tiles under data/coast/<area>/heights/, plus a
+# preview picture and the Ordnance Survey mean low water line
+# (data/coast/<area>/low-water.json). Foreshore the survey couldn't see
 # gets estimated heights (a smooth slope down to mean low water). Also
 # checks step 1's ways off the beach against the ground heights.
 # Not scheduled: the survey doesn't change.
@@ -12,6 +14,15 @@ name: coast-heights
 
 on:
   workflow_dispatch:
+    inputs:
+      area:
+        description: "Which stretch of coast (see scripts/coast-areas.json)"
+        type: choice
+        default: all
+        options:
+          - all
+          - stbrides
+          - charmouth
 
 permissions:
   contents: write
@@ -37,9 +48,13 @@ jobs:
         run: pip install rasterio numpy pillow pyogrio shapely scipy
 
       - name: Build height tiles
+        env:
+          COAST_AREA: ${{ inputs.area || 'all' }}
         run: python scripts/build-coast-heights.py
 
       - name: Commit the height tiles
+        # Also after a failed area, so the areas that worked are kept.
+        if: ${{ !cancelled() }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

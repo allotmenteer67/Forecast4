@@ -1,13 +1,24 @@
 # Coast map data — run by hand from the Actions tab ("Run workflow").
 # Step 1: named coastal features, ways off the beach, cliffs and beaches
-# for St Brides Bay (scripts/collect-coast-names.mjs), saved under
-# data/coast/stbrides/. Not scheduled: this data hardly ever changes, so
-# it only needs running again after a fix, or after local names are
-# added to data/coast/stbrides/aliases.json.
+# (scripts/collect-coast-names.mjs) for each stretch of coast in
+# scripts/coast-areas.json — St Brides Bay, and Lyme Regis to Charmouth —
+# saved under data/coast/<area>/. Pick one area or "all" when running.
+# Not scheduled: this data hardly ever changes, so it only needs running
+# again after a fix, a new area, or local names added to
+# data/coast/<area>/aliases.json.
 name: coast-data
 
 on:
   workflow_dispatch:
+    inputs:
+      area:
+        description: "Which stretch of coast (see scripts/coast-areas.json)"
+        type: choice
+        default: all
+        options:
+          - all
+          - stbrides
+          - charmouth
 
 permissions:
   contents: write
@@ -28,9 +39,13 @@ jobs:
           node-version: "24"
 
       - name: Collect names, ways off, cliffs and beaches
+        env:
+          COAST_AREA: ${{ inputs.area || 'all' }}
         run: node scripts/collect-coast-names.mjs
 
       - name: Commit the coast data
+        # Also after a failed area, so the areas that worked are kept.
+        if: ${{ !cancelled() }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
