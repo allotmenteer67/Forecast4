@@ -2,7 +2,8 @@
 //
 // Run by .github/workflows/coast-data.yml (by hand, from the Actions
 // tab — not on a schedule; this data hardly ever changes). Collects, for
-// one stretch of coast (COAST_AREA below: Ramsey to St Ann's Head):
+// each stretch of coast in scripts/coast-areas.json (St Brides Bay;
+// Lyme Regis and Charmouth):
 //
 //   names.json     every named coastal feature — headlands, points,
 //                  bays, beaches, rocks, islands, villages near the shore
@@ -39,26 +40,17 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-// ---- The stretch of coast ----
-const COAST_AREA = {
-  id: "stbrides",
-  label: "St Brides Bay — Ramsey and St Davids to St Ann's Head, with Skomer and Skokholm",
-  south: 51.665,
-  west: -5.38,
-  north: 51.885,
-  east: -5.05
-};
-// The download box above is a simple rectangle, which also catches the
-// inside of Milford Haven east of Dale. Everything is trimmed to this
-// outline instead: the St Davids peninsula's south coast and Ramsey
-// Island, Solva along to Newgale, round the bay, Skomer and Skokholm, the
-// Marloes peninsula, and down to Dale and round St Ann's Head. [lat, lon]
-// corners. Kept the same as scripts/build-coast-heights.py, so names,
-// ways off and the height tiles cover the same ground.
-const COAST_OUTLINE = [
-  [51.885, -5.380], [51.885, -5.050], [51.735, -5.050], [51.735, -5.135],
-  [51.665, -5.135], [51.665, -5.380]
-];
+// ---- The stretches of coast ----
+// Each area is described in scripts/coast-areas.json (shared with
+// build-coast-heights.py, so names, ways off and the height tiles cover
+// the same ground). COAST_AREA=<id> collects just that one; unset or
+// "all" collects every area in turn. COAST_AREA and COAST_OUTLINE below
+// are set to the area being collected. The download box is a simple
+// rectangle; everything is trimmed to the outline (St Brides' leaves out
+// the inside of Milford Haven, for example). [lat, lon] corners.
+const AREAS_FILE = process.env.COAST_AREAS_FILE || path.join(path.dirname(new URL(import.meta.url).pathname), "coast-areas.json");
+let COAST_AREA = null;
+let COAST_OUTLINE = [];
 
 // Names further than this from the coastline are left out (farms and
 // inland hamlets aren't useful for describing a position at sea).
@@ -69,7 +61,7 @@ const SAME_FEATURE_M = 600;
 // this distance of the beach outline.
 const PATH_TO_BEACH_M = 25;
 
-const OUT_DIR = path.join("data", "coast", COAST_AREA.id);
+let OUT_DIR = "";
 const OVERPASS_URLS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter"
@@ -329,7 +321,9 @@ function osmKind(tags) {
 
 // ---- Ordnance Survey Open Names ----
 // The download is a zip of CSV files, one per 10 km grid square, with no
-// header row. Only the SM (west Pembrokeshire) squares are unpacked.
+// header row. Downloaded once, and only the 100 km squares the areas sit
+// in (SM for west Pembrokeshire, SY for Lyme Bay) are unpacked; each
+// area then keeps the names inside its own outline.
 const OS_COLS = { NAME1: 2, NAME1_LANG: 3, NAME2: 4, NAME2_LANG: 5, TYPE: 6, LOCAL_TYPE: 7, X: 8, Y: 9 };
 
 function parseCsvLine(line) {
@@ -363,7 +357,7 @@ function osKind(type, localType) {
   return "Other";
 }
 
-async function fetchOsNames() {
+async function fetchOsNames(grids) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "osnames-"));
   const zipPath = path.join(tmp, "opennames.zip");
   console.log("Ordnance Survey Open Names: downloading (large file, can take a minute)…");
@@ -371,8 +365,9 @@ async function fetchOsNames() {
   if (!res.ok) throw new Error(`OS Open Names download answered ${res.status}`);
   fs.writeFileSync(zipPath, Buffer.from(await res.arrayBuffer()));
   const listing = execFileSync("unzip", ["-Z1", zipPath], { maxBuffer: 64 * 1024 * 1024 }).toString().split("\n");
-  const wanted = listing.filter(n => /(^|\/)SM\d\d\.csv$/i.test(n));
-  if (!wanted.length) throw new Error("OS Open Names zip has no SM grid files — has its layout changed?");
+  const gridRe = new RegExp(`(^|/)(${grids.join("|")})\\d\\d\\.csv$`, "i");
+  const wanted = listing.filter(n => gridRe.test(n));
+  if (!wanted.length) throw new Error(`OS Open Names zip has no ${grids.join("/")} grid files — has its layout changed?`);
   execFileSync("unzip", ["-o", "-j", "-q", zipPath, ...wanted, "-d", tmp]);
 
   const results = [];
@@ -391,7 +386,6 @@ async function fetchOsNames() {
       const E = Number(f[OS_COLS.X]), N = Number(f[OS_COLS.Y]);
       if (!Number.isFinite(E) || !Number.isFinite(N)) continue;
       const { lat, lon } = bngToWgs84(E, N);
-      if (!insideArea(lat, lon)) continue;
       const alt = [];
       if (f[OS_COLS.NAME2]) alt.push(f[OS_COLS.NAME2]);
       const baseKind = osKind(type, localType);
@@ -406,14 +400,45 @@ async function fetchOsNames() {
     }
   }
   fs.rmSync(tmp, { recursive: true, force: true });
-  console.log(`Ordnance Survey Open Names: ${results.length} names in the area`);
+  console.log(`Ordnance Survey Open Names: ${results.length} names in grid squares ${grids.join(", ")}`);
   return results;
 }
 
 // ---- Main ----
 async function main() {
+  const want = (process.env.COAST_AREA || "all").trim() || "all";
+  const areas = JSON.parse(fs.readFileSync(AREAS_FILE, "utf8")).areas;
+  const chosen = areas.filter(a => want === "all" || a.id === want);
+  if (!chosen.length) {
+    console.error(`No area called "${want}" in ${AREAS_FILE} (there are: ${areas.map(a => a.id).join(", ")})`);
+    process.exit(1);
+  }
+  let allOsNames = [], osProblem = null;
+  try {
+    allOsNames = await fetchOsNames([...new Set(chosen.map(a => a.osGrid))]);
+  } catch (err) {
+    osProblem = `Ordnance Survey Open Names could not be downloaded (${err.message}).`;
+  }
+  const failed = [];
+  for (const area of chosen) {
+    COAST_AREA = area;
+    COAST_OUTLINE = area.outline;
+    OUT_DIR = path.join("data", "coast", area.id);
+    console.log(`==== ${area.id}: ${area.label} ====`);
+    const ok = await collectArea(allOsNames.filter(n => insideArea(n.lat, n.lon)), osProblem);
+    if (!ok) failed.push(area.id);
+  }
+  if (failed.length) {
+    console.error(`Failed: ${failed.join(", ")} (the other areas were collected)`);
+    process.exit(1);
+  }
+}
+
+// One area. Returns false if neither source gave anything.
+async function collectArea(osNames, osProblem) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const problems = [];
+  if (osProblem) problems.push(osProblem);
 
   let osm = [];
   try {
@@ -421,15 +446,10 @@ async function main() {
   } catch (err) {
     problems.push(`OpenStreetMap could not be downloaded (${err.message}).`);
   }
-  let osNames = [];
-  try {
-    osNames = await fetchOsNames();
-  } catch (err) {
-    problems.push(`Ordnance Survey Open Names could not be downloaded (${err.message}).`);
-  }
+  console.log(`Ordnance Survey Open Names: ${osNames.length} names in the area`);
   if (!osm.length && !osNames.length) {
     console.error(problems.join("\n"));
-    process.exit(1);
+    return false;
   }
 
   // Coastline, beaches, cliffs
@@ -561,7 +581,7 @@ async function main() {
   }
 
   const meta = {
-    area: COAST_AREA,
+    area: { id: COAST_AREA.id, label: COAST_AREA.label, south: COAST_AREA.south, west: COAST_AREA.west, north: COAST_AREA.north, east: COAST_AREA.east },
     builtAt: new Date().toISOString(),
     sources: [
       osNames.length ? "Contains OS data © Crown copyright and database right (Open Names, Open Government Licence)" : null,
@@ -601,6 +621,7 @@ async function main() {
 
   console.log(`Wrote ${names.length} names, ${accessDeduped.length} ways off, ${cliffs.length} cliffs, ${beaches.length} beaches to ${OUT_DIR}`);
   if (problems.length) console.warn("Problems:\n" + problems.join("\n"));
+  return true;
 }
 
 main().catch(err => {

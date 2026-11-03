@@ -1,20 +1,25 @@
 # ==== Coast map, step 2: ground heights and steepness ====
 #
 # Run by .github/workflows/coast-heights.yml (by hand, from the Actions
-# tab). Reads the Welsh Government 1 m LIDAR terrain model (the DTM, with
-# buildings and plants removed) straight from its online copy, only the
-# parts that are needed, and turns the coastal strip of St Brides Bay
-# (Newgale to Dale, with Skomer and Skokholm) into small picture tiles
-# the phone can read:
+# tab). For each stretch of coast in scripts/coast-areas.json (or just
+# the one named in COAST_AREA), reads a 1 m LIDAR terrain model (the DTM,
+# with buildings and plants removed) — only the parts that are needed —
+# and turns the coastal strip into small picture tiles the phone can read:
 #
-#   data/coast/stbrides/heights/index.json   which tiles exist, where
-#                                            they are, how to read them
-#   data/coast/stbrides/heights/r<row>c<col>.png
-#                                            one tile, about 1 km square,
-#                                            2 m per pixel
-#   data/coast/stbrides/heights/preview.png  a small picture of the whole
-#                                            area, to check by eye that
-#                                            the run worked
+#   Wales:   the Welsh Government LiDAR 2020-2023, straight from its
+#            online copy (one big cloud-optimised file).
+#   England: the Environment Agency's LIDAR Composite DTM, fetched from
+#            its public image service in 2 km squares into one file
+#            first, then read the same way.
+#
+#   data/coast/<area>/heights/index.json   which tiles exist, where
+#                                          they are, how to read them
+#   data/coast/<area>/heights/r<row>c<col>.png
+#                                          one tile, about 1 km square,
+#                                          2 m per pixel
+#   data/coast/<area>/heights/preview.png  a small picture of the whole
+#                                          area, to check by eye that
+#                                          the run worked
 #
 # How a tile is read (also written into index.json):
 #   red   = ground height. 0 = no data (sea, or no laser return);
@@ -23,7 +28,7 @@
 #           land more than about 250 m from the sea, which is kept only
 #           as "land" so islands and headlands still look solid.
 #           That range covers the whole tidal range at Milford Haven
-#           with room to spare, at 10 cm detail.
+#           and Lyme Regis with room to spare, at 10 cm detail.
 #   green = steepness of the ground in degrees (0-90), but only where the
 #           height changes by at least RELIEF_MIN_M within about 14 m —
 #           so field banks and hedges (short but steep) read as flat,
@@ -62,12 +67,13 @@
 # high water) and meets the sea at mean low water — like a sheet stretched
 # between the beach and the low water mark. It's solved over the tile plus
 # ESTIMATE_PAD cells all round, so patches crossing a tile edge join up.
-# Mean low and high water are for Milford Haven (Admiralty tide tables):
-# MLWS 0.7, MLWN 2.5, MHWN 5.2, MHWS 7.0 m above Chart Datum, which is
-# 3.71 m below Ordnance Datum.
+# Mean low and high water are set per area in coast-areas.json (with a
+# note there saying where they came from).
 #
-# Source and licence: Welsh Government LiDAR 2020-2023, 1 m DTM,
-# published on DataMapWales under the Open Government Licence v3.0.
+# Sources and licences: Welsh Government LiDAR 2020-2023, 1 m DTM,
+# published on DataMapWales; Environment Agency LIDAR Composite DTM, 1 m
+# (© Environment Agency copyright and/or database right). Both under the
+# Open Government Licence v3.0.
 #
 # The sea itself usually gives no laser return, so it shows as "no
 # data". Foreshore that was underwater when the survey plane flew over
@@ -92,35 +98,37 @@ import tempfile
 from rasterio.features import rasterize
 from rasterio.warp import transform_geom
 
-SOURCE_URL = os.environ.get(
+WALES_DTM_URL = os.environ.get(
     "COAST_DTM_URL",
     "https://dmwproductionblob.blob.core.windows.net/cogs/lidar/wales_dtm_32bit_cog.tif",
 )
-
-AREA_ID = "stbrides"
-# The St Davids peninsula's south coast and Ramsey Island (St Justinian,
-# Porthclais, Caerfai), Solva and the coast to Newgale, round the bay,
-# Skomer and Skokholm, the Marloes peninsula, down to Dale and round St
-# Ann's Head.
-# - North: up to 51.885 (taking in Solva harbour and the north end of
-#   Ramsey, about 51.883 N). The St Davids peninsula's north coast
-#   (Whitesands, St Davids Head) is beyond it.
-# - West: 5.38 W, past Ramsey's west cliffs (about 5.35 W). It used to
-#   stop at 5.23 W north of 51.835, leaving out everything west of Solva.
-# - South: St Ann's Head's tip is about 51.677 N. The Dale peninsula's
-#   east side (Dale Point, Watwick) reaches past 5.15 W, so that corner
-#   is wider. East of 5.135 below 51.735 is Milford Haven: left out.
-# Keep scripts/collect-coast-names.mjs's outline the same, so names and
-# ways off cover the same ground.
-NORTH, SOUTH, WEST, EAST = 51.885, 51.665, -5.380, -5.050
-COAST_OUTLINE = [
-    (51.885, -5.380), (51.885, -5.050), (51.735, -5.050), (51.735, -5.135),
-    (51.665, -5.135), (51.665, -5.380),
+# England: the Environment Agency's LIDAR Composite DTM, 1 m (OGL), read
+# through its public image service a few square kilometres at a time.
+# The 2022 composite first; the undated one is tried if that fails.
+EA_IMAGE_SERVERS = [u for u in os.environ.get("COAST_EA_IMAGESERVER", "").split(",") if u] or [
+    "https://environment.data.gov.uk/image/rest/services/SURVEY/LIDAR_Composite_1m_DTM_2022_Elevation/ImageServer",
+    "https://environment.data.gov.uk/image/rest/services/SURVEY/LIDAR_Composite_1m_DTM_Elevation/ImageServer",
 ]
 
-# About 2 m per cell at this latitude, in both directions.
-D_LAT = 0.000018
-D_LON = 0.000029
+# ---- The areas ----
+# Each stretch of coast is described in scripts/coast-areas.json (shared
+# with collect-coast-names.mjs). COAST_AREA=<id> builds just that one;
+# unset or "all" builds every area in turn. The settings below are
+# filled in from the area being built (see use_area).
+AREAS_FILE = os.environ.get("COAST_AREAS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "coast-areas.json"))
+
+AREA_ID = "stbrides"
+AREA = {}
+SOURCE_URL = WALES_DTM_URL
+NORTH, SOUTH, WEST, EAST = 51.885, 51.665, -5.380, -5.050
+COAST_OUTLINE = []
+D_LAT = 0.000018      # about 2 m per cell
+D_LON = 0.000029      # about 2 m per cell at St Brides; set per area
+MLW_OD = -2.1               # mean low water, m OD (per area)
+MHW_OD = 2.4                # mean high water, m OD (per area)
+OS_AREA = "SM"              # the OS 100 km grid square (per area)
+OUT_DIR = HEIGHTS_DIR = ""
+
 TILE = 512            # cells per tile side: about 1 km
 COARSE = 32           # first pass at 32 x coarser, to find which tiles are coastal
 NEAR_SEA_COARSE = 4   # detail kept within 4 coarse cells (about 250 m) of the sea
@@ -131,12 +139,162 @@ RELIEF_MIN_M = 4.0          # steepness only counts where height changes this mu
 RELIEF_HALF = 3             # ... within 3 cells each way (a 7 x 7 cell, ~14 m window)
 UNSURVEYED_LOW_M = 1.0      # surveyed ground this low counts as foreshore
 UNSURVEYED_REACH = 20       # unsurveyed cells within 20 cells (~40 m) of it are flagged
-MLW_OD = -2.1               # mean low water at Milford Haven, m OD ((0.7 + 2.5) / 2 - 3.71)
-MHW_OD = 2.4                # mean high water, m OD ((5.2 + 7.0) / 2 - 3.71)
 ESTIMATE_PAD = 128          # cells (~250 m) of surroundings used when estimating
 
-OUT_DIR = os.path.join("data", "coast", AREA_ID)
-HEIGHTS_DIR = os.path.join(OUT_DIR, "heights")
+
+
+def load_areas():
+    with open(AREAS_FILE) as f:
+        return json.load(f)["areas"]
+
+
+def use_area(cfg):
+    """Point every setting at one area from coast-areas.json."""
+    global AREA, AREA_ID, NORTH, SOUTH, WEST, EAST, COAST_OUTLINE, D_LAT, D_LON
+    global MLW_OD, MHW_OD, OS_AREA, OUT_DIR, HEIGHTS_DIR, SOURCE_URL
+    AREA = cfg
+    AREA_ID = cfg["id"]
+    NORTH, SOUTH, WEST, EAST = cfg["north"], cfg["south"], cfg["west"], cfg["east"]
+    COAST_OUTLINE = [tuple(p) for p in cfg["outline"]]
+    D_LAT, D_LON = cfg["dLat"], cfg["dLon"]
+    MLW_OD, MHW_OD = cfg["meanLowWaterOD"], cfg["meanHighWaterOD"]
+    OS_AREA = cfg["osGrid"]
+    OUT_DIR = os.path.join("data", "coast", AREA_ID)
+    HEIGHTS_DIR = os.path.join(OUT_DIR, "heights")
+    SOURCE_URL = WALES_DTM_URL if cfg.get("lidar", "wales") == "wales" else None
+
+
+# ---- England: Environment Agency LIDAR, fetched into one local file ----
+EA_CHUNK_M = 2000        # fetched in squares this size (metres, 1 m cells)
+EA_MARGIN_M = 600        # extra all round, for steepness and estimates at the edges
+EA_NODATA = -9999.0
+
+
+def _get(url, timeout=180):
+    req = urllib.request.Request(url, headers={"User-Agent": "Cloude coast map"})
+    last = None
+    for attempt in range(1, 5):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read(), r.headers.get("Content-Type", "")
+        except Exception as err:  # noqa: BLE001
+            last = err
+            print(f"  fetch attempt {attempt} failed ({type(err).__name__}: {err})")
+            import time
+            time.sleep(5 * attempt)
+    raise last
+
+
+def _ea_service_info(base):
+    """The image service's own description (size limits, pixel type)."""
+    raw, _ = _get(base + "?f=json", timeout=60)
+    info = json.loads(raw.decode("utf-8", "replace"))
+    if "error" in info:
+        raise RuntimeError(f"service says: {info['error']}")
+    return info
+
+
+def _ea_chunk(base, x0, y0, x1, y1, raw_rule):
+    """Heights for one square from the image service, as float32 rows from
+    north to south (NaN = no data)."""
+    from urllib.parse import urlencode
+    w, h = int(round(x1 - x0)), int(round(y1 - y0))
+    q = {
+        "bbox": f"{x0},{y0},{x1},{y1}", "bboxSR": 27700, "imageSR": 27700,
+        "size": f"{w},{h}", "format": "tiff", "pixelType": "F32",
+        "noData": EA_NODATA, "noDataInterpretation": "esriNoDataMatchAny",
+        "interpolation": "RSP_NearestNeighbor", "f": "image",
+    }
+    if raw_rule:
+        # Raw heights, not a picture: no colour stretch or hillshade.
+        q["renderingRule"] = json.dumps({"rasterFunction": "None"})
+    raw, ctype = _get(base + "/exportImage?" + urlencode(q))
+    if not raw[:4] in (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"):
+        raise RuntimeError(f"not a TIFF ({ctype}): {raw[:200]!r}")
+    from rasterio.io import MemoryFile
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        a = ds.read(1).astype("float32")
+        nd = ds.nodata
+    if a.shape != (h, w):
+        raise RuntimeError(f"asked for {w} x {h} cells, got {a.shape[1]} x {a.shape[0]}")
+    if nd is not None and not math.isnan(nd):
+        a[a == nd] = np.nan
+    a[a <= EA_NODATA + 1] = np.nan
+    a[(a < -50) | (a > 1500)] = np.nan
+    return a
+
+
+def fetch_ea_dtm():
+    """Download the Environment Agency 1 m terrain model over the area
+    (plus a margin) into one GeoTIFF in British National Grid, and return
+    its path. The rest of the build reads it exactly as it reads the
+    Welsh online copy."""
+    from rasterio.warp import transform as warp_transform
+    lons = [WEST, EAST, WEST, EAST]
+    lats = [SOUTH, SOUTH, NORTH, NORTH]
+    xs, ys = warp_transform("EPSG:4326", "EPSG:27700", lons, lats)
+    x0 = math.floor(min(xs) - EA_MARGIN_M); y0 = math.floor(min(ys) - EA_MARGIN_M)
+    x1 = math.ceil(max(xs) + EA_MARGIN_M); y1 = math.ceil(max(ys) + EA_MARGIN_M)
+    width, height = x1 - x0, y1 - y0
+    print(f"England LIDAR: {width} x {height} m round the area (British National Grid {x0},{y0} to {x1},{y1})")
+
+    errors = []
+    for base in EA_IMAGE_SERVERS:
+        try:
+            info = _ea_service_info(base)
+            chunk = int(min(EA_CHUNK_M, info.get("maxImageWidth") or EA_CHUNK_M,
+                            info.get("maxImageHeight") or EA_CHUNK_M))
+            print(f"Environment Agency image service: {info.get('name', base)}; pixel type {info.get('pixelType')}; "
+                  f"cell {info.get('pixelSizeX')} m; largest image {info.get('maxImageWidth')} x {info.get('maxImageHeight')}; "
+                  f"fetching in {chunk} m squares")
+            mosaic = np.full((height, width), np.nan, dtype="float32")
+            raw_rule = True
+            n = 0
+            for cy in range(y0, y1, chunk):
+                for cx in range(x0, x1, chunk):
+                    ex, ey = min(cx + chunk, x1), min(cy + chunk, y1)
+                    try:
+                        a = _ea_chunk(base, cx, cy, ex, ey, raw_rule)
+                    except Exception as err:  # noqa: BLE001
+                        if not raw_rule:
+                            raise
+                        # Some services refuse a rendering rule: try once without.
+                        print(f"  without the raw-heights rule ({err})")
+                        raw_rule = False
+                        a = _ea_chunk(base, cx, cy, ex, ey, raw_rule)
+                    # Row 0 of the image is its north edge.
+                    r0 = y1 - ey
+                    mosaic[r0:r0 + (ey - cy), cx - x0:ex - x0] = a
+                    n += 1
+            print(f"  fetched {n} squares")
+            check_heights(mosaic)
+            path = os.path.join(tempfile.mkdtemp(), f"{AREA_ID}-ea-dtm.tif")
+            prof = dict(driver="GTiff", width=width, height=height, count=1, dtype="float32",
+                        crs="EPSG:27700", transform=from_origin(x0, y1, 1.0, 1.0), nodata=np.nan,
+                        tiled=True, blockxsize=512, blockysize=512, compress="deflate")
+            with rasterio.open(path, "w", **prof) as dst:
+                dst.write(mosaic, 1)
+            print(f"  saved {path} ({os.path.getsize(path) / 1e6:.0f} MB)")
+            return path
+        except Exception as err:  # noqa: BLE001
+            print(f"Environment Agency image service {base} failed: {type(err).__name__}: {err}")
+            errors.append(f"{base}: {err}")
+    raise RuntimeError("England LIDAR couldn't be fetched from any image service:\n  " + "\n  ".join(errors))
+
+
+def check_heights(a):
+    """Stop if the heights are clearly not ground heights in metres (the
+    trap the old Welsh archive fell into): too little data, or a middle
+    value no coast would have."""
+    valid = ~np.isnan(a)
+    share = float(valid.mean()) if a.size else 0.0
+    if share < 0.02:
+        raise RuntimeError(f"only {share:.1%} of the area has heights — wrong place, or the service sent no data")
+    v = a[valid]
+    lo, mid, hi = (float(x) for x in np.percentile(v, [2, 50, 98]))
+    print(f"  heights: {share:.0%} of the area has data; 2% / middle / 98%: {lo:.1f} / {mid:.1f} / {hi:.1f} m")
+    if not (-15 <= lo <= 50 and -10 <= mid <= 400 and hi <= 1000):
+        raise RuntimeError("these don't look like ground heights in metres (a picture, or the wrong units?)")
 
 
 def inside_outline(lat, lon):
@@ -217,7 +375,6 @@ def local_relief(h, half):
 
 # ---- Ordnance Survey foreshore (OS OpenMap Local, Open Government Licence) ----
 OS_DOWNLOADS = os.environ.get("COAST_OS_DOWNLOADS", "https://api.os.uk/downloads/v1/products/OpenMapLocal/downloads")
-OS_AREA = "SM"  # the 100 km grid square covering west Pembrokeshire
 
 
 def _find_layer(layers, want):
@@ -342,7 +499,7 @@ def load_os(bng_box):
                 crs, geoms, _t = _read(srcs["foreshore"], bng_box)
                 foreshore = [transform_geom(crs, "EPSG:4326", shapely.geometry.mapping(g))
                              for g in geoms if g is not None and not g.is_empty]
-                print(f"OS foreshore: {len(foreshore)} areas over the bay")
+                print(f"OS foreshore: {len(foreshore)} areas over the area")
             except Exception as err:  # noqa: BLE001
                 print(f"OS foreshore couldn't be read ({type(err).__name__}: {err}) — using the old 40 m rule")
         else:
@@ -397,7 +554,7 @@ def low_water_lines(src, bng_box):
         parts.extend(getattr(g, "geoms", [g]))
     parts = [p for p in parts if p.geom_type == "LineString" and len(p.coords) >= 2]
     if not parts:
-        print("OS TidalBoundary: no low water line over the bay")
+        print("OS TidalBoundary: no low water line over the area")
         return []
     merged = linemerge(parts)
     merged = merged.simplify(LOW_WATER_SIMPLIFY_M, preserve_topology=False)
@@ -412,7 +569,7 @@ def low_water_lines(src, bng_box):
         if any(inside_outline(la, lo) for la, lo in pts[::max(1, len(pts) // 20)] + [pts[-1]]):
             lines.append(pts)
     n = sum(len(l) for l in lines)
-    print(f"OS low water line: {len(lines)} lines, {n} points over the bay")
+    print(f"OS low water line: {len(lines)} lines, {n} points over the area")
     return lines
 
 
@@ -513,8 +670,9 @@ def slope_degrees(h, lat_centre):
     return np.clip(np.round(s), 0, 90).astype(np.uint8)
 
 
-def main():
+def build_area():
     os.makedirs(HEIGHTS_DIR, exist_ok=True)
+    print(f"==== {AREA_ID}: {AREA.get('label', '')} ====")
     total_rows = int(math.ceil((NORTH - SOUTH) / D_LAT))
     total_cols = int(math.ceil((EAST - WEST) / D_LON))
     tile_rows = int(math.ceil(total_rows / TILE))
@@ -537,7 +695,8 @@ def main():
     write_low_water(low_water)
     fs_bounds = [shape_bounds(g) for g in foreshore] if foreshore else []
 
-    with rasterio.Env(**env), rasterio.open(SOURCE_URL) as src:
+    source = SOURCE_URL or fetch_ea_dtm()
+    with rasterio.Env(**env), rasterio.open(source) as src:
         print(f"Source: {src.width} x {src.height}, {src.crs}, nodata={src.nodata}, overviews={src.overviews(1)}")
         nodata = src.nodata
 
@@ -663,7 +822,10 @@ def main():
         "landmask": {"file": "landmask.png", "dLat": D_LAT * COARSE, "dLon": D_LON * COARSE,
                      "meaning": "white = land, black = sea or no data; covers the whole grid at the coarse spacing"},
         "tiles": tiles,
-        "source": "Contains Welsh Government LiDAR 2020-2023 (1 m terrain model), Open Government Licence v3.0",
+        "source": ("Contains Welsh Government LiDAR 2020-2023 (1 m terrain model), Open Government Licence v3.0"
+                   if SOURCE_URL else
+                   "Contains Environment Agency LIDAR Composite DTM (1 m), © Environment Agency copyright and/or database right, Open Government Licence v3.0"),
+        "area": AREA.get("label"),
     }
     with open(os.path.join(HEIGHTS_DIR, "index.json"), "w") as f:
         json.dump(index, f)
@@ -774,6 +936,25 @@ def check_access(tiles):
         f.write("\n")
     ok = sum(1 for a in data.get("access", []) if a.get("atBeachLevel"))
     print(f"Ways off checked: {checked}, at beach level: {ok}")
+
+
+def main():
+    want = os.environ.get("COAST_AREA", "all").strip() or "all"
+    areas = load_areas()
+    chosen = [a for a in areas if want == "all" or a["id"] == want]
+    if not chosen:
+        raise SystemExit(f"No area called {want!r} in {AREAS_FILE} (there are: {', '.join(a['id'] for a in areas)})")
+    failed = []
+    for cfg in chosen:
+        use_area(cfg)
+        try:
+            build_area()
+        except Exception as err:  # noqa: BLE001
+            # One area failing shouldn't lose the others' tiles.
+            print(f"Area {AREA_ID} FAILED: {type(err).__name__}: {err}", file=sys.stderr)
+            failed.append(AREA_ID)
+    if failed:
+        raise SystemExit(f"Failed: {', '.join(failed)} (the other areas were built)")
 
 
 if __name__ == "__main__":

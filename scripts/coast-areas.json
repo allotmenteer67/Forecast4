@@ -1,0 +1,28 @@
+{
+  "about": "The stretches of coast the Coast map covers. Read by scripts/collect-coast-names.mjs (step 1) and scripts/build-coast-heights.py (step 2). Each area's files go in data/coast/<id>/. The app's own list (coast-areas.js) uses the same ids. Corners are [lat, lon]; the outline trims the box (for example to leave out the inside of Milford Haven).",
+  "areas": [
+    {
+      "id": "stbrides",
+      "label": "St Brides Bay — Ramsey and St Davids to St Ann's Head, with Skomer and Skokholm",
+      "north": 51.885, "south": 51.665, "west": -5.380, "east": -5.050,
+      "outline": [[51.885, -5.380], [51.885, -5.050], [51.735, -5.050], [51.735, -5.135],
+                  [51.665, -5.135], [51.665, -5.380]],
+      "osGrid": "SM",
+      "lidar": "wales",
+      "dLat": 0.000018, "dLon": 0.000029,
+      "meanLowWaterOD": -2.1, "meanHighWaterOD": 2.4,
+      "tideNote": "Mean low and high water at Milford Haven (Admiralty): MLWS 0.7, MLWN 2.5, MHWN 5.2, MHWS 7.0 m above Chart Datum, which is 3.71 m below Ordnance Datum."
+    },
+    {
+      "id": "charmouth",
+      "label": "Lyme Regis and Charmouth — a mile west of the Cobb to Stonebarrow",
+      "north": 50.752, "south": 50.700, "west": -2.962, "east": -2.876,
+      "outline": [[50.752, -2.962], [50.752, -2.876], [50.700, -2.876], [50.700, -2.962]],
+      "osGrid": "SY",
+      "lidar": "england",
+      "dLat": 0.000018, "dLon": 0.0000284,
+      "meanLowWaterOD": -1.2, "meanHighWaterOD": 1.6,
+      "tideNote": "Approximate, from Lyme Regis's typical spring range (about 3.8 m) and neap range (about 1.7 m) round a mean sea level of about +0.2 m OD. Only used for the estimated foreshore, which is rare here."
+    }
+  ]
+}
