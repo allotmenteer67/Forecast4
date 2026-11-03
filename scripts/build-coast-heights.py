@@ -9,8 +9,8 @@
 #   Wales:   the Welsh Government LiDAR 2020-2023, straight from its
 #            online copy (one big cloud-optimised file).
 #   England: the Environment Agency's LIDAR Composite DTM, fetched from
-#            its public image service in 2 km squares into one file
-#            first, then read the same way.
+#            its public Web Coverage Service (WCS) in 2 km squares into
+#            one file first, then read the same way.
 #
 #   data/coast/<area>/heights/index.json   which tiles exist, where
 #                                          they are, how to read them
@@ -103,11 +103,12 @@ WALES_DTM_URL = os.environ.get(
     "https://dmwproductionblob.blob.core.windows.net/cogs/lidar/wales_dtm_32bit_cog.tif",
 )
 # England: the Environment Agency's LIDAR Composite DTM, 1 m (OGL), read
-# through its public image service a few square kilometres at a time.
-# The 2022 composite first; the undated one is tried if that fails.
-EA_IMAGE_SERVERS = [u for u in os.environ.get("COAST_EA_IMAGESERVER", "").split(",") if u] or [
-    "https://environment.data.gov.uk/image/rest/services/SURVEY/LIDAR_Composite_1m_DTM_2022_Elevation/ImageServer",
-    "https://environment.data.gov.uk/image/rest/services/SURVEY/LIDAR_Composite_1m_DTM_Elevation/ImageServer",
+# through its public Web Coverage Service (WCS 2.0.1) a few square
+# kilometres at a time. (Its old ArcGIS image service now answers
+# "Invalid URL".) Override with COAST_EA_WCS (comma-separated).
+EA_WCS_URLS = [u for u in os.environ.get("COAST_EA_WCS", "").split(",") if u] or [
+    "https://environment.data.gov.uk/spatialdata/lidar-composite-digital-terrain-model-dtm-1m/wcs",
+    "https://environment.data.gov.uk/geoservices/datasets/13787b9a-26a4-4775-8523-806d13af58fc/wcs",
 ]
 
 # ---- The areas ----
@@ -167,7 +168,6 @@ def use_area(cfg):
 # ---- England: Environment Agency LIDAR, fetched into one local file ----
 EA_CHUNK_M = 2000        # fetched in squares this size (metres, 1 m cells)
 EA_MARGIN_M = 600        # extra all round, for steepness and estimates at the edges
-EA_NODATA = -9999.0
 
 
 def _get(url, timeout=180):
@@ -185,43 +185,55 @@ def _get(url, timeout=180):
     raise last
 
 
-def _ea_service_info(base):
-    """The image service's own description (size limits, pixel type)."""
-    raw, _ = _get(base + "?f=json", timeout=60)
-    info = json.loads(raw.decode("utf-8", "replace"))
-    if "error" in info:
-        raise RuntimeError(f"service says: {info['error']}")
-    return info
-
-
-def _ea_chunk(base, x0, y0, x1, y1, raw_rule):
-    """Heights for one square from the image service, as float32 rows from
-    north to south (NaN = no data)."""
+def _wcs_url(base, params):
     from urllib.parse import urlencode
-    w, h = int(round(x1 - x0)), int(round(y1 - y0))
-    q = {
-        "bbox": f"{x0},{y0},{x1},{y1}", "bboxSR": 27700, "imageSR": 27700,
-        "size": f"{w},{h}", "format": "tiff", "pixelType": "F32",
-        "noData": EA_NODATA, "noDataInterpretation": "esriNoDataMatchAny",
-        "interpolation": "RSP_NearestNeighbor", "f": "image",
-    }
-    if raw_rule:
-        # Raw heights, not a picture: no colour stretch or hillshade.
-        q["renderingRule"] = json.dumps({"rasterFunction": "None"})
-    raw, ctype = _get(base + "/exportImage?" + urlencode(q))
-    if not raw[:4] in (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"):
-        raise RuntimeError(f"not a TIFF ({ctype}): {raw[:200]!r}")
+    return base + ("&" if "?" in base else "?") + urlencode(params)
+
+
+def _ea_wcs_setup(base):
+    """The height coverage's id and its two axis names (east, north) from
+    the service's own description."""
+    import re
+    raw, _ = _get(_wcs_url(base, [("service", "WCS"), ("version", "2.0.1"), ("request", "GetCapabilities")]), timeout=90)
+    caps = raw.decode("utf-8", "replace")
+    ids = re.findall(r"<wcs:CoverageId>([^<]+)</wcs:CoverageId>", caps)
+    if not ids:
+        raise RuntimeError(f"no coverages listed ({caps[:200]!r})")
+    pick = ([i for i in ids if "elevation" in i.lower() and "dtm" in i.lower()] or
+            [i for i in ids if "hillshade" not in i.lower()])
+    if not pick:
+        raise RuntimeError(f"no height coverage among {ids}")
+    cov = pick[0]
+    labels = None
+    try:
+        raw, _ = _get(_wcs_url(base, [("service", "WCS"), ("version", "2.0.1"), ("request", "DescribeCoverage"),
+                                      ("coverageId", cov)]), timeout=90)
+        m = re.search(r'axisLabels="([^"]+)"', raw.decode("utf-8", "replace"))
+        if m and len(m.group(1).split()) >= 2:
+            labels = tuple(m.group(1).split()[:2])
+    except Exception as err:  # noqa: BLE001
+        print(f"  DescribeCoverage failed ({err}); guessing the axis names")
+    return cov, labels
+
+
+def _ea_wcs_chunk(base, cov, labels, x0, y0, x1, y1):
+    """One square from the WCS as (array, transform); NaN = no data."""
+    ax, ay = labels
+    url = _wcs_url(base, [("service", "WCS"), ("version", "2.0.1"), ("request", "GetCoverage"),
+                          ("coverageId", cov), ("format", "image/tiff"),
+                          ("subset", f"{ax}({x0},{x1})"), ("subset", f"{ay}({y0},{y1})")])
+    raw, ctype = _get(url)
+    if raw[:4] not in (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"):
+        raise RuntimeError(f"not a TIFF ({ctype}): {raw[:300]!r}")
     from rasterio.io import MemoryFile
     with MemoryFile(raw) as mf, mf.open() as ds:
         a = ds.read(1).astype("float32")
         nd = ds.nodata
-    if a.shape != (h, w):
-        raise RuntimeError(f"asked for {w} x {h} cells, got {a.shape[1]} x {a.shape[0]}")
+        tr = ds.transform
     if nd is not None and not math.isnan(nd):
         a[a == nd] = np.nan
-    a[a <= EA_NODATA + 1] = np.nan
     a[(a < -50) | (a > 1500)] = np.nan
-    return a
+    return a, tr
 
 
 def fetch_ea_dtm():
@@ -239,32 +251,42 @@ def fetch_ea_dtm():
     print(f"England LIDAR: {width} x {height} m round the area (British National Grid {x0},{y0} to {x1},{y1})")
 
     errors = []
-    for base in EA_IMAGE_SERVERS:
+    for base in EA_WCS_URLS:
         try:
-            info = _ea_service_info(base)
-            chunk = int(min(EA_CHUNK_M, info.get("maxImageWidth") or EA_CHUNK_M,
-                            info.get("maxImageHeight") or EA_CHUNK_M))
-            print(f"Environment Agency image service: {info.get('name', base)}; pixel type {info.get('pixelType')}; "
-                  f"cell {info.get('pixelSizeX')} m; largest image {info.get('maxImageWidth')} x {info.get('maxImageHeight')}; "
-                  f"fetching in {chunk} m squares")
+            cov, labels = _ea_wcs_setup(base)
+            tries = [labels] if labels else []
+            tries += [t for t in (("E", "N"), ("x", "y"), ("X", "Y"), ("Easting", "Northing")) if t != labels]
+            print(f"Environment Agency WCS {base}: coverage {cov}; axes {labels or 'not given'}")
             mosaic = np.full((height, width), np.nan, dtype="float32")
-            raw_rule = True
+            chunk = EA_CHUNK_M
             n = 0
             for cy in range(y0, y1, chunk):
                 for cx in range(x0, x1, chunk):
                     ex, ey = min(cx + chunk, x1), min(cy + chunk, y1)
-                    try:
-                        a = _ea_chunk(base, cx, cy, ex, ey, raw_rule)
-                    except Exception as err:  # noqa: BLE001
-                        if not raw_rule:
-                            raise
-                        # Some services refuse a rendering rule: try once without.
-                        print(f"  without the raw-heights rule ({err})")
-                        raw_rule = False
-                        a = _ea_chunk(base, cx, cy, ex, ey, raw_rule)
-                    # Row 0 of the image is its north edge.
-                    r0 = y1 - ey
-                    mosaic[r0:r0 + (ey - cy), cx - x0:ex - x0] = a
+                    got = None
+                    last = None
+                    for t in list(tries):
+                        try:
+                            got = _ea_wcs_chunk(base, cov, t, cx, cy, ex, ey)
+                            if tries[0] != t:
+                                print(f"  axes {t} work")
+                            tries = [t]  # keep the ones that worked
+                            break
+                        except Exception as err:  # noqa: BLE001
+                            last = err
+                    if got is None:
+                        raise last
+                    a, tr = got
+                    if abs(abs(tr.a) - 1.0) > 0.01 or abs(abs(tr.e) - 1.0) > 0.01:
+                        raise RuntimeError(f"cells are {tr.a} x {tr.e} m, not 1 m")
+                    # Put it where its own position says, clipped to the mosaic.
+                    col = int(round(tr.c - x0)); row = int(round(y1 - tr.f))
+                    r0, c0 = max(0, row), max(0, col)
+                    r1, c1 = min(height, row + a.shape[0]), min(width, col + a.shape[1])
+                    if r1 > r0 and c1 > c0:
+                        part = a[r0 - row:r1 - row, c0 - col:c1 - col]
+                        dst = mosaic[r0:r1, c0:c1]
+                        np.copyto(dst, part, where=~np.isnan(part))
                     n += 1
             print(f"  fetched {n} squares")
             check_heights(mosaic)
@@ -277,9 +299,9 @@ def fetch_ea_dtm():
             print(f"  saved {path} ({os.path.getsize(path) / 1e6:.0f} MB)")
             return path
         except Exception as err:  # noqa: BLE001
-            print(f"Environment Agency image service {base} failed: {type(err).__name__}: {err}")
+            print(f"Environment Agency WCS {base} failed: {type(err).__name__}: {err}")
             errors.append(f"{base}: {err}")
-    raise RuntimeError("England LIDAR couldn't be fetched from any image service:\n  " + "\n  ".join(errors))
+    raise RuntimeError("England LIDAR couldn't be fetched from the Environment Agency:\n  " + "\n  ".join(errors))
 
 
 def check_heights(a):
