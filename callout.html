@@ -170,16 +170,20 @@
     .sheet details ol { padding-left: 20px; margin: 8px 0; }
     .sheet details li { margin-bottom: 6px; }
     .sheet details ul { padding-left: 18px; margin: 6px 0 0; }
-    /* "Set up sending": the shared Cloude Send shortcut and who gets it. */
+    /* "Who gets the message": the recipients typed into Cloude. */
     .sheet details.sending h3 { font-size: 16px; color: #e8e6df; margin: 16px 0 4px; }
     .sheet details.sending p { margin: 4px 0; }
     .sheet details.sending input + input { margin-top: 6px; }
-    .get-shortcut, .send-test {
+    .send-email {
+      display: block; width: 100%; margin-top: 10px; padding: 15px; font: inherit; font-size: 18px; font-weight: 700;
+      background: #185fa5; color: #fff; border: none; border-radius: 14px;
+    }
+    .send-email:active { background: #134c85; }
+    .send-email[hidden] { display: none; }
+    .send-test {
       display: block; width: 100%; margin-top: 8px; padding: 13px; font: inherit; font-size: 17px; font-weight: 600;
       text-align: center; text-decoration: none; border-radius: 12px; border: none;
     }
-    .get-shortcut { background: #185fa5; color: #e6f1fb; }
-    .get-shortcut:active { background: #134c85; }
     .send-test { background: #2c3036; color: #e8e6df; border: 1px solid #5f5e5a; }
     .send-test:active { background: #23262b; }
     .pickup-to { font-size: 14px; color: #a8a69e; margin: 12px 0 0; }
@@ -282,7 +286,7 @@
     <div class="sheet-inner">
       <h2>Can't do pickup <button id="pickupClose" type="button">Close</button></h2>
 
-      <p id="pickupSetupIntro" class="hint" hidden>Fill this in once. It's kept on this phone, and any change you make here is saved as you type. Add a card for each child or dog. At a callout, just pick the times and tap Send; untick Include to leave one out that day. Who receives it is set in “Set up sending” below.</p>
+      <p id="pickupSetupIntro" class="hint" hidden>Fill this in once. It's kept on this phone, and any change you make here is saved as you type. Add a card for each child or dog. At a callout, just pick the times and tap Send; untick Include to leave one out that day. Who receives it is set in “Who gets the message” below.</p>
 
       <div id="pickupRows"></div>
       <button id="pickupAdd" type="button" class="add-pickup">+ Add another pickup</button>
@@ -293,6 +297,7 @@
       <p id="pickupTo" class="pickup-to"></p>
       <p id="pickupNoneNote" class="hint" hidden>No pickup named or ticked, so this sends just the "called out" message below.</p>
       <button id="pickupSendNow" class="send-now" type="button">Send now</button>
+      <button id="pickupSendEmail" class="send-email" type="button" hidden>Now send the email</button>
       <p id="pickupStatus" class="status"></p>
 
       <label>Message that will be sent</label>
@@ -312,14 +317,8 @@
       </details>
 
       <details id="pickupSending" class="sending">
-        <summary id="pickupSendingSummary">Set up sending</summary>
-        <p>Do this once. Everything stays on this phone.</p>
-
-        <h3>1. Add the sending shortcut</h3>
-        <p>Cloude writes the message; a small iPhone shortcut called <b>Cloude Send</b> sends it from your own number and email. Tap the button, then tap <b>Add Shortcut</b>. Then come back to Cloude. There's nothing to change in it.</p>
-        <a id="pickupGetShortcut" class="get-shortcut" href="#" target="_blank" rel="noopener">Get the shortcut</a>
-
-        <h3>2. Who gets the message</h3>
+        <summary id="pickupSendingSummary">Who gets the message</summary>
+        <p>Fill this in once. It's kept on this phone.</p>
         <label for="pickupText0">Mobile numbers (texts)</label>
         <input id="pickupText0" type="tel" inputmode="tel" placeholder="e.g. 07700 900123" autocomplete="off">
         <input id="pickupText1" type="tel" inputmode="tel" placeholder="Second number (optional)" autocomplete="off">
@@ -330,12 +329,16 @@
         <input id="pickupEmail2" type="email" inputmode="email" placeholder="Third address (optional)" autocomplete="off" autocapitalize="off" spellcheck="false">
         <p id="pickupRecipientsCheck" class="status" hidden></p>
 
-        <h3>3. Send a test</h3>
-        <p>This sends a message headed <b>TEST — please ignore</b> to everyone above, showing them what a real one will look like. The first time, the iPhone asks whether <i>Cloude Send</i> may send messages: tap <b>Always Allow</b>. If it asks which email account to use, choose yours.</p>
+        <h3>How sending works</h3>
+        <p><b>Send now</b> opens Messages with the numbers and the message already filled in: just tap <b>Send</b>. With more than one number it's a group message, so replies reach everyone.</p>
+        <p>If there are email addresses too, come back to Cloude and tap <b>Now send the email</b>. Mail opens with everything filled in: tap <b>Send</b>.</p>
+
+        <h3>Try it</h3>
+        <p>This does the same, with the message headed <b>TEST — please ignore</b>, so everyone sees what a real one will look like.</p>
         <button id="pickupSendTest" type="button" class="send-test">Send a test</button>
         <p id="pickupTestStatus" class="status"></p>
 
-        <p class="hint">If tapping Send does nothing, step 1 hasn't been done on this phone. An older shortcut called <i>Cloude Pickup</i> is no longer used and can be deleted.</p>
+        <p class="hint">Cloude no longer uses an iPhone shortcut. Any shortcut called <i>Cloude Pickup</i> or <i>Cloude Send</i> can be deleted.</p>
       </details>
     </div>
   </div>

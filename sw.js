@@ -509,7 +509,10 @@
 // through one shared "Cloude Send" shortcut (added from an iCloud link,
 // nothing to edit), with the mobile numbers and email addresses typed
 // into Cloude's own "Set up sending" box, plus a "Send a test" button.
-const SHELL_CACHE_NAME = "cloude-shell-v121";
+// Bumped to v122: callout.html/pickup.js — no shortcut any more. Send
+// now opens Messages filled in (tap Send), then "Now send the email"
+// opens Mail filled in. Recipients still typed into Cloude.
+const SHELL_CACHE_NAME = "cloude-shell-v122";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
