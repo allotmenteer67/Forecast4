@@ -502,7 +502,10 @@
 // from the same hour as the headline's slider (state.hourly.times[0])
 // instead of working out "now" for itself, which could leave the map's
 // time and rain an hour ahead of the slider.
-const SHELL_CACHE_NAME = "cloude-shell-v119";
+// Bumped to v120: map.js — tapping a rain gauge now shows what it has
+// measured (last 1/6/24 hours, today so far, yesterday), fetched live
+// from the Environment Agency; choosing is a button in that readout.
+const SHELL_CACHE_NAME = "cloude-shell-v120";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

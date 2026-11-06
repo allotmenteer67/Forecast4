@@ -2607,6 +2607,7 @@ function updateRainGaugeHint() {
     if (saveButton) saveButton.hidden = true;
     // Switching the layer back on after a failed load tries again.
     if (rainGaugesLoadState === "failed") rainGaugesLoadState = "idle";
+    renderRainGaugeReadout();
     return;
   }
   const chosen = loadChosenRainGauges();
@@ -2619,7 +2620,7 @@ function updateRainGaugeHint() {
   } else if (rainGaugesLoadState !== "loaded") {
     parts.push("Loading rain gauges…");
   } else {
-    parts.push(chosen.length ? "Tap a gauge to choose or unchoose it." : "Tap a gauge to choose it.");
+    parts.push("Tap a gauge to see the rain it has measured, and to choose or unchoose it.");
   }
   parts.push(chosen.length
     ? `Chosen (${chosen.length}): ${chosen.join(", ")}.`
@@ -2636,7 +2637,296 @@ function updateRainGaugeHint() {
     saveButton.disabled = rainGaugeSaving;
     saveButton.textContent = rainGaugeSaving ? "Saving…" : "Save gauge choice";
   }
+  renderRainGaugeReadout();
 }
+
+// ---------------------------------------------------------------------
+// Rain gauge readout — what a tapped gauge has actually measured
+//
+// Tapping a gauge selects it (a ring round it) and shows its rain just
+// above the hint line: the last 1 / 6 / 24 hours, the same three totals
+// the government's Check for flooding page gives, plus today so far and
+// all of yesterday (UK midnight to midnight, the same day the daily
+// collection stores). Choosing or unchoosing is a button in the readout,
+// so looking at a gauge's rain never changes the choice by accident.
+//
+// Fetched live from the Environment Agency flood-monitoring API (no key,
+// browser-friendly — the tide feature already reads the same API), only
+// when a gauge is tapped, and kept for 10 minutes. Each reading is the
+// rain in the 15 minutes ENDING at its time stamp, the same convention
+// the collector uses. Many gauges send their readings in batches, so the
+// latest hour or two can still be filling in; the readout says how up
+// to date it is.
+// ---------------------------------------------------------------------
+const EA_FLOOD_API = "https://environment.data.gov.uk/flood-monitoring";
+const RAIN_GAUGE_READING_TTL_MS = 10 * 60 * 1000;
+var selectedRainGaugeId = null;
+// id -> { state: "loading" | "loaded" | "failed", fetchedAt, label, readings: [{ t, mm }], error }
+var rainGaugeReadingCache = new Map();
+var rainGaugeReadoutSignature = "";
+
+function selectRainGauge(id) {
+  selectedRainGaugeId = id;
+  rainGaugeNotice = "";
+  const cached = rainGaugeReadingCache.get(id);
+  const fresh = cached && cached.state === "loaded" && Date.now() - cached.fetchedAt < RAIN_GAUGE_READING_TTL_MS;
+  if (!fresh && cached?.state !== "loading") loadRainGaugeReadings(id);
+}
+
+function eaFirst(v) {
+  return Array.isArray(v) ? v[0] : v;
+}
+
+function localMidnight(daysBack) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysBack);
+  return d;
+}
+
+async function loadRainGaugeReadings(id) {
+  const entry = { state: "loading", fetchedAt: Date.now(), label: rainGaugeReadingCache.get(id)?.label || null, readings: [] };
+  rainGaugeReadingCache.set(id, entry);
+  updateRainGaugeHint();
+  const since = localMidnight(1).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const station = encodeURIComponent(id);
+  try {
+    const [readingsRes, stationRes] = await Promise.all([
+      fetchWithTimeout(`${EA_FLOOD_API}/id/stations/${station}/readings?since=${since}&_sorted&_limit=2000`, {}, 20000),
+      // The name is a nicety — a failure here only means the readout
+      // shows the gauge's number instead.
+      entry.label ? Promise.resolve(null) : fetchWithTimeout(`${EA_FLOOD_API}/id/stations/${station}`, {}, 20000).catch(() => null)
+    ]);
+    if (!readingsRes.ok) throw new Error(`the Environment Agency answered ${readingsRes.status}`);
+    const data = await readingsRes.json();
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    // A station can carry more than one measure; use its 15-minute
+    // rainfall one (or, failing that, whichever rainfall measure has the
+    // most readings).
+    const byMeasure = new Map();
+    items.forEach(item => {
+      const measure = String(eaFirst(item.measure) || "");
+      if (!/rainfall/i.test(measure)) return;
+      const t = Date.parse(eaFirst(item.dateTime));
+      const mm = Number(eaFirst(item.value));
+      if (!Number.isFinite(t) || !Number.isFinite(mm) || mm < 0) return;
+      if (!byMeasure.has(measure)) byMeasure.set(measure, new Map());
+      byMeasure.get(measure).set(t, mm); // keyed by time, so a repeated reading counts once
+    });
+    let best = null;
+    byMeasure.forEach((readings, measure) => {
+      const score = (/15_min/.test(measure) ? 1e6 : 0) + readings.size;
+      if (!best || score > best.score) best = { score, readings };
+    });
+    entry.readings = best ? [...best.readings].map(([t, mm]) => ({ t, mm })).sort((a, b) => a.t - b.t) : [];
+
+    if (stationRes && stationRes.ok) {
+      const info = await stationRes.json().catch(() => null);
+      const label = eaFirst(eaFirst(info?.items)?.label);
+      if (label) entry.label = String(label);
+    }
+    entry.state = "loaded";
+  } catch (err) {
+    entry.state = "failed";
+    entry.error = err.message || "no connection";
+  }
+  entry.fetchedAt = Date.now();
+  updateRainGaugeHint();
+}
+
+function formatGaugeRain(mm) {
+  if (typeof convertForDisplay === "function" && typeof formatConverted === "function" && typeof unitLabel === "function") {
+    return `${formatConverted(convertForDisplay(mm, "rain"), "rain")}${unitLabel("rain")}`;
+  }
+  return `${mm.toFixed(1)}mm`;
+}
+
+function formatGaugeTime(t) {
+  const d = new Date(t);
+  const clock = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  if (t > localMidnight(0).getTime()) return clock;
+  if (t > localMidnight(1).getTime()) return `${clock} yesterday`;
+  return `${clock} on ${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`;
+}
+
+// The figures for one gauge, worked out from its readings.
+function rainGaugeSummary(readings) {
+  if (!readings.length) return null;
+  const latest = readings[readings.length - 1].t;
+  const sumBetween = (from, to) => readings
+    .filter(r => r.t > from && r.t <= to)
+    .reduce((sum, r) => sum + r.mm, 0);
+  const HOUR = 3600 * 1000;
+  const today0 = localMidnight(0).getTime();
+  const yesterday0 = localMidnight(1).getTime();
+  // 96 quarter-hours normally, 92 or 100 on a clock-change day.
+  const expectedYesterday = Math.round((today0 - yesterday0) / (15 * 60 * 1000));
+  const gotYesterday = readings.filter(r => r.t > yesterday0 && r.t <= today0).length;
+  return {
+    latest,
+    hour1: sumBetween(latest - HOUR, latest),
+    hour6: sumBetween(latest - 6 * HOUR, latest),
+    hour24: sumBetween(latest - 24 * HOUR, latest),
+    today: latest > today0 ? sumBetween(today0, latest) : null,
+    yesterday: gotYesterday ? sumBetween(yesterday0, today0) : null,
+    gotYesterday,
+    expectedYesterday
+  };
+}
+
+function ensureRainGaugeReadoutStyles() {
+  if (document.getElementById("mapGaugeReadoutStyles")) return;
+  const style = document.createElement("style");
+  style.id = "mapGaugeReadoutStyles";
+  style.textContent = `
+    .map-gauge-readout { margin: 10px 0 8px; padding: 12px 14px; border-radius: 12px;
+      background: var(--accent-light); color: #1f2a24; }
+    .map-gauge-readout[hidden] { display: none; }
+    .map-gauge-readout-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .map-gauge-readout-name { font-weight: 700; font-size: 1.02rem; color: var(--accent-dark); }
+    .map-gauge-readout-id { font-weight: 400; font-size: 0.85rem; color: var(--accent-muted); margin-left: 6px; }
+    .map-gauge-readout-close { border: none; background: none; color: var(--accent-dark); font-size: 1.4rem;
+      line-height: 1; padding: 2px 6px; cursor: pointer; }
+    .map-gauge-readout-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 10px; margin: 10px 0 6px; }
+    .map-gauge-readout-cell span { display: block; font-size: 0.8rem; color: var(--accent-muted); }
+    .map-gauge-readout-cell strong { display: block; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+    .map-gauge-readout-note { font-size: 0.85rem; color: var(--accent-muted); margin: 4px 0 0; }
+    .map-gauge-readout-choose { margin-top: 10px; border: 1.5px solid var(--accent-dark); background: transparent;
+      color: var(--accent-dark); border-radius: 999px; padding: 7px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+    .map-gauge-readout-choose.is-chosen { background: var(--accent-dark); color: #fff; }
+  `;
+  document.head.appendChild(style);
+}
+
+function ensureRainGaugeReadoutEl() {
+  let el = document.getElementById("mapGaugeReadout");
+  if (el) return el;
+  const hint = document.getElementById("mapGaugeHint");
+  if (!hint || !hint.parentNode) return null;
+  ensureRainGaugeReadoutStyles();
+  el = document.createElement("div");
+  el.id = "mapGaugeReadout";
+  el.className = "map-gauge-readout";
+  el.hidden = true;
+  el.setAttribute("aria-live", "polite");
+  hint.parentNode.insertBefore(el, hint);
+  el.addEventListener("click", e => {
+    const button = e.target.closest("button");
+    if (!button) return;
+    button.blur(); // same iOS stuck-focus habit as the zoom buttons
+    if (button.dataset.action === "close") {
+      selectedRainGaugeId = null;
+      renderMap();
+    } else if (button.dataset.action === "choose" && selectedRainGaugeId) {
+      toggleChosenRainGauge(selectedRainGaugeId);
+      renderMap();
+    } else if (button.dataset.action === "retry" && selectedRainGaugeId) {
+      loadRainGaugeReadings(selectedRainGaugeId);
+    }
+  });
+  return el;
+}
+
+// Rebuilt only when something it shows has changed — renderMap() runs
+// many times a second during a drag, and this sits on that path.
+function renderRainGaugeReadout() {
+  const el = ensureRainGaugeReadoutEl();
+  if (!el) return;
+  if (!selectedRainGaugeId || !rainGaugesShowing()) {
+    if (!el.hidden) el.hidden = true;
+    rainGaugeReadoutSignature = "";
+    return;
+  }
+  const id = selectedRainGaugeId;
+  const entry = rainGaugeReadingCache.get(id);
+  const isChosen = loadChosenRainGauges().includes(id);
+  const signature = JSON.stringify([id, entry?.state, entry?.fetchedAt, entry?.label, isChosen,
+    typeof conditionUnit === "function" ? conditionUnit("rain") : "", localMidnight(0).getTime()]);
+  if (signature === rainGaugeReadoutSignature && !el.hidden) return;
+  rainGaugeReadoutSignature = signature;
+
+  el.textContent = "";
+  const head = document.createElement("div");
+  head.className = "map-gauge-readout-head";
+  const name = document.createElement("div");
+  name.className = "map-gauge-readout-name";
+  name.textContent = entry?.label || `Gauge ${id}`;
+  if (entry?.label) {
+    const small = document.createElement("span");
+    small.className = "map-gauge-readout-id";
+    small.textContent = id;
+    name.appendChild(small);
+  }
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "map-gauge-readout-close";
+  close.dataset.action = "close";
+  close.setAttribute("aria-label", "Close");
+  close.textContent = "×";
+  head.append(name, close);
+  el.appendChild(head);
+
+  const note = text => {
+    const p = document.createElement("p");
+    p.className = "map-gauge-readout-note";
+    p.textContent = text;
+    el.appendChild(p);
+  };
+
+  if (!entry || entry.state === "loading") {
+    note("Getting this gauge's readings…");
+  } else if (entry.state === "failed") {
+    note(`Couldn't get this gauge's readings: ${entry.error}.`);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "map-gauge-readout-choose";
+    retry.dataset.action = "retry";
+    retry.textContent = "Try again";
+    el.appendChild(retry);
+  } else {
+    const summary = rainGaugeSummary(entry.readings);
+    if (!summary) {
+      note("No rainfall readings from this gauge since the start of yesterday. It may be out of action, or not have sent its readings yet.");
+    } else {
+      const grid = document.createElement("div");
+      grid.className = "map-gauge-readout-grid";
+      const cell = (label, mm) => {
+        const c = document.createElement("div");
+        c.className = "map-gauge-readout-cell";
+        const l = document.createElement("span");
+        l.textContent = label;
+        const v = document.createElement("strong");
+        v.textContent = mm === null ? "–" : formatGaugeRain(mm);
+        c.append(l, v);
+        grid.appendChild(c);
+      };
+      cell("Last hour", summary.hour1);
+      cell("6 hours", summary.hour6);
+      cell("24 hours", summary.hour24);
+      cell("Today so far", summary.today);
+      cell("Yesterday", summary.yesterday);
+      el.appendChild(grid);
+      let text = `Readings up to ${formatGaugeTime(summary.latest)}.`;
+      if (summary.yesterday !== null && summary.gotYesterday < summary.expectedYesterday) {
+        text += ` Yesterday is missing ${summary.expectedYesterday - summary.gotYesterday} of its ${summary.expectedYesterday} quarter-hour readings, so it may be a little low.`;
+      }
+      if (Date.now() - summary.latest > 90 * 60 * 1000) {
+        text += " This gauge sends its readings in batches, so the latest hours may still be on their way.";
+      }
+      note(text);
+    }
+  }
+
+  const choose = document.createElement("button");
+  choose.type = "button";
+  choose.className = "map-gauge-readout-choose" + (isChosen ? " is-chosen" : "");
+  choose.dataset.action = "choose";
+  choose.textContent = isChosen ? "Chosen — tap to unchoose" : "Choose this gauge";
+  el.appendChild(choose);
+  el.hidden = false;
+}
+
 
 document.getElementById("mapGaugeSave")?.addEventListener("click", e => {
   e.currentTarget.blur(); // same iOS stuck-focus habit as the zoom buttons
@@ -2683,6 +2973,15 @@ registerMapLayer({
       ctx.fillStyle = isChosen ? p.ink : p.land;
       ctx.fill();
       ctx.stroke();
+
+      if (g.id === selectedRainGaugeId) {
+        // The gauge whose rain is showing in the readout below the map.
+        ctx.beginPath();
+        ctx.arc(x, y, 13, 0, Math.PI * 2);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = p.ink;
+        ctx.stroke();
+      }
 
       mapRainGaugeHitboxes.push({ x, y, radius: 20, id: g.id });
     });
@@ -3324,7 +3623,7 @@ if (mapCanvas) {
         if (d <= m.radius && (!hitGauge || d < hitGauge.d)) hitGauge = { id: m.id, d };
       });
       if (hitGauge) {
-        toggleChosenRainGauge(hitGauge.id);
+        selectRainGauge(hitGauge.id);
         renderMap();
         saveMapCentre(mapCentre);
         return;
