@@ -127,7 +127,7 @@
     .sheet h2 { font-size: 19px; margin: 4px 0 10px; color: #f09595; display: flex; align-items: center; }
     .sheet h2 button { margin-left: auto; font-weight: 400; }
     .sheet label { display: block; font-size: 15px; color: #a8a69e; font-weight: 600; margin: 12px 0 4px; }
-    .sheet input[type=text], .sheet input[type=time], .sheet textarea {
+    .sheet input[type=text], .sheet input[type=time], .sheet input[type=tel], .sheet input[type=email], .sheet textarea {
       width: 100%; font: inherit; font-size: 17px; color: #e8e6df; background: #1e2126;
       border: 1px solid #5f5e5a; border-radius: 10px; padding: 10px 12px; -webkit-appearance: none;
     }
@@ -170,6 +170,20 @@
     .sheet details ol { padding-left: 20px; margin: 8px 0; }
     .sheet details li { margin-bottom: 6px; }
     .sheet details ul { padding-left: 18px; margin: 6px 0 0; }
+    /* "Set up sending": the shared Cloude Send shortcut and who gets it. */
+    .sheet details.sending h3 { font-size: 16px; color: #e8e6df; margin: 16px 0 4px; }
+    .sheet details.sending p { margin: 4px 0; }
+    .sheet details.sending input + input { margin-top: 6px; }
+    .get-shortcut, .send-test {
+      display: block; width: 100%; margin-top: 8px; padding: 13px; font: inherit; font-size: 17px; font-weight: 600;
+      text-align: center; text-decoration: none; border-radius: 12px; border: none;
+    }
+    .get-shortcut { background: #185fa5; color: #e6f1fb; }
+    .get-shortcut:active { background: #134c85; }
+    .send-test { background: #2c3036; color: #e8e6df; border: 1px solid #5f5e5a; }
+    .send-test:active { background: #23262b; }
+    .pickup-to { font-size: 14px; color: #a8a69e; margin: 12px 0 0; }
+    .pickup-to.warn { color: #fac775; }
     /* Tap a box for its next 12 hours (callout-detail.js). */
     .box.tappable { position: relative; cursor: pointer; -webkit-tap-highlight-color: transparent; }
     .box.tappable:active { background: #262a30; }
@@ -268,7 +282,7 @@
     <div class="sheet-inner">
       <h2>Can't do pickup <button id="pickupClose" type="button">Close</button></h2>
 
-      <p id="pickupSetupIntro" class="hint" hidden>Fill this in once. It's kept on this phone, and any change you make here is saved as you type. Add a card for each child or dog. At a callout, just pick the times and tap Send; untick Include to leave one out that day. Who receives it is chosen in the "Cloude Pickup" shortcut (see below).</p>
+      <p id="pickupSetupIntro" class="hint" hidden>Fill this in once. It's kept on this phone, and any change you make here is saved as you type. Add a card for each child or dog. At a callout, just pick the times and tap Send; untick Include to leave one out that day. Who receives it is set in “Set up sending” below.</p>
 
       <div id="pickupRows"></div>
       <button id="pickupAdd" type="button" class="add-pickup">+ Add another pickup</button>
@@ -276,6 +290,7 @@
       <label for="pickupIfUnable">If they can't, contact</label>
       <input id="pickupIfUnable" type="text" placeholder="e.g. Dad on 07700 900123, or Sarah" autocomplete="off">
 
+      <p id="pickupTo" class="pickup-to"></p>
       <p id="pickupNoneNote" class="hint" hidden>No pickup named or ticked, so this sends just the "called out" message below.</p>
       <button id="pickupSendNow" class="send-now" type="button">Send now</button>
       <p id="pickupStatus" class="status"></p>
@@ -296,61 +311,31 @@
         </div>
       </details>
 
-      <details>
-        <summary>How to set up the shortcut (once)</summary>
-        <p>Cloude writes the message; an iPhone Shortcut called <b>Cloude Pickup</b> sends it from your own number and email without asking. Set it up once, in the Shortcuts app on the iPhone.</p>
-        <ol>
-          <li><b>Name it</b>
-            <ul>
-              <li>Open <b>Shortcuts</b> and tap <b>+</b>. The new shortcut is called <i>New Shortcut</i>.</li>
-              <li>Tap the small <b>⌄</b> next to <i>New Shortcut</i>, choose <b>Rename</b>, and type exactly <b>Cloude Pickup</b>.</li>
-            </ul>
-          </li>
-          <li><b>The text message</b>
-            <ul>
-              <li>In <b>Search Actions</b> at the bottom, type <i>Send Message</i> and tap it.</li>
-              <li>Tap its pale blue <b>Message</b> and choose <b>Shortcut Input</b> from the row above the keyboard (or tap <b>Select Variable</b>, then <b>Shortcut Input</b>).</li>
-              <li>A new box appears at the top: <i>Receive Apps and 18 more from Nowhere</i>. That’s normal: leave it alone.</li>
-              <li>Tap the pale blue <b>Recipients</b> and pick the first person. To add more (up to 3), tap the blue <b>+</b> that appears beside them.</li>
-              <li>Tap the blue circle with an arrow at the end of the line. Check <b>Show Compose Sheet</b> is off.</li>
-            </ul>
-          </li>
-          <li><b>The email</b>
-            <ul>
-              <li>In <b>Search Actions</b>, type <i>Send Email</i> and tap it.</li>
-              <li>Tap its pale blue <b>Message</b> and choose <b>Shortcut Input</b>.</li>
-              <li>Tap the pale blue <b>Subject</b> and type <i>Pickup needed</i>.</li>
-              <li>Tap the pale blue <b>Recipients</b> and pick the first person; use the blue <b>+</b> for more (up to 3).</li>
-              <li>Tap the blue circle with an arrow. Set <b>From</b> to your own email address, and check <b>Save as Draft</b> and <b>Show Compose Sheet</b> are both off.</li>
-            </ul>
-          </li>
-          <li><b>The “sent” notice</b>
-            <ul>
-              <li>In <b>Search Actions</b>, type <i>Show Notification</i> and tap it.</li>
-              <li>Tap its pale blue text and type <i>Pickup message sent ✓</i>.</li>
-            </ul>
-          </li>
-          <li><b>Back to the Home Screen</b>
-            <ul>
-              <li>In <b>Search Actions</b>, type <i>Go to Home Screen</i> and tap it.</li>
-            </ul>
-          </li>
-          <li><b>Save it</b>
-            <ul>
-              <li>Tap the <b>‹</b> back arrow at the top left. There’s no Done button: it saves by itself.</li>
-              <li>Don’t tap the <b>▶</b> play button: that runs the shortcut and starts sending.</li>
-            </ul>
-          </li>
-        </ol>
-        <p><b>Test it</b> with only your own number and email as the recipients, by pressing Send in Cloude. The first time, the iPhone asks whether the shortcut may send messages: choose <b>Always Allow</b>. If the test arrives empty, open the shortcut (see below), tap <b>ⓘ</b> at the bottom, and turn on <b>Show in Share Sheet</b>.</p>
-        <p><b>Changing who gets it</b> (once the test works, or when someone’s number or email changes):</p>
-        <ol>
-          <li>Open <b>Shortcuts</b>. Don’t tap the <i>Cloude Pickup</i> tile itself, as that runs it and sends. Instead tap the <b>•••</b> in its corner.</li>
-          <li>To <b>remove</b> someone, tap their name on the Send Message line (texts) or the Send Email line (email), then press the delete key <b>⌫</b> on the keyboard.</li>
-          <li>To <b>add</b> someone, tap the blue <b>+</b> beside the names, or the pale blue <b>Recipients</b> if there’s no one left, and pick them.</li>
-          <li>To <b>change</b> a number or email, remove the old one and add the new one. If they’re in your Contacts, update the Contacts card first, then add them again here.</li>
-          <li>Do the same on both lines if they get texts and emails. Then tap <b>‹</b> at the top left to save.</li>
-        </ol>
+      <details id="pickupSending" class="sending">
+        <summary id="pickupSendingSummary">Set up sending</summary>
+        <p>Do this once. Everything stays on this phone.</p>
+
+        <h3>1. Add the sending shortcut</h3>
+        <p>Cloude writes the message; a small iPhone shortcut called <b>Cloude Send</b> sends it from your own number and email. Tap the button, then tap <b>Add Shortcut</b>. Then come back to Cloude. There's nothing to change in it.</p>
+        <a id="pickupGetShortcut" class="get-shortcut" href="#" target="_blank" rel="noopener">Get the shortcut</a>
+
+        <h3>2. Who gets the message</h3>
+        <label for="pickupText0">Mobile numbers (texts)</label>
+        <input id="pickupText0" type="tel" inputmode="tel" placeholder="e.g. 07700 900123" autocomplete="off">
+        <input id="pickupText1" type="tel" inputmode="tel" placeholder="Second number (optional)" autocomplete="off">
+        <input id="pickupText2" type="tel" inputmode="tel" placeholder="Third number (optional)" autocomplete="off">
+        <label for="pickupEmail0">Email addresses</label>
+        <input id="pickupEmail0" type="email" inputmode="email" placeholder="e.g. sarah@example.com" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input id="pickupEmail1" type="email" inputmode="email" placeholder="Second address (optional)" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input id="pickupEmail2" type="email" inputmode="email" placeholder="Third address (optional)" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <p id="pickupRecipientsCheck" class="status" hidden></p>
+
+        <h3>3. Send a test</h3>
+        <p>This sends a message headed <b>TEST — please ignore</b> to everyone above, showing them what a real one will look like. The first time, the iPhone asks whether <i>Cloude Send</i> may send messages: tap <b>Always Allow</b>. If it asks which email account to use, choose yours.</p>
+        <button id="pickupSendTest" type="button" class="send-test">Send a test</button>
+        <p id="pickupTestStatus" class="status"></p>
+
+        <p class="hint">If tapping Send does nothing, step 1 hasn't been done on this phone. An older shortcut called <i>Cloude Pickup</i> is no longer used and can be deleted.</p>
       </details>
     </div>
   </div>

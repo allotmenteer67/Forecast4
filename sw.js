@@ -505,7 +505,11 @@
 // Bumped to v120: map.js — tapping a rain gauge now shows what it has
 // measured (last 1/6/24 hours, today so far, yesterday), fetched live
 // from the Environment Agency; choosing is a button in that readout.
-const SHELL_CACHE_NAME = "cloude-shell-v120";
+// Bumped to v121: callout.html/pickup.js — "Can't do pickup" now sends
+// through one shared "Cloude Send" shortcut (added from an iCloud link,
+// nothing to edit), with the mobile numbers and email addresses typed
+// into Cloude's own "Set up sending" box, plus a "Send a test" button.
+const SHELL_CACHE_NAME = "cloude-shell-v121";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
