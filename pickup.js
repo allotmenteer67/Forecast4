@@ -1,32 +1,42 @@
-// "Can't do pickup" — one button on the Callout screen that sends the
-// same message by text and email to the people who'd collect a child
-// (or dog) when the user is called out.
+// "Can't do pickup" — one button on the Callout screen that texts the
+// people who'd collect a child (or dog) when the user is called out.
 //
-// How the sending works: a web app isn't allowed to send texts or
-// emails by itself, and iPhone Shortcuts proved too fragile to set up
-// (v121 tried one shared "Cloude Send" shortcut; it never sent). So
-// since v122 there's no shortcut at all:
-//   Send now  -> opens Messages with the numbers and the message filled
-//                in (one group message, so replies go to everyone); the
-//                user taps Send.
-//   Back in Cloude, "Now send the email" -> opens Mail with the
-//                addresses, subject and message filled in; tap Send.
-// With only numbers, or only addresses, it's just the one of those.
+// How the sending works: a web app isn't allowed to send a text by
+// itself, so Cloude hands the message to one shared iPhone shortcut,
+// "Cloude Send", via the shortcuts:// link. Everyone adds the same
+// shortcut from an iCloud link (PICKUP_SHORTCUT_LINK); there's nothing
+// to edit in it. It's passed a small JSON object:
+//   { "message": "…", "numbers": ["07700900123", …] }
+// and is six actions long:
+//   1 Get dictionary from Shortcut Input   2 Set variable Data
+//   3 Get Value for "numbers" in Data      4 Set variable Numbers
+//   5 Get Value for "message" in Data      6 Send [Dictionary Value] to Numbers
+//                                            (Show Compose Sheet off)
+// so Messages never opens and the text leaves from the user's own
+// number. The Shortcuts app shows briefly; "◀ Cloude" in the corner
+// comes straight back to this screen, which stays as it was.
 //
-// The recipients (up to 3 mobiles and 3 email addresses) are typed into
-// Cloude itself, in "Who gets the message", and kept on this phone. No
-// server is involved: the message leaves from the user's own number and
-// email account.
+// History: v121 also sent email and the shortcut's four look-alike
+// "Dictionary Value"s got crossed (the message was used as the phone
+// number); v122 opened Messages and Mail filled in instead, too many
+// taps; v124 is texts only, and the six-action shortcut above, built
+// by adding each action fresh from search, never duplicating one.
+//
+// If it ever doesn't send, "Didn't send?" opens Messages with the
+// numbers and message filled in, to send by hand.
+//
+// The numbers (up to 3) are typed into Cloude itself, in "Who gets the
+// message", and kept on this phone. No server is involved.
 //
 // Stored on this device only (and copied into whole-device backups,
 // see BACKUP_KEY_PREFIXES in app.js):
-//   cloude-pickup:details   the saved wording and recipients, kept until changed or deleted
-//   cloude-pickup:lastSent  when the last message was opened in Messages/Mail
+//   cloude-pickup:details   the saved wording and numbers, kept until changed or deleted
+//   cloude-pickup:lastSent  when the last message was handed to the shortcut
 //
 // Several pickups can be saved (a child from the carer, the dog from
 // the kennels, another child from gymnastics), each with who and from
 // where. At send time only the times are typed, one per pickup; a
-// blank time makes the message say plainly that no time was given.
+// blank time makes the message say "Check pickup time".
 // Each pickup can be left out for one callout ("Include" untick)
 // without deleting it. Times and Include ticks are never saved: every
 // opening starts with all pickups included and no times.
@@ -34,6 +44,10 @@
 const PICKUP_DETAILS_KEY = "cloude-pickup:details";
 const PICKUP_LAST_KEY = "cloude-pickup:lastSent";
 const PICKUP_MAX_RECIPIENTS = 3;
+const PICKUP_SHORTCUT = "Cloude Send";
+// The shared shortcut. An iCloud link is a snapshot: after any change to
+// the shortcut it has to be shared again and the new link put here.
+const PICKUP_SHORTCUT_LINK = "https://www.icloud.com/shortcuts/19d109a020ae4ba1bd6e343ae91929a6";
 const PICKUP_DEFAULT_OPENING = "I've been called out on the lifeboat and can't do the pickup.";
 // Sent instead when no pickup is named or ticked: just "called out".
 const PICKUP_DEFAULT_CALLED_OUT = "I've been called out on the lifeboat. No pickups needed — just letting you know.";
@@ -49,7 +63,7 @@ function pickupLoad() {
       delete d.who; delete d.where;
     }
     if (!Array.isArray(d.texts)) d.texts = [];
-    if (!Array.isArray(d.emails)) d.emails = [];
+    delete d.emails; // email was dropped in v124
     return d;
   } catch {
     return null;
@@ -69,27 +83,17 @@ function pickupCleanNumber(s) {
   return (t.startsWith("+") ? "+" : "") + digits;
 }
 
-function pickupCleanEmail(s) {
-  const t = String(s || "").trim();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t) ? t : "";
-}
-
-// The usable recipients, plus a count of boxes that have something in
-// them that doesn't look right.
+// The usable numbers, plus a count of boxes with something in them
+// that doesn't look like a mobile number.
 function pickupRecipients(d) {
-  const texts = [], emails = [];
-  let badTexts = 0, badEmails = 0;
+  const texts = [];
+  let badTexts = 0;
   (d.texts || []).forEach(v => {
     if (!String(v || "").trim()) return;
     const n = pickupCleanNumber(v);
     if (n) { if (!texts.includes(n)) texts.push(n); } else badTexts++;
   });
-  (d.emails || []).forEach(v => {
-    if (!String(v || "").trim()) return;
-    const e = pickupCleanEmail(v);
-    if (e) { if (!emails.includes(e)) emails.push(e); } else badEmails++;
-  });
-  return { texts, emails, badTexts, badEmails };
+  return { texts, badTexts };
 }
 
 function pickupEsc(s) {
@@ -114,7 +118,7 @@ const pickup = {
   posWaiters: [],
   watching: false,
   rows: [],         // on screen: { who, where, time, include }
-  pendingEmail: null, // { message, subject, emails } waiting for "Now send the email"
+  prepared: null,   // { message, numbers, at } — the last message handed to the shortcut, for "Didn't send?"
 };
 
 function pickupStartPosition() {
@@ -172,7 +176,7 @@ function pickupMessage(d, list) {
     const from = p.where ? ` from ${p.where}` : "";
     return p.time
       ? `${p.who}${from} at ${p.time}`
-      : `${p.who}${from} — NO TIME GIVEN, please check when${p.where ? ` with ${p.where}` : ""}`;
+      : `${p.who}${from} — check pickup time`;
   };
   if (list.length === 1) {
     const p = list[0];
@@ -180,14 +184,12 @@ function pickupMessage(d, list) {
     if (p.time) {
       lines.push(`Please pick up ${p.who}${from} at ${p.time}.`);
     } else {
-      lines.push(`Please pick up ${p.who}${from}.`);
-      lines.push(`NO PICKUP TIME WAS GIVEN — please check when ${p.who} needs collecting${p.where ? ` (ask ${p.where})` : ""}.`);
+      lines.push(`Please pick up ${p.who}${from}. Check pickup time.`);
     }
   } else {
     lines.push("Please pick up:\n" + list.map(p => "• " + item(p)).join("\n"));
   }
   if ((d.ifUnable || "").trim()) lines.push(`If you can't, please contact ${d.ifUnable.trim()}.`);
-  lines.push("Please reply to everyone to say you've got it.");
   const pos = pickupPositionLine(d);
   if (pos) lines.push(pos);
   return lines.join("\n\n");
@@ -212,21 +214,21 @@ function pickupRenderButton() {
     ? `Can't do pickup<small>Send the pickup message for ${pickupEsc(names)}</small>`
     : d
       ? `Called out<small>Send the "called out" message</small>`
-      : `Set up "Can't do pickup"<small>One-tap message by text and email</small>`;
+      : `Set up "Can't do pickup"<small>One-tap text to whoever can collect</small>`;
   let lastText = "";
   try {
     const t = Date.parse(localStorage.getItem(PICKUP_LAST_KEY) || "");
     if (Number.isFinite(t)) {
       const when = new Date(t);
       const today = when.toDateString() === new Date().toDateString();
-      lastText = `Last pickup message opened ${today ? "today" : when.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} at ${when.toTimeString().slice(0, 5)}.`;
+      lastText = `Last pickup message sent ${today ? "today" : when.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} at ${when.toTimeString().slice(0, 5)}.`;
     }
   } catch { /* ignore */ }
   if (last) { last.textContent = lastText; last.hidden = !lastText; }
 }
 
 function pickupDefaults() {
-  return { opening: PICKUP_DEFAULT_OPENING, calledOut: PICKUP_DEFAULT_CALLED_OUT, pickups: [], ifUnable: "", includePosition: true, texts: [], emails: [] };
+  return { opening: PICKUP_DEFAULT_OPENING, calledOut: PICKUP_DEFAULT_CALLED_OUT, pickups: [], ifUnable: "", includePosition: true, texts: [] };
 }
 
 function pickupOpen() {
@@ -243,16 +245,14 @@ function pickupOpen() {
   pickupEl("pickupCalledOut").value = d.calledOut || PICKUP_DEFAULT_CALLED_OUT;
   pickupEl("pickupIncludePos").checked = d.includePosition !== false;
   for (let i = 0; i < PICKUP_MAX_RECIPIENTS; i++) {
-    pickupEl(`pickupText${i}`).value = d.texts[i] || "";
-    pickupEl(`pickupEmail${i}`).value = d.emails[i] || "";
+    pickupEl(`pickupText${i}`).value = (d.texts || [])[i] || "";
   }
-  // "Set up sending" starts open until there's someone to send to.
-  const r = pickupRecipients(d);
-  pickupEl("pickupSending").open = !(r.texts.length || r.emails.length);
+  // "Who gets the message" starts open until there's someone to send to.
+  pickupEl("pickupSending").open = !pickupRecipients(d).texts.length;
   pickupEl("pickupStatus").textContent = "";
   pickupEl("pickupTestStatus").textContent = "";
-  pickup.pendingEmail = null;
-  pickupEl("pickupSendEmail").hidden = true;
+  pickup.prepared = null;
+  pickupEl("pickupFallback").hidden = true;
   pickupEl("pickupSheet").scrollTop = 0;
   pickupBuildRows();
   if (d.includePosition !== false) pickupStartPosition();
@@ -287,7 +287,7 @@ function pickupBuildRows() {
         <input type="time" data-f="time" value="${pickupEsc(r.time)}">
         <button type="button" data-act="notime">No time</button>
       </div>
-      <p class="no-time"${r.time ? " hidden" : ""}>No time set — the message will say so.</p>`;
+      <p class="no-time"${r.time ? " hidden" : ""}>No time set — the message will say \u201cCheck pickup time\u201d.</p>`;
     card.querySelectorAll("[data-f]").forEach(el => {
       const f = el.dataset.f;
       const handler = () => {
@@ -337,7 +337,6 @@ function pickupFromScreen() {
     ifUnable: pickupEl("pickupIfUnable").value.trim(),
     includePosition: pickupEl("pickupIncludePos").checked,
     texts: Array.from({ length: PICKUP_MAX_RECIPIENTS }, (_, i) => pickupEl(`pickupText${i}`).value.trim()),
-    emails: Array.from({ length: PICKUP_MAX_RECIPIENTS }, (_, i) => pickupEl(`pickupEmail${i}`).value.trim()),
   };
 }
 
@@ -367,21 +366,18 @@ function pickupRender() {
   pickupEl("pickupPreview").textContent = pickupMessage(d, going);
   pickupEl("pickupNoneNote").hidden = !!going.length;
   const r = pickupRecipients(d);
-  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-  const parts = [];
-  if (r.texts.length) parts.push(plural(r.texts.length, "by text", "by text"));
-  if (r.emails.length) parts.push(plural(r.emails.length, "by email", "by email"));
-  const toText = parts.length ? `Goes to ${parts.join(" and ")}.` : "No one to send to yet — fill in \u201cWho gets the message\u201d below.";
-  pickupEl("pickupTo").textContent = toText;
-  pickupEl("pickupTo").classList.toggle("warn", !parts.length);
-  pickupEl("pickupSendingSummary").textContent = parts.length
-    ? `Who gets the message (${parts.join(", ")})`
+  const n = r.texts.length;
+  pickupEl("pickupTo").textContent = n
+    ? `Goes by text to ${n === 1 ? "1 number" : `${n} numbers`}.`
+    : "No one to send to yet — fill in \u201cWho gets the message\u201d below.";
+  pickupEl("pickupTo").classList.toggle("warn", !n);
+  pickupEl("pickupSendingSummary").textContent = n
+    ? `Who gets the message (${n === 1 ? "1 number" : `${n} numbers`})`
     : "Who gets the message (not set yet)";
-  const bad = [];
-  if (r.badTexts) bad.push(`${plural(r.badTexts, "mobile number doesn't", "mobile numbers don't")} look right (it needs all 11 digits, like 07700 900123)`);
-  if (r.badEmails) bad.push(`${plural(r.badEmails, "email address doesn't", "email addresses don't")} look right`);
-  pickupEl("pickupRecipientsCheck").textContent = bad.length ? bad.join("; ") + ", so it will be left out." : "";
-  pickupEl("pickupRecipientsCheck").hidden = !bad.length;
+  pickupEl("pickupRecipientsCheck").textContent = r.badTexts
+    ? `${r.badTexts === 1 ? "1 number doesn't" : `${r.badTexts} numbers don't`} look right (a mobile needs all 11 digits, like 07700 900123), so it will be left out.`
+    : "";
+  pickupEl("pickupRecipientsCheck").hidden = !r.badTexts;
   const posLine = pickupEl("pickupPosState");
   if (!d.includePosition) posLine.textContent = "Position: not included (see More options).";
   else if (pickup.pos) posLine.textContent = `Position found, to about ${Math.max(5, Math.round(pickup.pos.acc))} m.`;
@@ -391,55 +387,35 @@ function pickupRender() {
 // Position updates call this name.
 function pickupRenderPreview() { if (!pickupEl("pickupSheet").hidden) pickupRender(); }
 
-// Messages, with every number and the message filled in. More than one
-// number makes a group message, so a reply reaches everyone.
-function pickupOpenMessages(message, numbers) {
-  window.location.href = "sms:/open?addresses=" + numbers.map(encodeURIComponent).join(",") +
-    "&body=" + encodeURIComponent(message);
+// Hands the message and numbers to the "Cloude Send" shortcut. The
+// Shortcuts app shows briefly while it sends; "◀ Cloude" in its corner
+// comes back here, to this screen as it was.
+function pickupRunShortcut(message, numbers) {
+  pickup.prepared = { message, numbers, at: new Date() };
+  pickupEl("pickupFallback").hidden = false;
+  window.location.href = "shortcuts://run-shortcut?name=" + encodeURIComponent(PICKUP_SHORTCUT) +
+    "&input=text&text=" + encodeURIComponent(JSON.stringify({ message, numbers }));
 }
 
-function pickupOpenMail(message, subject, emails) {
-  // Addresses go in as they are (already checked: no spaces), since
-  // some mail apps don't decode an escaped @.
-  window.location.href = "mailto:" + emails.join(",") +
-    "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(message);
+// "Didn't send?": the same message, opened in Messages to send by hand.
+// More than one number makes a group message.
+function pickupFallback() {
+  const p = pickup.prepared;
+  if (!p) return;
+  pickupEl("pickupStatus").textContent = "Messages is opening with everything filled in: tap Send.";
+  window.location.href = "sms:/open?addresses=" + p.numbers.map(encodeURIComponent).join(",") +
+    "&body=" + encodeURIComponent(p.message);
 }
 
 // Nobody to send to: say so, and open "Who gets the message".
 function pickupNeedRecipients(status) {
-  status.textContent = "There's no one to send to yet. Put at least one mobile number or email address in \u201cWho gets the message\u201d.";
+  status.textContent = "There's no one to send to yet. Put at least one mobile number in \u201cWho gets the message\u201d.";
   const box = pickupEl("pickupSending");
   box.open = true;
   box.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
-// Opens Messages (if there are numbers); the email, if any, waits for
-// the "Now send the email" button, because the phone can only open one
-// app at a time.
-function pickupDeliver(message, subject, r, status) {
-  pickup.pendingEmail = r.emails.length ? { message, subject, emails: r.emails } : null;
-  const emailBtn = pickupEl("pickupSendEmail");
-  emailBtn.hidden = !(r.texts.length && r.emails.length);
-  if (r.texts.length) {
-    status.textContent = r.emails.length
-      ? "Messages is opening with everything filled in: tap Send. Then come back here and tap \u201cNow send the email\u201d."
-      : "Messages is opening with everything filled in: tap Send.";
-    pickupOpenMessages(message, r.texts);
-  } else {
-    status.textContent = "Mail is opening with everything filled in: tap Send.";
-    pickup.pendingEmail = null;
-    pickupOpenMail(message, subject, r.emails);
-  }
-}
-
-function pickupSendEmail() {
-  const p = pickup.pendingEmail;
-  if (!p) return;
-  pickupEl("pickupSendEmail").hidden = true;
-  pickup.pendingEmail = null;
-  pickupEl("pickupStatus").textContent = "Mail is opening with everything filled in: tap Send.";
-  pickupOpenMail(p.message, p.subject, p.emails);
-}
+function pickupClock(d) { return d.toTimeString().slice(0, 5); }
 
 async function pickupSendNow() {
   const d = pickupFromScreen();
@@ -447,30 +423,31 @@ async function pickupSendNow() {
   const btn = pickupEl("pickupSendNow");
   const status = pickupEl("pickupStatus");
   const r = pickupRecipients(d);
-  if (!r.texts.length && !r.emails.length) { pickupNeedRecipients(status); return; }
+  if (!r.texts.length) { pickupNeedRecipients(status); return; }
   btn.disabled = true;
   if (d.includePosition && pickup.watching) {
     status.textContent = "Getting your position…";
     await pickupWaitForPosition(PICKUP_POSITION_WAIT_MS);
   }
-  const going = pickupGoing();
-  const message = pickupMessage(d, going);
+  const message = pickupMessage(d, pickupGoing());
   try { localStorage.setItem(PICKUP_LAST_KEY, new Date().toISOString()); } catch { /* ignore */ }
   btn.disabled = false;
   pickupRender();
   pickupRenderButton();
-  pickupDeliver(message, going.length ? "Pickup needed" : "Called out", r, status);
+  status.textContent = `Sent to the Cloude Send shortcut at ${pickupClock(new Date())}. Tap \u25c0 Cloude in the top corner to come back here.`;
+  pickupRunShortcut(message, r.texts);
 }
 
-// A practice run: the same steps, with the message headed TEST, so the
-// people on the list see what a real one looks like.
+// A practice run, headed TEST, so the people on the list see what a
+// real one looks like, and the iPhone asks its one-off permission
+// question now rather than at a callout.
 async function pickupSendTest() {
   const d = pickupFromScreen();
   pickupSave(d);
   const status = pickupEl("pickupTestStatus");
   const r = pickupRecipients(d);
-  if (!r.texts.length && !r.emails.length) {
-    status.textContent = "Put in at least one mobile number or email address first.";
+  if (!r.texts.length) {
+    status.textContent = "Put in at least one mobile number first.";
     return;
   }
   if (d.includePosition && pickup.watching) {
@@ -479,15 +456,24 @@ async function pickupSendTest() {
   }
   const going = pickupGoing().map(p => ({ ...p, time: p.time || "15:00" }));
   const message = "TEST from Cloude \u2014 please ignore, nothing has happened.\n\n" +
-    "If I'm ever called out and can't do a pickup, you'll get a message like this from me:\n\n" +
+    "If I'm ever called out and can't do a pickup, you'll get a text like this from me:\n\n" +
     "\u2014\u2014\u2014\n" + pickupMessage(d, going);
-  pickupDeliver(message, "TEST from Cloude \u2014 please ignore", r, status);
-  // Keep the email button next to the test, where the user is looking.
-  if (!pickupEl("pickupSendEmail").hidden) status.textContent += " (The button is under Send now, near the top.)";
+  status.textContent = "Test sent to the Cloude Send shortcut. The first time, the iPhone asks whether it may send messages: tap Always Allow. Then tap \u25c0 Cloude in the top corner to come back.";
+  pickupEl("pickupStatus").textContent = "";
+  pickupRunShortcut(message, r.texts);
 }
 
+// Coming back from the Shortcuts app: say when it went, and point to
+// "Didn't send?" in case it didn't.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !pickup.prepared) return;
+  if (pickupEl("pickupSheet").hidden) return;
+  const at = pickupClock(pickup.prepared.at);
+  pickupEl("pickupStatus").textContent = `Handed to the shortcut at ${at}. If the text didn't arrive, tap \u201cDidn't send?\u201d.`;
+});
+
 function pickupDeleteAll() {
-  if (!confirm("Delete all the saved pickups, wording, numbers and email addresses?")) return;
+  if (!confirm("Delete all the saved pickups, wording and numbers?")) return;
   try { localStorage.removeItem(PICKUP_DETAILS_KEY); localStorage.removeItem(PICKUP_LAST_KEY); } catch { /* ignore */ }
   pickupClose();
 }
@@ -502,10 +488,10 @@ function pickupDeleteAll() {
   pickupEl("pickupIncludePos").addEventListener("change", pickupChanged);
   for (let i = 0; i < PICKUP_MAX_RECIPIENTS; i++) {
     pickupEl(`pickupText${i}`).addEventListener("input", pickupChanged);
-    pickupEl(`pickupEmail${i}`).addEventListener("input", pickupChanged);
   }
   pickupEl("pickupSendTest").addEventListener("click", pickupSendTest);
-  pickupEl("pickupSendEmail").addEventListener("click", pickupSendEmail);
+  pickupEl("pickupFallback").addEventListener("click", pickupFallback);
+  pickupEl("pickupGetShortcut").href = PICKUP_SHORTCUT_LINK;
   pickupEl("pickupSendNow").addEventListener("click", pickupSendNow);
   pickupEl("pickupDelete").addEventListener("click", pickupDeleteAll);
   pickupRenderButton();

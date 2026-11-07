@@ -512,7 +512,11 @@
 // Bumped to v122: callout.html/pickup.js — no shortcut any more. Send
 // now opens Messages filled in (tap Send), then "Now send the email"
 // opens Mail filled in. Recipients still typed into Cloude.
-const SHELL_CACHE_NAME = "cloude-shell-v122";
+// Bumped to v124: callout.html/pickup.js — "Can't do pickup" is texts
+// only, sent through a six-action shared "Cloude Send" shortcut (see
+// pickup.js), with "Didn't send?" opening Messages filled in. No time
+// set now says "Check pickup time"; "please reply to everyone" removed.
+const SHELL_CACHE_NAME = "cloude-shell-v124";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
