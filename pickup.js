@@ -2,25 +2,36 @@
 // people who'd collect a child (or dog) when the user is called out.
 //
 // How the sending works: a web app isn't allowed to send a text by
-// itself, so Cloude hands the message to one shared iPhone shortcut,
-// "Cloude Send", via the shortcuts:// link. Everyone adds the same
-// shortcut from an iCloud link (PICKUP_SHORTCUT_LINK); there's nothing
-// to edit in it. It's passed a small JSON object:
-//   { "message": "…", "numbers": ["07700900123", …] }
-// and is six actions long:
-//   1 Get dictionary from Shortcut Input   2 Set variable Data
-//   3 Get Value for "numbers" in Data      4 Set variable Numbers
-//   5 Get Value for "message" in Data      6 Send [Dictionary Value] to Numbers
-//                                            (Show Compose Sheet off)
-// so Messages never opens and the text leaves from the user's own
-// number. The Shortcuts app shows briefly; "◀ Cloude" in the corner
-// comes straight back to this screen, which stays as it was.
+// itself, and anything that switches to another app (Messages, or
+// running a shortcut by its shortcuts:// link) means coming back by
+// hand. The one route that stays inside Cloude is the share sheet:
+// a shortcut picked there runs in the share panel, over Cloude.
 //
-// History: v121 also sent email and the shortcut's four look-alike
-// "Dictionary Value"s got crossed (the message was used as the phone
-// number); v122 opened Messages and Mail filled in instead, too many
-// taps; v124 is texts only, and the six-action shortcut above, built
-// by adding each action fresh from search, never duplicating one.
+// So Send now does two things in the same tap:
+//   1. copies the message to the clipboard, and
+//   2. opens the share panel with the numbers as its text
+//      ("07700900123, 07700900456").
+// The user taps "Cloude Send" in the panel. That shortcut is ONE
+// action, shared to everyone from an iCloud link (PICKUP_SHORTCUT_LINK):
+//   Send [Clipboard] to [Shortcut Input]   (Show Compose Sheet off,
+//                                           Show in Share Sheet on)
+// Both filled from the press-and-hold menu, so there are no variables
+// to pick. One run texts every number in the shared line (tested: two
+// numbers, two texts). Messages never opens, the panel closes, and
+// Cloude is still on the same page. The text leaves from the user's own
+// number. The message overwrites whatever was on the clipboard.
+//
+// History, so nobody goes round this loop again:
+//   v121  JSON to a dictionary-reading shortcut by shortcuts:// link,
+//         plus email. Never sent: "Texts" had been TYPED into the
+//         Recipients box as a word, and Shortcuts dialled it as keypad
+//         digits (T-E-X-T-S = 83987). The Recipients box can't easily
+//         take a variable at all.
+//   v122  sms:/mailto: links opening Messages and Mail filled in: too
+//         much switching and tapping.
+//   v124  six-action version of v121, texts only: same Recipients
+//         problem ("numbers" = 6862377).
+//   v125  the share-sheet design above.
 //
 // If it ever doesn't send, "Didn't send?" opens Messages with the
 // numbers and message filled in, to send by hand.
@@ -31,7 +42,7 @@
 // Stored on this device only (and copied into whole-device backups,
 // see BACKUP_KEY_PREFIXES in app.js):
 //   cloude-pickup:details   the saved wording and numbers, kept until changed or deleted
-//   cloude-pickup:lastSent  when the last message was handed to the shortcut
+//   cloude-pickup:lastSent  when the last message was sent
 //
 // Several pickups can be saved (a child from the carer, the dog from
 // the kennels, another child from gymnastics), each with who and from
@@ -45,13 +56,18 @@ const PICKUP_DETAILS_KEY = "cloude-pickup:details";
 const PICKUP_LAST_KEY = "cloude-pickup:lastSent";
 const PICKUP_MAX_RECIPIENTS = 3;
 const PICKUP_SHORTCUT = "Cloude Send";
-// The shared shortcut. An iCloud link is a snapshot: after any change to
-// the shortcut it has to be shared again and the new link put here.
-const PICKUP_SHORTCUT_LINK = "https://www.icloud.com/shortcuts/19d109a020ae4ba1bd6e343ae91929a6";
+// The shared one-action shortcut. An iCloud link is a snapshot: after
+// any change to the shortcut it has to be shared again and the new link
+// put here. Empty = not shared yet, and the "Get the shortcut" button
+// stays hidden.
+const PICKUP_SHORTCUT_LINK = "";
 const PICKUP_DEFAULT_OPENING = "I've been called out on the lifeboat and can't do the pickup.";
 // Sent instead when no pickup is named or ticked: just "called out".
 const PICKUP_DEFAULT_CALLED_OUT = "I've been called out on the lifeboat. No pickups needed — just letting you know.";
-const PICKUP_POSITION_WAIT_MS = 6000; // at Send, wait at most this long for a position
+// (No waiting for a position at Send any more: the share panel has to
+// open in the same instant as the tap, or iOS refuses it. The position
+// search starts when this screen opens, so it's normally found by the
+// time Send is tapped; if not, the message says it wasn't available.)
 
 function pickupLoad() {
   try {
@@ -118,7 +134,7 @@ const pickup = {
   posWaiters: [],
   watching: false,
   rows: [],         // on screen: { who, where, time, include }
-  prepared: null,   // { message, numbers, at } — the last message handed to the shortcut, for "Didn't send?"
+  prepared: null,   // { message, numbers, at } — the last message sent, for "Didn't send?"
 };
 
 function pickupStartPosition() {
@@ -387,14 +403,38 @@ function pickupRender() {
 // Position updates call this name.
 function pickupRenderPreview() { if (!pickupEl("pickupSheet").hidden) pickupRender(); }
 
-// Hands the message and numbers to the "Cloude Send" shortcut. The
-// Shortcuts app shows briefly while it sends; "◀ Cloude" in its corner
-// comes back here, to this screen as it was.
-function pickupRunShortcut(message, numbers) {
+// Copies the message and opens the share panel with the numbers, all
+// in the tap itself (see the top of this file). Resolves "sent",
+// "closed" (panel dismissed without choosing) or "unsupported".
+async function pickupShare(message, numbers) {
   pickup.prepared = { message, numbers, at: new Date() };
   pickupEl("pickupFallback").hidden = false;
-  window.location.href = "shortcuts://run-shortcut?name=" + encodeURIComponent(PICKUP_SHORTCUT) +
-    "&input=text&text=" + encodeURIComponent(JSON.stringify({ message, numbers }));
+  // Both calls start before any await, so they count as part of the tap.
+  const copied = navigator.clipboard && navigator.clipboard.writeText
+    ? navigator.clipboard.writeText(message).then(() => true, () => false)
+    : Promise.resolve(false);
+  if (!navigator.share) return "unsupported";
+  const shared = navigator.share({ text: numbers.join(", ") });
+  if (!(await copied)) return "nocopy";
+  try {
+    await shared;
+    return "sent";
+  } catch (err) {
+    return err && err.name === "AbortError" ? "closed" : "unsupported";
+  }
+}
+
+function pickupShareOutcome(result, status, what) {
+  const at = pickupClock(new Date());
+  if (result === "sent") {
+    status.textContent = `${what} at ${at}. If it didn't arrive, tap \u201cDidn't send?\u201d.`;
+  } else if (result === "closed") {
+    status.textContent = "Not sent: the share panel was closed. Tap Send again and choose \u201cCloude Send\u201d in the panel.";
+  } else if (result === "nocopy") {
+    status.textContent = "Couldn't copy the message, so nothing was sent. Use \u201cDidn't send?\u201d to send it from Messages.";
+  } else {
+    status.textContent = "This phone can't open the share panel from Cloude. Use \u201cDidn't send?\u201d to send it from Messages.";
+  }
 }
 
 // "Didn't send?": the same message, opened in Messages to send by hand.
@@ -417,31 +457,29 @@ function pickupNeedRecipients(status) {
 
 function pickupClock(d) { return d.toTimeString().slice(0, 5); }
 
-async function pickupSendNow() {
+// Not async up to pickupShare(): everything before it must happen in
+// the tap itself.
+function pickupSendNow() {
   const d = pickupFromScreen();
   pickupSave(d);
-  const btn = pickupEl("pickupSendNow");
   const status = pickupEl("pickupStatus");
   const r = pickupRecipients(d);
   if (!r.texts.length) { pickupNeedRecipients(status); return; }
-  btn.disabled = true;
-  if (d.includePosition && pickup.watching) {
-    status.textContent = "Getting your position…";
-    await pickupWaitForPosition(PICKUP_POSITION_WAIT_MS);
-  }
   const message = pickupMessage(d, pickupGoing());
-  try { localStorage.setItem(PICKUP_LAST_KEY, new Date().toISOString()); } catch { /* ignore */ }
-  btn.disabled = false;
-  pickupRender();
-  pickupRenderButton();
-  status.textContent = `Sent to the Cloude Send shortcut at ${pickupClock(new Date())}. Tap \u25c0 Cloude in the top corner to come back here.`;
-  pickupRunShortcut(message, r.texts);
+  status.textContent = "In the share panel, tap \u201cCloude Send\u201d.";
+  pickupShare(message, r.texts).then(result => {
+    if (result === "sent") {
+      try { localStorage.setItem(PICKUP_LAST_KEY, new Date().toISOString()); } catch { /* ignore */ }
+      pickupRenderButton();
+    }
+    pickupShareOutcome(result, status, "Sent");
+  });
 }
 
 // A practice run, headed TEST, so the people on the list see what a
 // real one looks like, and the iPhone asks its one-off permission
-// question now rather than at a callout.
-async function pickupSendTest() {
+// questions now rather than at a callout.
+function pickupSendTest() {
   const d = pickupFromScreen();
   pickupSave(d);
   const status = pickupEl("pickupTestStatus");
@@ -450,27 +488,14 @@ async function pickupSendTest() {
     status.textContent = "Put in at least one mobile number first.";
     return;
   }
-  if (d.includePosition && pickup.watching) {
-    status.textContent = "Getting your position…";
-    await pickupWaitForPosition(PICKUP_POSITION_WAIT_MS);
-  }
   const going = pickupGoing().map(p => ({ ...p, time: p.time || "15:00" }));
   const message = "TEST from Cloude \u2014 please ignore, nothing has happened.\n\n" +
     "If I'm ever called out and can't do a pickup, you'll get a text like this from me:\n\n" +
     "\u2014\u2014\u2014\n" + pickupMessage(d, going);
-  status.textContent = "Test sent to the Cloude Send shortcut. The first time, the iPhone asks whether it may send messages: tap Always Allow. Then tap \u25c0 Cloude in the top corner to come back.";
   pickupEl("pickupStatus").textContent = "";
-  pickupRunShortcut(message, r.texts);
+  status.textContent = "In the share panel, tap \u201cCloude Send\u201d. The first time, the iPhone asks about sending and the clipboard: tap Always Allow.";
+  pickupShare(message, r.texts).then(result => pickupShareOutcome(result, status, "Test sent"));
 }
-
-// Coming back from the Shortcuts app: say when it went, and point to
-// "Didn't send?" in case it didn't.
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible" || !pickup.prepared) return;
-  if (pickupEl("pickupSheet").hidden) return;
-  const at = pickupClock(pickup.prepared.at);
-  pickupEl("pickupStatus").textContent = `Handed to the shortcut at ${at}. If the text didn't arrive, tap \u201cDidn't send?\u201d.`;
-});
 
 function pickupDeleteAll() {
   if (!confirm("Delete all the saved pickups, wording and numbers?")) return;
@@ -491,7 +516,8 @@ function pickupDeleteAll() {
   }
   pickupEl("pickupSendTest").addEventListener("click", pickupSendTest);
   pickupEl("pickupFallback").addEventListener("click", pickupFallback);
-  pickupEl("pickupGetShortcut").href = PICKUP_SHORTCUT_LINK;
+  if (PICKUP_SHORTCUT_LINK) pickupEl("pickupGetShortcut").href = PICKUP_SHORTCUT_LINK;
+  pickupEl("pickupGetShortcutBox").hidden = !PICKUP_SHORTCUT_LINK;
   pickupEl("pickupSendNow").addEventListener("click", pickupSendNow);
   pickupEl("pickupDelete").addEventListener("click", pickupDeleteAll);
   pickupRenderButton();

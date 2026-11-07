@@ -516,7 +516,10 @@
 // only, sent through a six-action shared "Cloude Send" shortcut (see
 // pickup.js), with "Didn't send?" opening Messages filled in. No time
 // set now says "Check pickup time"; "please reply to everyone" removed.
-const SHELL_CACHE_NAME = "cloude-shell-v124";
+// Bumped to v125: callout.html/pickup.js — Send now copies the message
+// and opens the share panel; the one-action "Cloude Send" shortcut runs
+// inside it, so Cloude is never left. See the top of pickup.js.
+const SHELL_CACHE_NAME = "cloude-shell-v125";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

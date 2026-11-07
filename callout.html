@@ -329,14 +329,17 @@
         <input id="pickupText2" type="tel" inputmode="tel" placeholder="Third number (optional)" autocomplete="off">
         <p id="pickupRecipientsCheck" class="status" hidden></p>
 
-        <h3>Add the sending shortcut</h3>
-        <p>Cloude writes the message; a small iPhone shortcut called <b>Cloude Send</b> texts it from your own number. Tap the button, then <b>Add Shortcut</b>, then come back to Cloude. There's nothing to change in it.</p>
-        <p>When you tap <b>Send now</b>, the Shortcuts app shows for a moment while the text goes. Tap <b>◀ Cloude</b> in its top corner to come back.</p>
-        <a id="pickupGetShortcut" class="get-shortcut" href="#" target="_blank" rel="noopener">Get the shortcut</a>
-        <p class="hint">If it ever doesn't send, a <b>Didn't send?</b> button appears under Send now: it opens Messages with everything filled in, and you tap Send.</p>
+        <div id="pickupGetShortcutBox">
+          <h3>Add the sending shortcut</h3>
+          <p>Cloude writes the message; a small iPhone shortcut called <b>Cloude Send</b> texts it from your own number. Tap the button, then <b>Add Shortcut</b>, then come back to Cloude. There's nothing to change in it.</p>
+          <a id="pickupGetShortcut" class="get-shortcut" href="#" target="_blank" rel="noopener">Get the shortcut</a>
+        </div>
+        <h3>How sending works</h3>
+        <p>Tap <b>Send now</b>. The share panel slides up: tap <b>Cloude Send</b> in its list. The text goes, the panel closes, and you're still here. Messages never opens.</p>
+        <p class="hint">Tip: to put Cloude Send at the top of the share panel, scroll to the bottom of its list, tap <b>Edit Actions…</b>, and add Cloude Send to Favourites. If it ever doesn't send, a <b>Didn't send?</b> button under Send now opens Messages with everything filled in.</p>
 
         <h3>Try it</h3>
-        <p>This texts everyone above, headed <b>TEST — please ignore</b>, so they see what a real one will look like. The first time, the iPhone asks whether <i>Cloude Send</i> may send messages: tap <b>Always Allow</b>, so it never has to ask during a callout.</p>
+        <p>This texts everyone above, headed <b>TEST — please ignore</b>, so they see what a real one will look like. The first time, the iPhone asks whether <i>Cloude Send</i> may use the clipboard and send messages: tap <b>Always Allow</b>, so it never has to ask during a callout.</p>
         <button id="pickupSendTest" type="button" class="send-test">Send a test</button>
         <p id="pickupTestStatus" class="status"></p>
 
