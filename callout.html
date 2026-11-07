@@ -190,6 +190,40 @@
     }
     .send-test { background: #2c3036; color: #e8e6df; border: 1px solid #5f5e5a; }
     .send-test:active { background: #23262b; }
+    /* First-time set-up card, at the top of the sheet until a test has
+       gone through; then hidden for good (pickup.js). */
+    .setup-card { background: #1d2a38; border: 1px solid #2f4b66; border-radius: 14px; padding: 14px 14px 6px; margin: 0 0 16px; }
+    .setup-card h3 { margin: 0 0 10px; font-size: 18px; color: #e6f1fb; }
+    .setup-card h3 span { font-weight: 400; font-size: 14px; color: #a8a69e; }
+    .setup-step { display: flex; gap: 12px; margin: 0 0 14px; }
+    .step-num { flex: 0 0 28px; height: 28px; border-radius: 50%; background: #185fa5; color: #fff;
+      font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+    .setup-step.done .step-num { background: #2e7d4f; font-size: 0; }
+    .setup-step.done .step-num::after { content: "✓"; font-size: 16px; }
+    .step-body { flex: 1; min-width: 0; font-size: 15px; line-height: 1.4; color: #d8d6cf; }
+    .step-body input + input { margin-top: 6px; }
+    .step-body #pickupNumbers { margin-top: 8px; }
+    .step-note { font-size: 13.5px; color: #a8a69e; margin: 8px 0 0; }
+    .sub { display: flex; gap: 10px; margin: 14px 0 0; align-items: flex-start; }
+    .sub-l { flex: 0 0 16px; font-weight: 700; color: #85b7eb; }
+    .sub-t { flex: 1; min-width: 0; font-size: 14.5px; color: #d0cec7; }
+    /* Little drawings of the iPhone share panel (not screenshots). */
+    .pic { margin: 8px 0 2px; background: #f2f2f7; border-radius: 12px; padding: 8px; color: #111; font-size: 13px; }
+    .pic-row { background: #fff; border-radius: 9px; padding: 8px 10px; margin: 4px 0; display: flex; align-items: center; justify-content: space-between; }
+    .pic-ring { outline: 3px solid #e8452c; outline-offset: 2px; }
+    .pic-ico { width: 20px; height: 20px; border-radius: 5px; background: #c7c7cc; display: inline-block; margin-right: 8px; vertical-align: middle; }
+    .pic-cs { background: #7a4ce0; }
+    .pic-plus { width: 20px; height: 20px; border-radius: 50%; background: #34c759; color: #fff; font-style: normal; font-weight: 700;
+      display: flex; align-items: center; justify-content: center; }
+    .pic-faint { color: #888; }
+    .pic-lbl { font-size: 11px; color: #6d6d72; text-transform: uppercase; margin: 6px 4px 2px; }
+    .pic-head { display: flex; justify-content: space-between; padding: 2px 4px 4px; }
+    .pic-link { color: #0a63d8; }
+    .pic-tap { color: #e8452c; font-weight: 700; }
+    .pic-peeps { display: flex; gap: 8px; padding: 4px 4px 6px; }
+    .pic-peeps i { width: 34px; height: 34px; border-radius: 50%; background: #c7c7cc; }
+    .setup-done { font-size: 15px; color: #c0dd97; margin: 0 0 10px; line-height: 1.4; }
+    #pickupNumbers input + input { margin-top: 6px; }
     .pickup-to { font-size: 14px; color: #a8a69e; margin: 12px 0 0; }
     .pickup-to.warn { color: #fac775; }
     /* Tap a box for its next 12 hours (callout-detail.js). */
@@ -290,7 +324,63 @@
     <div class="sheet-inner">
       <h2>Can't do pickup <button id="pickupClose" type="button">Close</button></h2>
 
-      <p id="pickupSetupIntro" class="hint" hidden>Fill this in once. It's kept on this phone, and any change you make here is saved as you type. Add a card for each child or dog. At a callout, just pick the times and tap Send; untick Include to leave one out that day. Who receives it is set in “Who gets the message” below.</p>
+      <section id="pickupSetupCard" class="setup-card" hidden>
+        <h3>Set up sending <span>(once, about two minutes)</span></h3>
+        <div id="pickupSetupSteps">
+          <div class="setup-step" id="pickupStep1">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              <b>Add the sending shortcut.</b> Press the blue <b>Get the shortcut</b> button below. When it opens, tap <b>Add Shortcut</b>, then come back to Cloude.
+              <a id="pickupGetShortcut" class="get-shortcut" href="#" target="_blank" rel="noopener">Get the shortcut</a>
+            </div>
+          </div>
+          <div class="setup-step" id="pickupStep2">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              <b>Who gets the text?</b> Type up to three mobile numbers.
+              <div id="pickupNumbersSlotTop"></div>
+            </div>
+          </div>
+          <div class="setup-step" id="pickupStep3">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              <b>Send a test.</b> Press <b>Send a test</b> below. Everyone above gets a text headed <i>TEST — please ignore</i>.
+              <button id="pickupSendTest" type="button" class="send-test">Send a test</button>
+              <p class="step-note">A panel slides up from the bottom of the screen, with people at the top and a list of options underneath. The first time only:</p>
+              <div class="sub"><div class="sub-l">a</div><div class="sub-t">Scroll the list to the very bottom and tap <b>Edit Actions…</b>
+                <div class="pic" aria-hidden="true">
+                  <div class="pic-peeps"><i></i><i></i><i></i><i></i><i></i></div>
+                  <div class="pic-row"><span><i class="pic-ico"></i>Copy</span></div>
+                  <div class="pic-row"><span><i class="pic-ico"></i>Add to Reading List</span></div>
+                  <div class="pic-row pic-faint">⋮</div>
+                  <div class="pic-row pic-ring"><span class="pic-link">Edit Actions…</span><span class="pic-tap">◀ tap</span></div>
+                </div></div></div>
+              <div class="sub"><div class="sub-l">b</div><div class="sub-t">Find <b>Cloude Send</b> and tap its green <b>+</b>. Then tap <b>Done</b> at the top.
+                <div class="pic" aria-hidden="true">
+                  <div class="pic-head"><b>Actions</b><span class="pic-link"><b>Done</b></span></div>
+                  <div class="pic-lbl">Favourites</div>
+                  <div class="pic-row"><span><i class="pic-ico"></i>Copy</span></div>
+                  <div class="pic-lbl">Other actions</div>
+                  <div class="pic-row"><span><i class="pic-ico"></i>Add to Reading List</span><i class="pic-plus">+</i></div>
+                  <div class="pic-row pic-ring"><span><i class="pic-ico pic-cs"></i><b>Cloude Send</b></span><i class="pic-plus">+</i></div>
+                </div></div></div>
+              <div class="sub"><div class="sub-l">c</div><div class="sub-t">Back in the list, <b>Cloude Send</b> is now near the top. Tap it.
+                <div class="pic" aria-hidden="true">
+                  <div class="pic-peeps"><i></i><i></i><i></i><i></i><i></i></div>
+                  <div class="pic-row"><span><i class="pic-ico"></i>Copy</span></div>
+                  <div class="pic-row pic-ring"><span><i class="pic-ico pic-cs"></i><b>Cloude Send</b></span><span class="pic-tap">◀ tap</span></div>
+                  <div class="pic-row"><span><i class="pic-ico"></i>Add to Reading List</span></div>
+                </div></div></div>
+              <div class="sub"><div class="sub-l">d</div><div class="sub-t">If the iPhone asks about the clipboard or sending messages, tap <b>Always Allow</b>.</div></div>
+              <p class="step-note">From then on, sending is just: <b>Send now</b>, then <b>Cloude Send</b>.</p>
+              <p id="pickupTestStatus" class="status"></p>
+            </div>
+          </div>
+        </div>
+        <p id="pickupSetupDone" class="setup-done" hidden>✓ All set. From now on, tap <b>Send now</b>, then <b>Cloude Send</b> in the share panel. This box won't show again; the numbers can be changed in “Who gets the message” at the bottom.</p>
+      </section>
+
+      <p id="pickupSetupIntro" class="hint" hidden>Fill this in once. It's kept on this phone, and any change you make here is saved as you type. Add a card for each child or dog. At a callout, just pick the times and tap Send; untick Include to leave one out that day.</p>
 
       <div id="pickupRows"></div>
       <button id="pickupAdd" type="button" class="add-pickup">+ Add another pickup</button>
@@ -322,27 +412,18 @@
 
       <details id="pickupSending" class="sending">
         <summary id="pickupSendingSummary">Who gets the message</summary>
-        <p>Fill this in once. It's kept on this phone.</p>
-        <label for="pickupText0">Mobile numbers (texts)</label>
-        <input id="pickupText0" type="tel" inputmode="tel" placeholder="e.g. 07700 900123" autocomplete="off">
-        <input id="pickupText1" type="tel" inputmode="tel" placeholder="Second number (optional)" autocomplete="off">
-        <input id="pickupText2" type="tel" inputmode="tel" placeholder="Third number (optional)" autocomplete="off">
-        <p id="pickupRecipientsCheck" class="status" hidden></p>
-
-        <div id="pickupGetShortcutBox">
-          <h3>Add the sending shortcut</h3>
-          <p>Cloude writes the message; a small iPhone shortcut called <b>Cloude Send</b> texts it from your own number. Tap the button, then <b>Add Shortcut</b>, then come back to Cloude. There's nothing to change in it.</p>
-          <a id="pickupGetShortcut" class="get-shortcut" href="#" target="_blank" rel="noopener">Get the shortcut</a>
+        <div id="pickupNumbersSlotBottom">
+          <div id="pickupNumbers">
+            <input id="pickupText0" type="tel" inputmode="tel" placeholder="e.g. 07700 900123" autocomplete="off" aria-label="First mobile number">
+            <input id="pickupText1" type="tel" inputmode="tel" placeholder="Second number (optional)" autocomplete="off" aria-label="Second mobile number">
+            <input id="pickupText2" type="tel" inputmode="tel" placeholder="Third number (optional)" autocomplete="off" aria-label="Third mobile number">
+            <p id="pickupRecipientsCheck" class="status" hidden></p>
+          </div>
         </div>
-        <h3>How sending works</h3>
-        <p>Tap <b>Send now</b>. The share panel slides up: tap <b>Cloude Send</b> in its list. The text goes, the panel closes, and you're still here. Messages never opens.</p>
-        <p class="hint">Tip: to put Cloude Send at the top of the share panel, scroll to the bottom of its list, tap <b>Edit Actions…</b>, and add Cloude Send to Favourites. If it ever doesn't send, an <b>If not sent</b> button under Send now opens Messages with everything filled in.</p>
-
-        <h3>Try it</h3>
-        <p>This texts everyone above, headed <b>TEST — please ignore</b>, so they see what a real one will look like. The first time, the iPhone asks whether <i>Cloude Send</i> may use the clipboard and send messages: tap <b>Always Allow</b>, so it never has to ask during a callout.</p>
-        <button id="pickupSendTest" type="button" class="send-test">Send a test</button>
-        <p id="pickupTestStatus" class="status"></p>
-
+        <p class="hint">Sending: tap <b>Send now</b>, then <b>Cloude Send</b> in the share panel. If it ever doesn't send, the <b>If not sent</b> button under Send now opens Messages with everything filled in.</p>
+        <div class="row-buttons">
+          <button id="pickupShowSetup" type="button">Show the set-up steps again</button>
+        </div>
         <p class="hint">An older shortcut called <i>Cloude Pickup</i> is no longer used and can be deleted.</p>
       </details>
     </div>

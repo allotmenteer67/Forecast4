@@ -41,7 +41,9 @@
 //
 // Stored on this device only (and copied into whole-device backups,
 // see BACKUP_KEY_PREFIXES in app.js):
-//   cloude-pickup:details   the saved wording and numbers, kept until changed or deleted
+//   cloude-pickup:details   the saved wording and numbers, kept until changed or deleted;
+//                           also setup: { shortcutTapped, ready } — the first-time
+//                           set-up card shows at the top until a test has gone through
 //   cloude-pickup:lastSent  when the last message was sent
 //
 // Several pickups can be saved (a child from the carer, the dog from
@@ -135,6 +137,7 @@ const pickup = {
   watching: false,
   rows: [],         // on screen: { who, where, time, include }
   prepared: null,   // { message, numbers, at } — the last message sent, for "If not sent"
+  setup: { shortcutTapped: false, ready: false }, // first-time set-up progress (saved with the details)
 };
 
 function pickupStartPosition() {
@@ -263,8 +266,15 @@ function pickupOpen() {
   for (let i = 0; i < PICKUP_MAX_RECIPIENTS; i++) {
     pickupEl(`pickupText${i}`).value = (d.texts || [])[i] || "";
   }
-  // "Who gets the message" starts open until there's someone to send to.
-  pickupEl("pickupSending").open = !pickupRecipients(d).texts.length;
+  pickup.setup = {
+    shortcutTapped: !!(d.setup && d.setup.shortcutTapped),
+    // Anyone who'd already sent before this card existed counts as set up.
+    ready: !!(d.setup && d.setup.ready) || !!(saved && saved.setup === undefined && localStorage.getItem(PICKUP_LAST_KEY)),
+  };
+  pickupEl("pickupSending").open = false;
+  pickupEl("pickupSetupDone").hidden = true;
+  pickupEl("pickupSetupSteps").hidden = false;
+  pickupPlaceSetup();
   pickupEl("pickupStatus").textContent = "";
   pickupEl("pickupTestStatus").textContent = "";
   pickup.prepared = null;
@@ -353,6 +363,7 @@ function pickupFromScreen() {
     ifUnable: pickupEl("pickupIfUnable").value.trim(),
     includePosition: pickupEl("pickupIncludePos").checked,
     texts: Array.from({ length: PICKUP_MAX_RECIPIENTS }, (_, i) => pickupEl(`pickupText${i}`).value.trim()),
+    setup: { ...pickup.setup },
   };
 }
 
@@ -394,6 +405,8 @@ function pickupRender() {
     ? `${r.badTexts === 1 ? "1 number doesn't" : `${r.badTexts} numbers don't`} look right (a mobile needs all 11 digits, like 07700 900123), so it will be left out.`
     : "";
   pickupEl("pickupRecipientsCheck").hidden = !r.badTexts;
+  pickupEl("pickupStep1").classList.toggle("done", pickup.setup.shortcutTapped);
+  pickupEl("pickupStep2").classList.toggle("done", n > 0);
   const posLine = pickupEl("pickupPosState");
   if (!d.includePosition) posLine.textContent = "Position: not included (see More options).";
   else if (pickup.pos) posLine.textContent = `Position found, to about ${Math.max(5, Math.round(pickup.pos.acc))} m.`;
@@ -447,11 +460,31 @@ function pickupFallback() {
     "&body=" + encodeURIComponent(p.message);
 }
 
-// Nobody to send to: say so, and open "Who gets the message".
+// The set-up card sits at the top until a test has gone through. The
+// number boxes live in it during set-up, and in "Who gets the message"
+// at the bottom afterwards (the same boxes, moved, never duplicated).
+function pickupPlaceSetup() {
+  const ready = pickup.setup.ready;
+  pickupEl("pickupSetupCard").hidden = ready && pickupEl("pickupSetupDone").hidden;
+  pickupEl("pickupSending").hidden = !ready;
+  const slot = pickupEl(ready ? "pickupNumbersSlotBottom" : "pickupNumbersSlotTop");
+  const numbers = pickupEl("pickupNumbers");
+  if (numbers.parentNode !== slot) slot.appendChild(numbers);
+}
+
+function pickupSetupChanged(change) {
+  Object.assign(pickup.setup, change);
+  pickupSave(pickupFromScreen());
+  pickupRender();
+}
+
+// Nobody to send to: say so, and show where the numbers go.
 function pickupNeedRecipients(status) {
-  status.textContent = "There's no one to send to yet. Put at least one mobile number in \u201cWho gets the message\u201d.";
-  const box = pickupEl("pickupSending");
-  box.open = true;
+  status.textContent = pickup.setup.ready
+    ? "There's no one to send to yet. Put at least one mobile number in \u201cWho gets the message\u201d."
+    : "There's no one to send to yet. Do the set-up steps at the top first.";
+  const box = pickup.setup.ready ? pickupEl("pickupSending") : pickupEl("pickupSetupCard");
+  if (pickup.setup.ready) box.open = true;
   box.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
@@ -485,7 +518,7 @@ function pickupSendTest() {
   const status = pickupEl("pickupTestStatus");
   const r = pickupRecipients(d);
   if (!r.texts.length) {
-    status.textContent = "Put in at least one mobile number first.";
+    status.textContent = "Put in at least one mobile number in step 2 first.";
     return;
   }
   const going = pickupGoing().map(p => ({ ...p, time: p.time || "15:00" }));
@@ -493,8 +526,18 @@ function pickupSendTest() {
     "If I'm ever called out and can't do a pickup, you'll get a text like this from me:\n\n" +
     "\u2014\u2014\u2014\n" + pickupMessage(d, going);
   pickupEl("pickupStatus").textContent = "";
-  status.textContent = "In the share panel, tap \u201cCloude Send\u201d. The first time, the iPhone asks about sending and the clipboard: tap Always Allow.";
-  pickupShare(message, r.texts).then(result => pickupShareOutcome(result, status, "Test sent"));
+  status.textContent = "Now follow a\u2013d below in the panel that slides up.";
+  pickupShare(message, r.texts).then(result => {
+    pickupShareOutcome(result, status, "Test sent");
+    if (result === "sent") {
+      // Set up for good: tick everything off, then fold the card away
+      // (it stays hidden from the next opening on).
+      pickupSetupChanged({ ready: true, shortcutTapped: true });
+      pickupEl("pickupSetupSteps").hidden = true;
+      pickupEl("pickupSetupDone").hidden = false;
+      pickupPlaceSetup();
+    }
+  });
 }
 
 function pickupDeleteAll() {
@@ -516,8 +559,16 @@ function pickupDeleteAll() {
   }
   pickupEl("pickupSendTest").addEventListener("click", pickupSendTest);
   pickupEl("pickupFallback").addEventListener("click", pickupFallback);
-  if (PICKUP_SHORTCUT_LINK) pickupEl("pickupGetShortcut").href = PICKUP_SHORTCUT_LINK;
-  pickupEl("pickupGetShortcutBox").hidden = !PICKUP_SHORTCUT_LINK;
+  pickupEl("pickupGetShortcut").href = PICKUP_SHORTCUT_LINK;
+  pickupEl("pickupGetShortcut").addEventListener("click", () => pickupSetupChanged({ shortcutTapped: true }));
+  pickupEl("pickupShowSetup").addEventListener("click", () => {
+    pickupSetupChanged({ ready: false });
+    pickupEl("pickupSetupSteps").hidden = false;
+    pickupEl("pickupSetupDone").hidden = true;
+    pickupEl("pickupTestStatus").textContent = "";
+    pickupPlaceSetup();
+    pickupEl("pickupSheet").scrollTop = 0;
+  });
   pickupEl("pickupSendNow").addEventListener("click", pickupSendNow);
   pickupEl("pickupDelete").addEventListener("click", pickupDeleteAll);
   pickupRenderButton();

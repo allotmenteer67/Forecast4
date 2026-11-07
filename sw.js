@@ -525,7 +525,13 @@
 // and the fallback button now reads "If not sent, open it in Messages".
 // Bumped to v128: pickup.js — new iCloud link for the Cloude Send
 // shortcut (the v126 link had stopped working: "Shortcut Not Found").
-const SHELL_CACHE_NAME = "cloude-shell-v128";
+// Bumped to v129: callout.html/pickup.js — first-time set-up card at the
+// top of "Can't do pickup" (get the shortcut, numbers, test with the
+// share-panel Favourites steps), hidden once a test has gone through.
+// Bumped to v130: callout.html — set-up steps reworded, with little
+// drawings of the share panel for step 3 (a: Edit Actions, b: green +,
+// c: tap Cloude Send).
+const SHELL_CACHE_NAME = "cloude-shell-v130";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
