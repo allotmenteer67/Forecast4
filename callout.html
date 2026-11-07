@@ -222,6 +222,9 @@
     .pic-tap { color: #e8452c; font-weight: 700; }
     .pic-peeps { display: flex; gap: 8px; padding: 4px 4px 6px; }
     .pic-peeps i { width: 34px; height: 34px; border-radius: 50%; background: #c7c7cc; }
+    .hide-setup { display: block; margin: 4px auto 10px; padding: 8px 14px; font: inherit; font-size: 15px;
+      background: transparent; color: #85b7eb; border: none; text-decoration: underline; }
+    .hide-setup[hidden] { display: none; }
     .setup-done { font-size: 15px; color: #c0dd97; margin: 0 0 10px; line-height: 1.4; }
     #pickupNumbers input + input { margin-top: 6px; }
     .pickup-to { font-size: 14px; color: #a8a69e; margin: 12px 0 0; }
@@ -377,6 +380,7 @@
             </div>
           </div>
         </div>
+        <button id="pickupHideSetup" type="button" class="hide-setup">Hide these steps</button>
         <p id="pickupSetupDone" class="setup-done" hidden>✓ All set. From now on, tap <b>Send now</b>, then <b>Cloude Send</b> in the share panel. This box won't show again; the numbers can be changed in “Who gets the message” at the bottom.</p>
       </section>
 

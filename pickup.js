@@ -274,6 +274,7 @@ function pickupOpen() {
   pickupEl("pickupSending").open = false;
   pickupEl("pickupSetupDone").hidden = true;
   pickupEl("pickupSetupSteps").hidden = false;
+  pickupEl("pickupHideSetup").hidden = false;
   pickupPlaceSetup();
   pickupEl("pickupStatus").textContent = "";
   pickupEl("pickupTestStatus").textContent = "";
@@ -534,6 +535,7 @@ function pickupSendTest() {
       // (it stays hidden from the next opening on).
       pickupSetupChanged({ ready: true, shortcutTapped: true });
       pickupEl("pickupSetupSteps").hidden = true;
+      pickupEl("pickupHideSetup").hidden = true;
       pickupEl("pickupSetupDone").hidden = false;
       pickupPlaceSetup();
     }
@@ -561,10 +563,20 @@ function pickupDeleteAll() {
   pickupEl("pickupFallback").addEventListener("click", pickupFallback);
   pickupEl("pickupGetShortcut").href = PICKUP_SHORTCUT_LINK;
   pickupEl("pickupGetShortcut").addEventListener("click", () => pickupSetupChanged({ shortcutTapped: true }));
+  // "Hide these steps": closes the set-up box whether or not a test has
+  // gone through ("Show the set-up steps again" at the bottom brings it
+  // back). The numbers move down into "Who gets the message".
+  pickupEl("pickupHideSetup").addEventListener("click", () => {
+    pickupSetupChanged({ ready: true });
+    pickupEl("pickupSetupDone").hidden = true;
+    pickupPlaceSetup();
+    pickupEl("pickupSheet").scrollTop = 0;
+  });
   pickupEl("pickupShowSetup").addEventListener("click", () => {
     pickupSetupChanged({ ready: false });
     pickupEl("pickupSetupSteps").hidden = false;
     pickupEl("pickupSetupDone").hidden = true;
+    pickupEl("pickupHideSetup").hidden = false;
     pickupEl("pickupTestStatus").textContent = "";
     pickupPlaceSetup();
     pickupEl("pickupSheet").scrollTop = 0;

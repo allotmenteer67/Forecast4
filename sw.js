@@ -531,7 +531,10 @@
 // Bumped to v130: callout.html — set-up steps reworded, with little
 // drawings of the share panel for step 3 (a: Edit Actions, b: green +,
 // c: tap Cloude Send).
-const SHELL_CACHE_NAME = "cloude-shell-v130";
+// Bumped to v131: callout.html/pickup.js — "Hide these steps" button,
+// so the set-up box can always be closed (it used to stay until a test
+// had gone through).
+const SHELL_CACHE_NAME = "cloude-shell-v131";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
