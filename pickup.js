@@ -33,7 +33,7 @@
 //         problem ("numbers" = 6862377).
 //   v125  the share-sheet design above.
 //
-// If it ever doesn't send, "Didn't send?" opens Messages with the
+// If it ever doesn't send, "If not sent" opens Messages with the
 // numbers and message filled in, to send by hand.
 //
 // The numbers (up to 3) are typed into Cloude itself, in "Who gets the
@@ -134,7 +134,7 @@ const pickup = {
   posWaiters: [],
   watching: false,
   rows: [],         // on screen: { who, where, time, include }
-  prepared: null,   // { message, numbers, at } — the last message sent, for "Didn't send?"
+  prepared: null,   // { message, numbers, at } — the last message sent, for "If not sent"
 };
 
 function pickupStartPosition() {
@@ -303,7 +303,7 @@ function pickupBuildRows() {
         <input type="time" data-f="time" value="${pickupEsc(r.time)}">
         <button type="button" data-act="notime">No time</button>
       </div>
-      <p class="no-time"${r.time ? " hidden" : ""}>No time set — the message will say \u201cCheck pickup time\u201d.</p>`;
+      <p class="no-time"${r.time ? " hidden" : ""}>If no time set, the message will say \u201cCheck pickup time\u201d.</p>`;
     card.querySelectorAll("[data-f]").forEach(el => {
       const f = el.dataset.f;
       const handler = () => {
@@ -427,17 +427,17 @@ async function pickupShare(message, numbers) {
 function pickupShareOutcome(result, status, what) {
   const at = pickupClock(new Date());
   if (result === "sent") {
-    status.textContent = `${what} at ${at}. If it didn't arrive, tap \u201cDidn't send?\u201d.`;
+    status.textContent = `${what} at ${at}. If it didn't arrive, tap \u201cIf not sent\u201d.`;
   } else if (result === "closed") {
     status.textContent = "Not sent: the share panel was closed. Tap Send again and choose \u201cCloude Send\u201d in the panel.";
   } else if (result === "nocopy") {
-    status.textContent = "Couldn't copy the message, so nothing was sent. Use \u201cDidn't send?\u201d to send it from Messages.";
+    status.textContent = "Couldn't copy the message, so nothing was sent. Use \u201cIf not sent\u201d to send it from Messages.";
   } else {
-    status.textContent = "This phone can't open the share panel from Cloude. Use \u201cDidn't send?\u201d to send it from Messages.";
+    status.textContent = "This phone can't open the share panel from Cloude. Use \u201cIf not sent\u201d to send it from Messages.";
   }
 }
 
-// "Didn't send?": the same message, opened in Messages to send by hand.
+// "If not sent": the same message, opened in Messages to send by hand.
 // More than one number makes a group message.
 function pickupFallback() {
   const p = pickup.prepared;
