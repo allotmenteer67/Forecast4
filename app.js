@@ -28,14 +28,16 @@
 
   document.documentElement.classList.add("ipad-app");
 
-  // 48px clears the faded strip and the window dots. If the safe area
+  // 30px clears the faded strip and the window dots (48px was tried
+  // first but left a needless gap and pushed the bottom slider off a
+  // phone-sized iPad window). If the safe area
   // iOS reports is ever bigger, that larger figure is used instead.
   // border-box keeps full-height pages (like the map) the same overall
   // height, so the time slider at the bottom isn't pushed off-screen.
   const style = document.createElement("style");
   style.textContent =
     "html.ipad-app body {" +
-    "  padding-top: max(env(safe-area-inset-top, 0px), 48px) !important;" +
+    "  padding-top: max(env(safe-area-inset-top, 0px), 30px) !important;" +
     "  box-sizing: border-box !important;" +
     "}";
   (document.head || document.documentElement).appendChild(style);
