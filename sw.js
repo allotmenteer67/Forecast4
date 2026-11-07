@@ -523,7 +523,9 @@
 // shortcut's iCloud link added, so "Get the shortcut" now shows.
 // Bumped to v127: callout.html/pickup.js wording — "If no time set",
 // and the fallback button now reads "If not sent, open it in Messages".
-const SHELL_CACHE_NAME = "cloude-shell-v127";
+// Bumped to v128: pickup.js — new iCloud link for the Cloude Send
+// shortcut (the v126 link had stopped working: "Shortcut Not Found").
+const SHELL_CACHE_NAME = "cloude-shell-v128";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
