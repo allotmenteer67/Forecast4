@@ -519,7 +519,9 @@
 // Bumped to v125: callout.html/pickup.js — Send now copies the message
 // and opens the share panel; the one-action "Cloude Send" shortcut runs
 // inside it, so Cloude is never left. See the top of pickup.js.
-const SHELL_CACHE_NAME = "cloude-shell-v125";
+// Bumped to v126: pickup.js — the shared one-action Cloude Send
+// shortcut's iCloud link added, so "Get the shortcut" now shows.
+const SHELL_CACHE_NAME = "cloude-shell-v126";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

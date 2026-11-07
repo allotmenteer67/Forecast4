@@ -60,7 +60,7 @@ const PICKUP_SHORTCUT = "Cloude Send";
 // any change to the shortcut it has to be shared again and the new link
 // put here. Empty = not shared yet, and the "Get the shortcut" button
 // stays hidden.
-const PICKUP_SHORTCUT_LINK = "";
+const PICKUP_SHORTCUT_LINK = "https://www.icloud.com/shortcuts/713a0afcb14e41bfaf6f304d266fef6b";
 const PICKUP_DEFAULT_OPENING = "I've been called out on the lifeboat and can't do the pickup.";
 // Sent instead when no pickup is named or ticked: just "called out".
 const PICKUP_DEFAULT_CALLED_OUT = "I've been called out on the lifeboat. No pickups needed — just letting you know.";
