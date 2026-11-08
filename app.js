@@ -41,6 +41,52 @@
     "  box-sizing: border-box !important;" +
     "}";
   (document.head || document.documentElement).appendChild(style);
+
+  // ---- Solid top bar ----
+  // iOS decides whether to fade the top strip by looking at what sits
+  // there. A solid, fixed element pinned to the very top gives it a plain
+  // colour to sample instead, which (per reports from other web-app
+  // makers) stops the fade being drawn over the page. The bar covers the
+  // same strip the page is pushed down by above, so it never sits over a
+  // button, and taps pass straight through it.
+  const bar = document.createElement("div");
+  bar.id = "ipad-top-bar";
+  bar.setAttribute("aria-hidden", "true");
+  bar.style.cssText =
+    "position:fixed;top:0;left:0;right:0;" +
+    "height:max(env(safe-area-inset-top, 0px), 30px);" +
+    "pointer-events:none;z-index:2147483000;";
+
+  // The bar takes the page's own colour, so it is invisible against it on
+  // every theme, including the dark map page. If the body is see-through,
+  // the page behind it is used, and the theme-color tag as a last resort.
+  function pageColour() {
+    const isClear = c => !c || c === "transparent" || /rgba\(.*,\s*0\)$/.test(c);
+    let c = document.body ? getComputedStyle(document.body).backgroundColor : "";
+    if (isClear(c)) c = getComputedStyle(document.documentElement).backgroundColor;
+    if (isClear(c)) {
+      const meta = document.querySelector('meta[name="theme-color"]');
+      c = meta ? meta.getAttribute("content") : "";
+    }
+    return isClear(c) ? "#ffffff" : c;
+  }
+  function paintBar() {
+    const c = pageColour();
+    if (bar.style.backgroundColor !== c) bar.style.backgroundColor = c;
+  }
+
+  function addBar() {
+    document.body.appendChild(bar);
+    paintBar();
+    // Re-paint when the theme or Night mode changes the page colour.
+    const watch = new MutationObserver(paintBar);
+    watch.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
+    watch.observe(document.body, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
+    document.addEventListener("visibilitychange", paintBar);
+    window.addEventListener("pageshow", paintBar);
+  }
+  if (document.body) addBar();
+  else document.addEventListener("DOMContentLoaded", addBar);
 })();
 
 const CONFIG = {
