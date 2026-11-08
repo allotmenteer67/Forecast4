@@ -1,17 +1,28 @@
 // ---- iPad top-edge fade fix ----
 //
 // From iPadOS 27.2, a home-screen web app on the iPad gets a soft fade
-// across the top strip of the screen (part of Apple's "glass" look), and
-// the new window controls (the three coloured dots) sit in that strip
-// too. Anything placed there, like the top row of buttons, comes out
-// washed out. Turning on Reduce Transparency clears it, but most people
-// won't change a system setting for one app.
+// across the top strip of its window (part of Apple's "glass" look), and
+// the window controls (the three coloured dots) sit in that strip too.
+// Anything placed there comes out washed out. Reduce Transparency clears
+// it, but most people won't change a system setting for one app.
 //
-// Phones running 27.2 were checked and do NOT get the fade, and the
-// front page on a small phone has no room to spare, so this only acts
-// on an iPad running Cloude as a home-screen app. It pushes the page
-// down just past the faded strip there. The iPad has plenty of height,
-// so nothing is lost, and phones and normal Safari tabs are untouched.
+// Phones running 27.2 were checked and do NOT get the fade, and the front
+// page on a small phone has no room to spare, so this only acts on an
+// iPad running Cloude as a home-screen app. Phones and Safari tabs are
+// untouched.
+//
+// History, so this isn't re-tried:
+//  - A flat 48px push-down worked but wasted space on the front page.
+//  - A flat 30px was then fine on the front page but NOT on Callout,
+//    whose top row has no spacing of its own and stayed in the fade.
+//  - A solid bar pinned at the top (a tip reported for iOS 26 web apps)
+//    did not stop the fade on 27.2 and clipped the Callout top row.
+// So instead this measures each page: it finds where the first real
+// content (text, buttons, pictures) starts, and pushes the page down
+// only as far as needed for that to clear the faded strip. A page that
+// already has room at the top gets no push at all. Headers pinned to the
+// top (which a push-down can't move) get their pinned position lowered
+// the same way.
 //
 // Done from here because app.js is loaded by every page, so this needs
 // no edit to any of the HTML files or style.css.
@@ -26,67 +37,128 @@
     (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
   if (!isHomeScreenApp) return;
 
-  document.documentElement.classList.add("ipad-app");
+  // How far down from the top of the window the fade and the window dots
+  // reach, measured from on-device screenshots. Content starting below
+  // this line is clear.
+  const CLEAR_LINE = 64;
 
-  // 30px clears the faded strip and the window dots (48px was tried
-  // first but left a needless gap and pushed the bottom slider off a
-  // phone-sized iPad window). If the safe area
-  // iOS reports is ever bigger, that larger figure is used instead.
+  document.documentElement.classList.add("ipad-app");
+  const style = document.createElement("style");
   // border-box keeps full-height pages (like the map) the same overall
   // height, so the time slider at the bottom isn't pushed off-screen.
-  const style = document.createElement("style");
   style.textContent =
     "html.ipad-app body {" +
-    "  padding-top: max(env(safe-area-inset-top, 0px), 30px) !important;" +
+    "  padding-top: var(--ipad-push, 0px) !important;" +
     "  box-sizing: border-box !important;" +
     "}";
   (document.head || document.documentElement).appendChild(style);
 
-  // ---- Solid top bar ----
-  // iOS decides whether to fade the top strip by looking at what sits
-  // there. A solid, fixed element pinned to the very top gives it a plain
-  // colour to sample instead, which (per reports from other web-app
-  // makers) stops the fade being drawn over the page. The bar covers the
-  // same strip the page is pushed down by above, so it never sits over a
-  // button, and taps pass straight through it.
-  const bar = document.createElement("div");
-  bar.id = "ipad-top-bar";
-  bar.setAttribute("aria-hidden", "true");
-  bar.style.cssText =
-    "position:fixed;top:0;left:0;right:0;" +
-    "height:max(env(safe-area-inset-top, 0px), 30px);" +
-    "pointer-events:none;z-index:2147483000;";
+  let push = 0;
+  const originalTop = new WeakMap(); // pinned header -> its own top value
 
-  // The bar takes the page's own colour, so it is invisible against it on
-  // every theme, including the dark map page. If the body is see-through,
-  // the page behind it is used, and the theme-color tag as a last resort.
-  function pageColour() {
-    const isClear = c => !c || c === "transparent" || /rgba\(.*,\s*0\)$/.test(c);
-    let c = document.body ? getComputedStyle(document.body).backgroundColor : "";
-    if (isClear(c)) c = getComputedStyle(document.documentElement).backgroundColor;
-    if (isClear(c)) {
-      const meta = document.querySelector('meta[name="theme-color"]');
-      c = meta ? meta.getAttribute("content") : "";
+  function isContent(el) {
+    if (/^(BUTTON|A|INPUT|SELECT|TEXTAREA|LABEL|H1|H2|H3|H4|IMG|SVG|CANVAS|VIDEO)$/i.test(el.tagName)) return true;
+    for (const n of el.childNodes) {
+      if (n.nodeType === 3 && n.textContent.trim()) return true;
     }
-    return isClear(c) ? "#ffffff" : c;
+    return false;
   }
-  function paintBar() {
-    const c = pageColour();
-    if (bar.style.backgroundColor !== c) bar.style.backgroundColor = c;
+  function visibleRect(el) {
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity) === 0) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return null;
+    return { cs, r };
   }
 
-  function addBar() {
-    document.body.appendChild(bar);
-    paintBar();
-    // Re-paint when the theme or Night mode changes the page colour.
-    const watch = new MutationObserver(paintBar);
-    watch.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
-    watch.observe(document.body, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
-    document.addEventListener("visibilitychange", paintBar);
-    window.addEventListener("pageshow", paintBar);
+  // Headers pinned to the top: fixed or sticky, short (so not a full-
+  // screen backdrop or sheet), and sitting at or near the top.
+  function pinnedHeaders() {
+    const out = [];
+    for (const el of document.body.querySelectorAll("*")) {
+      const cs = getComputedStyle(el);
+      if (cs.position !== "fixed" && cs.position !== "sticky") continue;
+      if (cs.top === "auto" || cs.display === "none") continue;
+      const r = el.getBoundingClientRect();
+      if (r.height < 1 || r.height > window.innerHeight * 0.4) continue;
+      const nearTop = cs.position === "sticky" ? parseFloat(cs.top) <= CLEAR_LINE : r.top <= CLEAR_LINE;
+      if (nearTop) out.push(el);
+    }
+    return out;
   }
-  if (document.body) addBar();
-  else document.addEventListener("DOMContentLoaded", addBar);
+
+  // Where, in the window, the first real content inside el starts.
+  function firstContentTop(root) {
+    let min = Infinity;
+    for (const el of [root, ...root.querySelectorAll("*")]) {
+      if (!isContent(el)) continue;
+      const v = visibleRect(el);
+      if (v && v.r.top < min) min = v.r.top;
+    }
+    return min;
+  }
+
+  function adjust() {
+    if (!document.body) return;
+    const headers = pinnedHeaders();
+    const fixedHeaders = headers.filter(h => getComputedStyle(h).position === "fixed");
+
+    // 1. The page itself: find where its first content starts (ignoring
+    //    fixed headers, which a push-down can't move), then push down by
+    //    just enough to clear the line. The current push is taken off
+    //    first, so running this again never adds up.
+    let min = Infinity;
+    for (const el of document.body.querySelectorAll("*")) {
+      if (!isContent(el)) continue;
+      if (fixedHeaders.some(f => f.contains(el))) continue;
+      const v = visibleRect(el);
+      if (!v || v.cs.position === "fixed") continue;
+      const top = v.r.top + window.scrollY;
+      if (top < min) min = top;
+    }
+    if (min !== Infinity) {
+      const natural = min - push;
+      const next = Math.max(0, Math.ceil(CLEAR_LINE - natural));
+      if (next !== push) {
+        push = next;
+        document.documentElement.style.setProperty("--ipad-push", push + "px");
+      }
+    }
+
+    // 2. Pinned headers: lower where they pin to, by just enough that
+    //    their own first content clears the line.
+    for (const h of headers) {
+      if (!originalTop.has(h)) originalTop.set(h, parseFloat(getComputedStyle(h).top) || 0);
+      const base = originalTop.get(h);
+      const hr = h.getBoundingClientRect();
+      const inner = firstContentTop(h);
+      if (inner === Infinity) continue;
+      const offsetInside = inner - hr.top;
+      const want = Math.max(base, Math.ceil(CLEAR_LINE - offsetInside));
+      if (parseFloat(h.style.top) !== want) h.style.setProperty("top", want + "px", "important");
+    }
+  }
+
+  function safeAdjust() {
+    try { adjust(); } catch (e) { /* never let this break the page */ }
+  }
+
+  // Run once the page is built, again once everything has loaded, and a
+  // couple more times for content that arrives late (weather, tides).
+  // Also after the iPad window is resized.
+  let resizeTimer = null;
+  function start() {
+    safeAdjust();
+    window.addEventListener("load", safeAdjust);
+    setTimeout(safeAdjust, 700);
+    setTimeout(safeAdjust, 2500);
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(safeAdjust, 250);
+    });
+  }
+  if (document.body) start();
+  else document.addEventListener("DOMContentLoaded", start);
 })();
 
 const CONFIG = {
