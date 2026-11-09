@@ -34,8 +34,8 @@
   // Three ways of recognising an iPad, any one is enough: the user agent
   // says iPad; it says Mac but has a touch screen (newer iPads do this);
   // or it's a touch screen whose short side is iPad-sized (phones are
-  // well under 600). The third was added 9 Nov after the first two
-  // apparently failed to switch the fix on.
+  // well under 600). The third was added 9 Nov as a spare; the check
+  // line then showed the Mac-plus-touch test was already working.
   const uaIPad = /iPad/.test(ua);
   const macTouch = /Macintosh/.test(ua) && touch > 1;
   const bigTouch = touch > 1 && shortSide >= 700;
@@ -45,48 +45,16 @@
     mm("(display-mode: minimal-ui)");
   const active = isIPad && isHomeScreenApp;
 
-  // ---- TEMPORARY check box (9 Nov) ----
-  // A small line at the bottom of the screen, iPad only, showing whether
-  // this fix switched on and what it measured, so a screenshot tells us
-  // what's happening instead of guessing. Tap it to hide it. To be
-  // removed once the top gap is sorted.
-  let diag = null;
-  function showDiag(extra) {
-    if (!isIPad && !bigTouch) return;
-    if (!document.body) return;
-    if (!diag) {
-      diag = document.createElement("div");
-      diag.style.cssText =
-        "position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom, 0px));" +
-        "z-index:2147483001;background:#222;color:#fff;font:12px/1.35 -apple-system,system-ui,sans-serif;" +
-        "padding:6px 8px;border-radius:8px;opacity:.92;";
-      diag.addEventListener("click", () => diag.remove());
-      document.body.appendChild(diag);
-    }
-    diag.textContent =
-      "iPad fix " + (active ? "ON" : "OFF") +
-      " | ua-iPad " + (uaIPad ? "y" : "n") +
-      " mac-touch " + (macTouch ? "y" : "n") +
-      " big-touch " + (bigTouch ? "y" : "n") +
-      " | home-app " + (isHomeScreenApp ? "y" : "n") +
-      " standalone " + (navigator.standalone === true ? "y" : "n") +
-      " | screen " + screen.width + "x" + screen.height +
-      " win " + window.innerWidth + "x" + window.innerHeight +
-      (extra ? " | " + extra : "") + "  (tap to hide)";
-  }
-  if (!active) {
-    if (document.body) showDiag();
-    else document.addEventListener("DOMContentLoaded", () => showDiag());
-    return;
-  }
+  if (!active) return;
 
-  // How far down from the top of the window the fade and the window dots
-  // reach, measured from on-device screenshots (the dots end at about
-  // 65px), plus a small margin so "Cloude" never touches the dots.
-  // Content starting below this line is clear. Was 64 before the
-  // .app change below; 72 is the same clearance once the page's own
-  // generous iOS-reported top spacing is no longer added on top.
-  const CLEAR_LINE = 72;
+  // Where the fade and the window dots end, measured from the top of the
+  // PAGE (not the window). A check line shown on the iPad on 9 Nov proved
+  // the page itself starts about 33px below the top of an iPad window:
+  // the window was 835px tall but the page only 802px. So the dots,
+  // which end about 65px down the window, end about 32px down the page.
+  // 40 keeps a small margin below that. (64 and then 72 were set earlier
+  // by measuring from the window top, which left a ~32px empty gap.)
+  const CLEAR_LINE = 40;
 
   document.documentElement.classList.add("ipad-app");
   const style = document.createElement("style");
@@ -213,18 +181,7 @@
   }
 
   function safeAdjust() {
-    let err = "";
-    try { adjust(); } catch (e) { err = " | error: " + (e && e.message); }
-    try {
-      const h = document.querySelector("main > header") || document.querySelector("header");
-      const app = document.querySelector(".app");
-      showDiag(
-        "push " + push + "px" +
-        " | header top " + (h ? Math.round(h.getBoundingClientRect().top + window.scrollY) + "px" : "none") +
-        " | .app pad " + (app ? getComputedStyle(app).paddingTop : "none") +
-        err
-      );
-    } catch (e) { /* the check box must never break the page either */ }
+    try { adjust(); } catch (e) { /* never let this break the page */ }
   }
 
   // Run once the page is built, again once everything has loaded, and a

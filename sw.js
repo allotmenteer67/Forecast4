@@ -546,7 +546,9 @@
 // Bumped to v134: app.js iPad top gap now measured from the page header.
 // Bumped to v135: app.js iPad fix gets a wider iPad check and a
 // temporary on-screen check line.
-const SHELL_CACHE_NAME = "cloude-shell-v135";
+// Bumped to v136: iPad clear line corrected to 40px and the temporary
+// check line removed.
+const SHELL_CACHE_NAME = "cloude-shell-v136";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
