@@ -118,18 +118,37 @@
     //    fixed headers, which a push-down can't move), then push down by
     //    just enough to clear the line. The current push is taken off
     //    first, so running this again never adds up.
+    //    Pages with a normal <header> (front page, map, settings,
+    //    compare, help) are measured from the header itself: it's the
+    //    top row by definition. Scanning every element there was thrown
+    //    off by something sitting above the header (9 Nov: the front page
+    //    came out ~28px lower than intended). Pages without one (Callout)
+    //    still use the full scan, which worked there.
     let min = Infinity;
-    for (const el of document.body.querySelectorAll("*")) {
-      if (!isContent(el)) continue;
-      if (fixedHeaders.some(f => f.contains(el))) continue;
-      const v = visibleRect(el);
-      if (!v || v.cs.position === "fixed") continue;
-      const top = v.r.top + window.scrollY;
-      if (top < min) min = top;
+    const header = document.querySelector("main > header") || document.querySelector("header");
+    const hv = header ? visibleRect(header) : null;
+    if (hv && hv.cs.position !== "fixed") {
+      min = hv.r.top + window.scrollY;
+    } else {
+      for (const el of document.body.querySelectorAll("*")) {
+        if (!isContent(el)) continue;
+        if (fixedHeaders.some(f => f.contains(el))) continue;
+        const v = visibleRect(el);
+        if (!v || v.cs.position === "fixed") continue;
+        // Ignore anything parked entirely above the page (slid-away
+        // banners and the like): it isn't on screen, so it needs no
+        // clearing.
+        if (v.r.bottom + window.scrollY <= 0) continue;
+        const top = v.r.top + window.scrollY;
+        if (top < min) min = top;
+      }
     }
     if (min !== Infinity) {
       const natural = min - push;
-      const next = Math.max(0, Math.ceil(CLEAR_LINE - natural));
+      // Never push by more than the clear line itself: content starting
+      // at the very top of the page needs exactly CLEAR_LINE, so anything
+      // bigger can only be a measuring mistake.
+      const next = Math.min(CLEAR_LINE, Math.max(0, Math.ceil(CLEAR_LINE - natural)));
       if (next !== push) {
         push = next;
         document.documentElement.style.setProperty("--ipad-push", push + "px");
