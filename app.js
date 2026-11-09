@@ -38,9 +38,12 @@
   if (!isHomeScreenApp) return;
 
   // How far down from the top of the window the fade and the window dots
-  // reach, measured from on-device screenshots. Content starting below
-  // this line is clear.
-  const CLEAR_LINE = 64;
+  // reach, measured from on-device screenshots (the dots end at about
+  // 65px), plus a small margin so "Cloude" never touches the dots.
+  // Content starting below this line is clear. Was 64 before the
+  // .app change below; 72 is the same clearance once the page's own
+  // generous iOS-reported top spacing is no longer added on top.
+  const CLEAR_LINE = 72;
 
   document.documentElement.classList.add("ipad-app");
   const style = document.createElement("style");
@@ -50,7 +53,15 @@
     "html.ipad-app body {" +
     "  padding-top: var(--ipad-push, 0px) !important;" +
     "  box-sizing: border-box !important;" +
-    "}";
+    "}" +
+    // style.css gives .app a top padding of the iOS-reported safe area
+    // (and a 44px floor on narrow windows). In an iPad window iOS reports
+    // far more than the dots need, which left a big empty gap above
+    // "Cloude" (9 Nov screenshots). On the iPad that padding is dropped
+    // and the measured push below does the clearing instead, by exactly
+    // as much as each page needs. Phones keep style.css's rule unchanged.
+    "html.ipad-app .app { padding-top: 0px !important; }" +
+    "html.ipad-app .title-bar { padding-top: 0px !important; }";
   (document.head || document.documentElement).appendChild(style);
 
   let push = 0;

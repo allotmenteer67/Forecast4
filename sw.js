@@ -541,7 +541,9 @@
 // loadPrecacheData" until refreshed. app.js is now the 25 Oct version
 // with the iPad fix added on top; this bump makes sure nobody keeps
 // being served the broken copy from cache.
-const SHELL_CACHE_NAME = "cloude-shell-v132";
+// Bumped to v133: app.js iPad top gap tightened (the oversized
+// iOS-reported top spacing dropped on iPad, clear line set to 72px).
+const SHELL_CACHE_NAME = "cloude-shell-v133";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
