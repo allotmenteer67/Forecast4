@@ -28,14 +28,57 @@
 // no edit to any of the HTML files or style.css.
 (function iPadTopFadeFix() {
   const ua = navigator.userAgent || "";
-  // Newer iPads report themselves as a Mac, so the touch-point check is
-  // what tells them apart from a real Mac.
-  const isIPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-  if (!isIPad) return;
-
+  const touch = navigator.maxTouchPoints || 0;
+  const shortSide = Math.min(screen.width || 0, screen.height || 0);
+  const mm = q => !!(window.matchMedia && window.matchMedia(q).matches);
+  // Three ways of recognising an iPad, any one is enough: the user agent
+  // says iPad; it says Mac but has a touch screen (newer iPads do this);
+  // or it's a touch screen whose short side is iPad-sized (phones are
+  // well under 600). The third was added 9 Nov after the first two
+  // apparently failed to switch the fix on.
+  const uaIPad = /iPad/.test(ua);
+  const macTouch = /Macintosh/.test(ua) && touch > 1;
+  const bigTouch = touch > 1 && shortSide >= 700;
+  const isIPad = uaIPad || macTouch || bigTouch;
   const isHomeScreenApp = navigator.standalone === true ||
-    (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
-  if (!isHomeScreenApp) return;
+    mm("(display-mode: standalone)") || mm("(display-mode: fullscreen)") ||
+    mm("(display-mode: minimal-ui)");
+  const active = isIPad && isHomeScreenApp;
+
+  // ---- TEMPORARY check box (9 Nov) ----
+  // A small line at the bottom of the screen, iPad only, showing whether
+  // this fix switched on and what it measured, so a screenshot tells us
+  // what's happening instead of guessing. Tap it to hide it. To be
+  // removed once the top gap is sorted.
+  let diag = null;
+  function showDiag(extra) {
+    if (!isIPad && !bigTouch) return;
+    if (!document.body) return;
+    if (!diag) {
+      diag = document.createElement("div");
+      diag.style.cssText =
+        "position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom, 0px));" +
+        "z-index:2147483001;background:#222;color:#fff;font:12px/1.35 -apple-system,system-ui,sans-serif;" +
+        "padding:6px 8px;border-radius:8px;opacity:.92;";
+      diag.addEventListener("click", () => diag.remove());
+      document.body.appendChild(diag);
+    }
+    diag.textContent =
+      "iPad fix " + (active ? "ON" : "OFF") +
+      " | ua-iPad " + (uaIPad ? "y" : "n") +
+      " mac-touch " + (macTouch ? "y" : "n") +
+      " big-touch " + (bigTouch ? "y" : "n") +
+      " | home-app " + (isHomeScreenApp ? "y" : "n") +
+      " standalone " + (navigator.standalone === true ? "y" : "n") +
+      " | screen " + screen.width + "x" + screen.height +
+      " win " + window.innerWidth + "x" + window.innerHeight +
+      (extra ? " | " + extra : "") + "  (tap to hide)";
+  }
+  if (!active) {
+    if (document.body) showDiag();
+    else document.addEventListener("DOMContentLoaded", () => showDiag());
+    return;
+  }
 
   // How far down from the top of the window the fade and the window dots
   // reach, measured from on-device screenshots (the dots end at about
@@ -170,7 +213,18 @@
   }
 
   function safeAdjust() {
-    try { adjust(); } catch (e) { /* never let this break the page */ }
+    let err = "";
+    try { adjust(); } catch (e) { err = " | error: " + (e && e.message); }
+    try {
+      const h = document.querySelector("main > header") || document.querySelector("header");
+      const app = document.querySelector(".app");
+      showDiag(
+        "push " + push + "px" +
+        " | header top " + (h ? Math.round(h.getBoundingClientRect().top + window.scrollY) + "px" : "none") +
+        " | .app pad " + (app ? getComputedStyle(app).paddingTop : "none") +
+        err
+      );
+    } catch (e) { /* the check box must never break the page either */ }
   }
 
   // Run once the page is built, again once everything has loaded, and a

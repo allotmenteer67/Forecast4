@@ -544,7 +544,9 @@
 // Bumped to v133: app.js iPad top gap tightened (the oversized
 // iOS-reported top spacing dropped on iPad, clear line set to 72px).
 // Bumped to v134: app.js iPad top gap now measured from the page header.
-const SHELL_CACHE_NAME = "cloude-shell-v134";
+// Bumped to v135: app.js iPad fix gets a wider iPad check and a
+// temporary on-screen check line.
+const SHELL_CACHE_NAME = "cloude-shell-v135";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
