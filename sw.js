@@ -534,7 +534,14 @@
 // Bumped to v131: callout.html/pickup.js — "Hide these steps" button,
 // so the set-up box can always be closed (it used to stay until a test
 // had gone through).
-const SHELL_CACHE_NAME = "cloude-shell-v131";
+// Bumped to v132: app.js restored. The 7-8 Nov iPad top-fade fix was
+// built on an out-of-date copy of app.js (from before the fishing
+// precache work), so uploading it removed loadPrecacheData and other
+// newer code, and the fishing card showed "Can't find variable:
+// loadPrecacheData" until refreshed. app.js is now the 25 Oct version
+// with the iPad fix added on top; this bump makes sure nobody keeps
+// being served the broken copy from cache.
+const SHELL_CACHE_NAME = "cloude-shell-v132";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

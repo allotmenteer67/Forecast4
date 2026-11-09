@@ -204,6 +204,13 @@ const CONFIG = {
     uv: { name: "UV", unit: "index" },
     soilTemperature: { name: "Soil Temp", unit: "°C" },
     dewPoint: { name: "Dew Point", unit: "°C" },
+    // Open-Meteo provides this natively (apparent_temperature) for every
+    // real source and the actual-weather archive alike — no separate
+    // fetch or calculation of our own needed, same free-ride soilTemp/
+    // dewPoint already get. °C-scale like Temperature, so it follows the
+    // exact same unit/correction treatment those two already set up —
+    // see conditionUnit(), convertForDisplay() and isRatioCondition().
+    feelsLike: { name: "Feels Like", unit: "°C" },
     tide: { name: "Tide", unit: "m" }
   }
 };
@@ -281,7 +288,75 @@ applyTheme(loadTheme());
 // this needing to be updated to know about them. Two prefixes: the
 // original weather-side storage, and tide's own (added later, under its
 // own prefix since it's a genuinely separate feature — see tide.js).
-const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:"];
+// cloude-pickup: is the Callout screen's saved "Can't do pickup" wording
+// (pickup.js); the recipients live in the iPhone Shortcut, not here.
+const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:", "cloude-pickup:"];
+
+// Bump this whenever a backup's own SHAPE changes in a way an older
+// importer couldn't handle (a renamed field, a restructured store) —
+// not for ordinary feature additions, which the plain key/value dump
+// above already absorbs automatically. exportedAt (below) says WHEN a
+// backup was taken, which is useful on its own but doesn't say WHAT
+// SHAPE it's in; this does. Checked on import so a backup from a newer
+// Cloude than the code reading it understands is refused outright
+// rather than silently misapplied — there's nothing yet that needs a
+// difference between reading an OLDER shape's backup (nothing has
+// broken backward compatibility so far) and this only guards the
+// direction that actually matters today.
+const BACKUP_FORMAT_VERSION = 1;
+
+// ---- Keeping this device's data safe ----
+// When an iPhone or iPad runs short of space, iOS may clear website
+// data, and a Home Screen web app counts as website data, so
+// everything above can vanish. Two guards:
+//
+// 1. Ask the browser to treat Cloude's storage as "persistent" (keep
+//    it, don't clear it when space is short). Safari decides for itself
+//    whether to agree and doesn't ask the user; it isn't a promise, but
+//    it makes clearing less likely. Asked once per page load; harmless
+//    if already granted or unsupported.
+//
+// 2. Remember when a whole-device backup was last copied, so Settings
+//    can nudge when it's getting old. The key deliberately sits OUTSIDE
+//    BACKUP_KEY_PREFIXES: it's about THIS device's backups, so it isn't
+//    copied into a backup or carried across by a restore (a restored
+//    phone shouldn't claim the other device's backup date).
+const LAST_BACKUP_KEY = "cloude-device:lastBackup";
+const BACKUP_OVERDUE_DAYS = 14;
+
+function markBackupTaken() {
+  try { localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString()); } catch { /* ignore */ }
+}
+
+function lastBackupTime() {
+  try {
+    const t = Date.parse(localStorage.getItem(LAST_BACKUP_KEY) || "");
+    return Number.isFinite(t) ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+// Resolves true / false, or null where the browser can't say.
+async function storageIsKept() {
+  try {
+    if (!navigator.storage || !navigator.storage.persisted) return null;
+    if (await navigator.storage.persisted()) return true;
+    // Not yet: ask now (the page-load request may still be in flight)
+    // and report the browser's answer.
+    return navigator.storage.persist ? await navigator.storage.persist() : false;
+  } catch {
+    return null;
+  }
+}
+
+(async function askToKeepData() {
+  try {
+    if (!navigator.storage || !navigator.storage.persist) return;
+    if (await navigator.storage.persisted()) return;
+    await navigator.storage.persist();
+  } catch { /* not supported, or refused: backups are the fallback */ }
+})();
 
 function exportAppData() {
   const data = {};
@@ -291,7 +366,7 @@ function exportAppData() {
       data[key] = localStorage.getItem(key);
     }
   }
-  return JSON.stringify({ app: "Cloude", exportedAt: new Date().toISOString(), data }, null, 2);
+  return JSON.stringify({ app: "Cloude", formatVersion: BACKUP_FORMAT_VERSION, exportedAt: new Date().toISOString(), data }, null, 2);
 }
 
 // Returns { ok: true, keyCount } on success, or { ok: false, error } on
@@ -307,6 +382,9 @@ function importAppData(jsonText) {
   if (!parsed || typeof parsed.data !== "object" || parsed.data === null) {
     return { ok: false, error: "That text isn't a Cloude backup (missing expected data)." };
   }
+  if (parsed.formatVersion && parsed.formatVersion > BACKUP_FORMAT_VERSION) {
+    return { ok: false, error: "This backup is from a newer version of Cloude and can't be read here — update the app first." };
+  }
 
   const entries = Object.entries(parsed.data).filter(([key]) => BACKUP_KEY_PREFIXES.some(prefix => key.startsWith(prefix)));
   if (!entries.length) {
@@ -319,6 +397,135 @@ function importAppData(jsonText) {
     return { ok: false, error: "Storage is unavailable right now — nothing was restored." };
   }
   return { ok: true, keyCount: entries.length };
+}
+
+// ---- Backup: share learned accuracy for one area ----
+// exportAppData/importAppData above are whole-device: importing one
+// overwrites THIS phone's own settings, saved places, and theme too,
+// which is wrong for "hand my wife what I've learned about TA6" — her
+// own saved places and theme shouldn't get overwritten by a file that's
+// really only about forecaster accuracy. Same idea as above, scoped to
+// just the FFV + eligibility store for one area, and MERGED on import
+// rather than replaced — see importFFVShare.
+const FFV_SHARE_TYPE = "cloude-ffv-share";
+
+function exportFFVShare(areaCode) {
+  return JSON.stringify({
+    app: "Cloude",
+    type: FFV_SHARE_TYPE,
+    formatVersion: BACKUP_FORMAT_VERSION,
+    exportedAt: new Date().toISOString(),
+    areaCode,
+    ffv: loadFFVStore(areaCode),
+    eligibility: loadEligibilityStore(areaCode)
+  }, null, 2);
+}
+
+// Picks the more informative of two FFV entries for the same
+// condition/source/day. "More informative" means "has the lower
+// emaErrorCorrected" — this app's own existing measure of how well a
+// source's correction has actually been doing, the same figure the
+// Accuracy table and the underperformance check both already use, not
+// a new metric invented for this. An entry that hasn't been scored yet
+// (fewer than FFV_MIN_SAMPLES) has no emaErrorCorrected at all — that
+// always loses to one that does, since there's nothing there to
+// meaningfully compare; between two unscored entries, whichever has
+// seen more samples is simply the closer of the two to being scored.
+function pickBetterFFVEntry(local, imported) {
+  if (!local) return imported;
+  if (!imported) return local;
+  const localScored = local.emaErrorCorrected !== undefined;
+  const importedScored = imported.emaErrorCorrected !== undefined;
+  if (localScored && importedScored) {
+    return imported.emaErrorCorrected < local.emaErrorCorrected ? imported : local;
+  }
+  if (localScored !== importedScored) return localScored ? local : imported;
+  return (imported.count || 0) > (local.count || 0) ? imported : local;
+}
+
+// Merges a shared FFV export into this device's own store for that same
+// area — never a blind overwrite. Per entry, the more accurate side
+// wins outright (see pickBetterFFVEntry) rather than averaging the two:
+// an EMA built from two only-partially-overlapping day sequences has no
+// honest way to combine into a genuine third number. Eligibility (which
+// dates a source/condition has actually been watched on) is a plain
+// UNION of both sides instead — there's no "better" side there, only a
+// fuller or thinner picture, so combining the two date sets loses
+// nothing either way.
+//
+// Deliberately NOT filtered by this device's own current forecaster
+// selection (state.selected) — a source someone has unticked in
+// Settings keeps its learned history regardless, in case the untick
+// was only ever meant to be temporary. Selection only ever affects
+// what's currently shown, never what's remembered.
+function importFFVShare(parsed) {
+  if (parsed.formatVersion && parsed.formatVersion > BACKUP_FORMAT_VERSION) {
+    return { ok: false, error: "This accuracy share is from a newer version of Cloude and can't be read here — update the app first." };
+  }
+  if (!parsed.areaCode || typeof parsed.areaCode !== "string") {
+    return { ok: false, error: "That doesn't look like a Cloude accuracy share (missing area)." };
+  }
+  if (!parsed.ffv || typeof parsed.ffv !== "object") {
+    return { ok: false, error: "That doesn't look like a Cloude accuracy share (missing data)." };
+  }
+
+  const areaCode = parsed.areaCode;
+  const store = loadFFVStore(areaCode);
+  const eligStore = loadEligibilityStore(areaCode);
+  let entriesMerged = 0;
+
+  Object.keys(parsed.ffv).forEach(conditionName => {
+    store[conditionName] ??= {};
+    Object.keys(parsed.ffv[conditionName]).forEach(sourceId => {
+      store[conditionName][sourceId] ??= {};
+      Object.keys(parsed.ffv[conditionName][sourceId]).forEach(day => {
+        const imported = parsed.ffv[conditionName][sourceId][day];
+        const local = store[conditionName][sourceId][day];
+        store[conditionName][sourceId][day] = pickBetterFFVEntry(local, imported);
+        entriesMerged += 1;
+      });
+    });
+  });
+
+  if (parsed.eligibility && typeof parsed.eligibility === "object") {
+    Object.keys(parsed.eligibility).forEach(conditionName => {
+      eligStore[conditionName] ??= {};
+      Object.keys(parsed.eligibility[conditionName]).forEach(sourceId => {
+        eligStore[conditionName][sourceId] = {
+          ...(eligStore[conditionName][sourceId] ?? {}),
+          ...parsed.eligibility[conditionName][sourceId]
+        };
+        // Same 400-date cap markDateSeen already enforces elsewhere — a
+        // merge is exactly the kind of moment that could push an entry
+        // past it.
+        const keys = Object.keys(eligStore[conditionName][sourceId]);
+        if (keys.length > 400) {
+          keys.sort().slice(0, keys.length - 400).forEach(k => delete eligStore[conditionName][sourceId][k]);
+        }
+      });
+    });
+  }
+
+  saveFFVStore(areaCode, store);
+  saveEligibilityStore(areaCode, eligStore);
+  return { ok: true, areaCode, entriesMerged };
+}
+
+// Settings has one paste box for both kinds of backup text — this reads
+// whichever was pasted and routes to the right importer, so the person
+// pasting never has to know or choose which kind it is themselves; the
+// file's own content already says.
+function importBackupText(jsonText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return { ok: false, error: "That doesn't look like valid backup text — check it was copied in full." };
+  }
+  if (parsed?.type === FFV_SHARE_TYPE) {
+    return { ...importFFVShare(parsed), kind: "ffv-share" };
+  }
+  return { ...importAppData(jsonText), kind: "full-backup" };
 }
 
 // Everything is stored and computed internally in these native units —
@@ -335,12 +542,16 @@ function importAppData(jsonText) {
 // (Cloud's three bands/Sunshine/UV are unitless/universal either way, so
 // they're left out rather than offering a toggle that does nothing).
 const CONDITION_UNITS_KEY = "forecast-compare:conditionUnits";
-const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure"];
+// visibility added v81: km or miles. It has no CONFIG.conditions entry
+// (it isn't a scored condition), so Settings names its row from
+// UNIT_ROW_NAMES in settings.js instead.
+const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure", "visibility"];
 const DEFAULT_CONDITION_UNITS = {
   rain: "metric", // mm
   temperature: "metric", // °C
   wind: "imperial", // mph
-  pressure: "metric" // hPa
+  pressure: "metric", // hPa
+  visibility: "metric" // km
   // soilTemperature and dewPoint deliberately not listed — see
   // conditionUnit(), which redirects them to Temperature's own setting.
 };
@@ -352,10 +563,12 @@ const CONDITION_UNIT_LABELS = {
   wind: { metric: "km/h", imperial: "mph" },
   temperature: { metric: "°C", imperial: "°F" },
   pressure: { metric: "hPa", imperial: "inHg" },
+  visibility: { metric: "km", imperial: "miles" },
   sunshine: { metric: "hrs", imperial: "hrs" },
   uv: { metric: "index", imperial: "index" },
   soilTemperature: { metric: "°C", imperial: "°F" },
-  dewPoint: { metric: "°C", imperial: "°F" }
+  dewPoint: { metric: "°C", imperial: "°F" },
+  feelsLike: { metric: "°C", imperial: "°F" }
 };
 
 function loadConditionUnits() {
@@ -384,16 +597,46 @@ function saveConditionUnit(conditionName, system) {
 // conditions without a toggle (Cloud's bands, Sunshine, UV) always read
 // as metric, which is harmless since their labels are identical either way.
 function conditionUnit(conditionName) {
-  // Soil Temp and Dew Point are both °C-scale like Temperature and don't
-  // get their own choice in Settings — asking twice for the same
-  // metric/imperial decision would just be clutter, so they follow
-  // whatever Temperature is already set to.
-  const key = (conditionName === "soilTemperature" || conditionName === "dewPoint") ? "temperature" : conditionName;
+  // Soil Temp, Dew Point and Feels Like are all °C-scale like Temperature
+  // and don't get their own choice in Settings — asking three times over
+  // for the same metric/imperial decision would just be clutter, so they
+  // follow whatever Temperature is already set to.
+  const key = (conditionName === "soilTemperature" || conditionName === "dewPoint" || conditionName === "feelsLike") ? "temperature" : conditionName;
   return state.conditionUnits[key] ?? "metric";
 }
 
 function unitLabel(conditionName) {
   return CONDITION_UNIT_LABELS[conditionName]?.[conditionUnit(conditionName)] ?? CONFIG.conditions[conditionName].unit;
+}
+
+// Same band edges as map.js's own RAIN_BAND_THRESHOLDS (the map's Rain
+// legend swatches) — deliberately kept numerically identical by hand so
+// a reading that paints as the map's "4" swatch reads as the same word
+// here, not a different threshold set someone has to learn twice. NOT
+// the same variable, though, on purpose: app.js loads on every page,
+// including map.html, which ALSO loads map.js — two top-level `const
+// RAIN_BAND_THRESHOLDS` declarations in that shared global scope is a
+// fatal SyntaxError, not a harmless redeclaration, and it silently took
+// map.js down entirely (blank map, no legends, nothing — the page never
+// got far enough to report an error anywhere). Originally named the
+// same as map.js's constant on the wrong assumption that the two files
+// were never loaded together; they are, so this one is named
+// differently instead of relying on the two scripts never actually
+// meeting.
+const RAIN_INTENSITY_THRESHOLDS = [0.1, 0.5, 1, 2, 4, 8];
+const RAIN_INTENSITY_LABELS = ["Dry", "Drizzle", "Light rain", "Rain", "Heavy rain", "Very heavy rain", "Torrential rain"];
+
+// Always classifies against the true mm/hr figure, never the
+// display-converted one — a reading shown as 0.04in/hr because the
+// person's on imperial units should still say "Drizzle", not silently
+// shift band edges that only ever existed in mm.
+function rainIntensityLabel(mmPerHour) {
+  if (mmPerHour === null || mmPerHour === undefined) return null;
+  let band = 0;
+  for (; band < RAIN_INTENSITY_THRESHOLDS.length; band++) {
+    if (mmPerHour < RAIN_INTENSITY_THRESHOLDS[band]) break;
+  }
+  return RAIN_INTENSITY_LABELS[band];
 }
 
 // Converts a native-unit value (mm / mph / °C / hPa) to whichever system
@@ -406,7 +649,7 @@ function convertForDisplay(value, conditionName, isDelta = false) {
   const system = conditionUnit(conditionName);
   if (system === "imperial") {
     if (conditionName === "rain") return value / 25.4; // mm -> in
-    if (conditionName === "temperature" || conditionName === "soilTemperature" || conditionName === "dewPoint") {
+    if (conditionName === "temperature" || conditionName === "soilTemperature" || conditionName === "dewPoint" || conditionName === "feelsLike") {
       return isDelta ? value * 9 / 5 : value * 9 / 5 + 32; // °C -> °F
     }
     if (conditionName === "pressure") return value / 33.8639; // hPa -> inHg
@@ -414,7 +657,7 @@ function convertForDisplay(value, conditionName, isDelta = false) {
   }
   // metric
   if (conditionName === "wind") return value * 1.60934; // mph -> km/h
-  return value; // rain (mm), temperature/soilTemperature/dewPoint (°C) and pressure (hPa) are already metric natively
+  return value; // rain (mm), temperature/soilTemperature/dewPoint/feelsLike (°C) and pressure (hPa) are already metric natively
 }
 
 // ---- Actual weather (Open-Meteo, no API key) ----
@@ -424,6 +667,111 @@ function convertForDisplay(value, conditionName, isDelta = false) {
 // recorded days alongside today. No key required for either.
 const GEOCODE_URL = "https://api.postcodes.io/outcodes/";
 const PLACE_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
+
+// ---- Shared favourites (GitHub precache) ----
+// Lets a ★ tap in Settings add a saved place to the shared GitHub
+// precache (see favourite-relay-worker.js) without anyone touching
+// GitHub themselves — see that file's own header for the full design
+// (privacy boundary, dedup, shared cap). Paste your deployed Worker's
+// URL here once — everyone using this build of the app then shares the
+// same relay, the same repo, and the same 8-slot cap per list.
+// FAVOURITE_RELAY_SECRET is optional (leave "" to skip it entirely) —
+// it's a mild deterrent against casual abuse, not real security, since
+// anything here is visible in the browser. See the Worker file's own
+// "honest limitation" note.
+const FAVOURITE_RELAY_URL = "https://cflaresomtimng.snick-mica-9l.workers.dev";
+const FAVOURITE_RELAY_SECRET = "";
+const FAVOURITES_ADDED_KEY = "forecast-compare:favouritesAdded";
+const FAVOURITES_PER_PERSON_CAP = 4;
+
+// Tracked ONLY on this device — there's no account system, so this is
+// what enforces "4 favourites per person" (a shared cap of 8 is also
+// enforced server-side by the Worker, protecting the list itself
+// regardless of any one device's own count — see that file). Losing
+// this (clearing site data, a new phone) just resets this device's own
+// count to zero; it doesn't remove anything already committed to
+// GitHub, which is the sticky behaviour agreed on.
+function loadFavouritesAdded() {
+  try {
+    const raw = localStorage.getItem(FAVOURITES_ADDED_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // fall through to default
+  }
+  return [];
+}
+function saveFavouritesAdded(list) {
+  try {
+    localStorage.setItem(FAVOURITES_ADDED_KEY, JSON.stringify(list));
+  } catch {
+    // Storage unavailable — this device's own favourite count just
+    // won't persist across a reload; harmless, just re-derives to zero.
+  }
+}
+
+// A UK postcode outward code only (e.g. "TA6" out of "TA6 1AB") — the
+// same shape looksLikePostcode already accepts, reduced to just the
+// area part. Deliberately never a full postcode or a plain place name;
+// see the Worker's own comment for why that boundary matters here.
+// The outward code (the part before the space) of whatever was typed:
+// a full postcode ("SA62 3AB", "SA623AB"), a postcode sector ("SA62 3",
+// "SA623"), or just the outward code itself ("SA62", "TA6").
+//
+// Fixed: this used to grab the first 3-4 characters greedily, and the
+// geocoder separately chopped everything to 3 characters - so any
+// 4-character outward code (SA62, BS21, SW1A...) was looked up as a
+// different, shorter one (SA6 = Swansea instead of Pembrokeshire, BS2 =
+// central Bristol instead of Clevedon), and a typed sector like "SA623"
+// wasn't recognised as a postcode at all.
+function outwardCodeOf(input) {
+  const raw = String(input || "").trim().toUpperCase();
+  const outward = "[A-Z]{1,2}\\d[A-Z\\d]?";
+  // Typed with a space: everything before it is the outward code.
+  const spaced = raw.match(new RegExp(`^(${outward})\\s+\\d([A-Z]{2})?$`));
+  if (spaced) return spaced[1];
+  const s = raw.replace(/\s+/g, "");
+  // Full postcode without a space: the last 3 characters (digit + two
+  // letters) are always the inward code, so the rest is the outward.
+  const full = s.match(new RegExp(`^(${outward})\\d[A-Z]{2}$`));
+  if (full) return full[1];
+  // Outward code + sector digit, no space ("SA623"). Only read this way
+  // when the outward part is unmistakably 4 characters - "BS21" on its
+  // own must stay BS21, not become BS2 + sector 1.
+  const sector = s.match(/^([A-Z]{1,2}\d[A-Z\d])(\d)$/);
+  if (sector && s.length === 5) return sector[1];
+  // Otherwise the whole thing is the outward code (or not a postcode).
+  const whole = s.match(new RegExp(`^(${outward})$`));
+  return whole ? whole[1] : null;
+}
+
+// POSTs one favourite to the shared relay. Returns
+// { ok, alreadyExists?, full?, message?, error? } — the caller decides
+// what to show; this never throws.
+async function postFavourite(type, outcode, markType) {
+  if (!FAVOURITE_RELAY_URL) {
+    return { error: "Favourites aren't set up yet — add FAVOURITE_RELAY_URL in app.js once the Worker's deployed." };
+  }
+  try {
+    const res = await fetchWithTimeout(FAVOURITE_RELAY_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(FAVOURITE_RELAY_SECRET ? { "X-Cloude-App": FAVOURITE_RELAY_SECRET } : {})
+      },
+      body: JSON.stringify({ type, outcode, ...(markType ? { markType } : {}) })
+    }, 15000);
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 409 && data.error === "full") {
+      return { full: true, message: data.message || "List full for now — delete a favourite to add more." };
+    }
+    if (!res.ok) {
+      return { error: data.error || `Request failed (${res.status})` };
+    }
+    return { ok: true, alreadyExists: !!data.alreadyExists };
+  } catch (err) {
+    return { error: err.message || "Couldn't reach the favourites relay." };
+  }
+}
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
 const PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast";
@@ -455,7 +803,7 @@ const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live 
 // time (see the headline cell's own "cloud" branch and
 // cloudHeadlineStillCollecting) — it deliberately has no entry in this
 // Set, since it has no real data of its own to be eligible for.
-const REAL_DATA_CONDITIONS = new Set(["rain", "cloudLow", "cloudMid", "cloudHigh", "wind", "temperature", "pressure", "soilTemperature", "dewPoint", "sunshine"]);
+const REAL_DATA_CONDITIONS = new Set(["rain", "cloudLow", "cloudMid", "cloudHigh", "wind", "temperature", "pressure", "soilTemperature", "dewPoint", "feelsLike", "sunshine"]);
 
 // Every source with genuine data behind it. Adding another real source
 // later is just another entry here — everything downstream (fetching,
@@ -575,7 +923,7 @@ function loadSelectedForecasters() {
 function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
-    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloudLow: [], cloudMid: [], cloudHigh: [], pressure: [], soilTemp: [], dewPoint: [], sunshine: [] };
+    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloudLow: [], cloudMid: [], cloudHigh: [], pressure: [], soilTemp: [], dewPoint: [], feelsLike: [], sunshine: [] };
   }
   return byLeadDay;
 }
@@ -669,6 +1017,7 @@ const state = {
     pressure_mean: [],
     soilTemp_mean: [],
     dewPoint_mean: [],
+    feelsLike_mean: [],
     // Raw hourly pressure (not day-aggregated) covering the past window
     // through "now" — kept only to compute the pressure trend arrow
     // (see pressureTrend()), which needs a real few-hours-ago comparison
@@ -700,6 +1049,7 @@ const state = {
     pressure: [],
     soilTemperature: [],
     dewPoint: [],
+    feelsLike: [],
     uvIndex: [],
     cloudCoverLow: [],
     cloudCoverMid: [],
@@ -730,7 +1080,25 @@ const accuracyMode = document.getElementById("accuracyMode");
 const accuracyBody = document.getElementById("accuracyBody");
 const historyStatus = document.getElementById("historyStatus");
 const headlineGrid = document.getElementById("headlineGrid");
-const headlineDate = document.getElementById("headlineDate");
+const headlineDateText = document.getElementById("headlineDateText");
+const headlineDatePlace = document.getElementById("headlineDatePlace");
+const headlineRefreshButton = document.getElementById("headlineRefreshButton");
+if (headlineRefreshButton) {
+  headlineRefreshButton.addEventListener("click", async () => {
+    // Disabling for the duration is just belt-and-braces against a
+    // rapid double-tap firing two overlapping forced fetches — the
+    // existing "only one fetch at a time" queueing in loadLocationData
+    // would already prevent them actually running concurrently, this
+    // just stops the button itself inviting a second tap in the
+    // meantime.
+    headlineRefreshButton.disabled = true;
+    try {
+      await loadLocationData(true);
+    } finally {
+      headlineRefreshButton.disabled = false;
+    }
+  });
+}
 const headlineStatus = document.getElementById("headlineStatus");
 const headlineStatusBlock = document.getElementById("headlineStatusBlock");
 const headlineRetry = document.getElementById("headlineRetry");
@@ -814,6 +1182,15 @@ function demoValue(day, source, conditionName) {
       // Dew point is always at or below air temperature — this demo
       // formula mirrors Temperature's shape with a fixed gap under it.
       value = 17.5 - day * 0.3 + sourceOffset * 0.4 - 4;
+      break;
+    case "feelsLike":
+      // Real feels-like accounts for wind chill and humidity; this demo
+      // stand-in just mirrors Temperature's shape with a small fixed
+      // offset below it, same simplified approach as Dew Point's own
+      // case just above — not modelling wind/humidity, just giving a
+      // plausibly-shaped placeholder until FFV correction (and, for
+      // real sources, Open-Meteo's own apparent_temperature) takes over.
+      value = 17.5 - day * 0.3 + sourceOffset * 0.4 - 1;
       break;
     case "sunshine":
       value = Math.max(0, 5.2 - day * 0.3 - sourceOffset * 0.2);
@@ -1042,11 +1419,11 @@ async function reverseGeocodeCoords(lat, lon) {
 }
 
 async function geocodePostcode(pc) {
-  // Location is resolved from the first 3 characters of the postcode
-  // (area-level, not the exact address) via postcodes.io's outcode lookup.
-  // Note: some outward codes are 4 characters (e.g. "SW1A"); truncating to
-  // 3 will miss those and the lookup below will fail for them.
-  const areaCode = pc.replace(/\s+/g, "").slice(0, 3);
+  // Location is resolved from the postcode's outward code (area-level,
+  // not the exact address) via postcodes.io's outcode lookup. Was the
+  // first 3 characters regardless, which silently swapped every
+  // 4-character outward code for a different area - see outwardCodeOf.
+  const areaCode = outwardCodeOf(pc) || pc.replace(/\s+/g, "").toUpperCase();
   const res = await fetchWithTimeout(GEOCODE_URL + encodeURIComponent(areaCode));
   if (!res.ok) throw new Error(`Area code "${areaCode}" not found`);
   const data = await res.json();
@@ -1067,7 +1444,9 @@ async function geocodePostcode(pc) {
 // outcode is valid input on its own. Anything that doesn't match this
 // shape is treated as a place name instead.
 function looksLikePostcode(input) {
-  return /^[A-Z]{1,2}\d[A-Z\d]?(\s*\d[A-Z]{2})?$/i.test(input.trim());
+  // The inward part is optional, and so are its two letters - so a
+  // postcode sector ("SA62 3", "SA623") counts too.
+  return /^[A-Z]{1,2}\d[A-Z\d]?(\s*\d([A-Z]{2})?)?$/i.test(input.trim());
 }
 
 // Thrown instead of a plain Error when a plain place name genuinely
@@ -1395,7 +1774,7 @@ async function fetchActualWeather(lat, lon) {
         "sunshine_duration",
         "uv_index_max"
       ].join(","),
-      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m",
+      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m,apparent_temperature",
       past_days: MAX_ROLLBACK,
       forecast_days: 1,
       wind_speed_unit: "mph",
@@ -1451,6 +1830,12 @@ async function fetchActualWeather(lat, lon) {
       dayCount,
       "mean"
     );
+    state.actual.feelsLike_mean = aggregateHourlyByDay(
+      data.hourly.time,
+      data.hourly.apparent_temperature,
+      dayCount,
+      "mean"
+    );
     state.actual.status = "ready";
   } catch (err) {
     state.actual.status = "error";
@@ -1487,6 +1872,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         `pressure_msl_previous_day${d}`,
         `soil_temperature_0cm_previous_day${d}`,
         `dewpoint_2m_previous_day${d}`,
+        `apparent_temperature_previous_day${d}`,
         `direct_normal_irradiance_previous_day${d}`
       );
     }
@@ -1528,6 +1914,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
         soilTemp: aggregateHourlyByDay(hourlyTimes, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
         dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
+        feelsLike: aggregateHourlyByDay(hourlyTimes, data.hourly[`apparent_temperature_previous_day${d}`], dayCount, "mean"),
         sunshine: sunshineHoursByDay(hourlyTimes, data.hourly[`direct_normal_irradiance_previous_day${d}`], dayCount)
       };
     }
@@ -1637,11 +2024,180 @@ function hourlyUVPercent(idx) {
 // ago," which isn't what "what's happening in the next 24-48h" needs.
 // This is a plain live forecast: what the model currently thinks, right
 // now, for the hours immediately ahead.
-async function fetchHourlyForecast(lat, lon) {
+// Extracted from fetchHourlyForecast below so the exact same
+// correction/blend logic can also run against precached data (see
+// tryPrecachedHourlyForecast) — one implementation either way, not a
+// second copy that could quietly drift from what a live fetch does.
+//
+// perSource: { [sourceId]: { temperature, precipitation, windSpeed,
+// windGust, windDirection, pressure, soilTemperature, dewPoint } } —
+// doesn't need all nine REAL_SOURCES present; blend() below already
+// tolerates a source being absent (precache only ever carries a
+// hand-picked subset, see data/precache-config.json's topForecasters).
+// sharedTimes: array of ISO time strings, already sliced to the
+// "from now" window. metofficeExtras: { uvIndex, cloudCoverLow,
+// cloudCoverMid, cloudCoverHigh, dailyByDate: { [date]: {sunrise,
+// sunset, uvMax} } } — metoffice-only fields, required either way since
+// metoffice is the one source both the live fetch and the precache
+// config always include (see the precache config's own metoffice
+// constraint).
+function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
+  state.hourly.times = sharedTimes;
+  state.hourly.uvIndex = metofficeExtras.uvIndex;
+  state.hourly.cloudCoverLow = metofficeExtras.cloudCoverLow;
+  state.hourly.cloudCoverMid = metofficeExtras.cloudCoverMid;
+  state.hourly.cloudCoverHigh = metofficeExtras.cloudCoverHigh;
+  state.hourly.sunriseByDate = {};
+  state.hourly.sunsetByDate = {};
+  state.hourly.uvMaxByDate = {};
+  Object.entries(metofficeExtras.dailyByDate || {}).forEach(([date, d]) => {
+    state.hourly.sunriseByDate[date] = d.sunrise;
+    state.hourly.sunsetByDate[date] = d.sunset;
+    state.hourly.uvMaxByDate[date] = d.uvMax;
+  });
+
+  const count = sharedTimes.length;
+
+  // Each real source's own FFV correction is applied per hour first
+  // (same day-bucket convention used throughout the hourly view — an
+  // hour before midnight tonight is "day 1", the next day is "day 2"),
+  // then the corrected values are medianed together across sources —
+  // mirroring exactly how the daily table blends Met Office and ECMWF.
+  function blend(field, conditionName) {
+    return Array.from({ length: count }, (_, i) => {
+      const day = i < 24 ? 1 : 2;
+      const values = REAL_SOURCES.map(({ id }) => {
+        const raw = perSource[id]?.[field]?.[i];
+        if (raw === null || raw === undefined) return null;
+        const source = CONFIG.forecasters.find(s => s.id === id);
+        const ffv = ffvFor(source, conditionName, day);
+        return ffv !== null ? applyCorrection(raw, ffv, conditionName) : raw;
+      }).filter(v => v !== null && v !== undefined);
+      return values.length ? median(values) : null;
+    });
+  }
+
+  state.hourly.temperature = blend("temperature", "temperature");
+  state.hourly.precipitation = blend("precipitation", "rain");
+  state.hourly.windSpeed = blend("windSpeed", "wind");
+  // Gust has no FFV history of its own — there's no dedicated Gust
+  // condition to compare against Actual the way Wind/Rain/etc. do, so
+  // this reuses Wind's own learned ratio as the closest available
+  // correction rather than showing the raw model figure uncorrected.
+  state.hourly.windGust = blend("windGust", "wind");
+  state.hourly.pressure = blend("pressure", "pressure");
+  state.hourly.soilTemperature = blend("soilTemperature", "soilTemperature");
+  state.hourly.dewPoint = blend("dewPoint", "dewPoint");
+  // Precached data (tryPrecachedHourlyForecast) doesn't currently carry
+  // apparent_temperature — perSource[id].feelsLike will simply be
+  // undefined for every source on a precache hit, and blend() already
+  // treats that as "no value from this source" the same as any other
+  // missing field, so this degrades to a null hourly reading rather than
+  // throwing. Genuinely fixing that means adding apparent_temperature to
+  // scripts/precache-weather.mjs's own Open-Meteo request — a repo/
+  // Action-side change, separate from this file.
+  state.hourly.feelsLike = blend("feelsLike", "feelsLike");
+  // Direction can't be medianed the way speed can (it's angular, not
+  // linear) — first real source with a reading for that hour, same
+  // convention as anyRealWindDirection() uses for the daily table.
+  state.hourly.windDirection = Array.from({ length: count }, (_, i) => {
+    for (const { id } of REAL_SOURCES) {
+      const d = perSource[id]?.windDirection?.[i];
+      if (d !== null && d !== undefined) return d;
+    }
+    return null;
+  });
+
+  state.hourly.status = "ready";
+
+  // Tells the map strip's corner readouts (mapstrip3.js, index.html
+  // only) to refresh right now, rather than waiting for its own ~60s
+  // redraw cycle to catch up. Guarded since this function also runs on
+  // pages that never load mapstrip3.js at all (compare.html, map.html).
+  // This is the one place applyHourlyBlend actually finishes writing
+  // state.hourly — both the live-fetch and precache-hit paths already
+  // funnel through here, so hooking in exactly here (rather than after
+  // each of those two callers separately) keeps the corners honestly
+  // in step with the headline everywhere state.hourly changes, with
+  // nothing to keep in sync by hand if a third path is ever added.
+  if (typeof updateMapStripCorners === "function") updateMapStripCorners();
+}
+
+// ---- GitHub-precached weather ----
+// data/precache-weather.json is written on a schedule by a GitHub
+// Action (see scripts/precache-weather.mjs) for a small, hand-maintained
+// list of places — NOT a general cache of everywhere anyone's ever
+// looked, just the handful worth keeping warm (see
+// data/precache-config.json). Anywhere else falls straight through to
+// the live fetch below, completely unaffected — this only ever SKIPS
+// work when there's a genuine match, never blocks or changes behaviour
+// otherwise.
+//
+// Matched by PROXIMITY to the resolved lat/lon (see
+// tryPrecachedHourlyForecast), not by postcode string — deliberately:
+// the precache config's hand-typed coordinates for "Taunton" will never
+// exactly equal wherever this device's own saved place happened to
+// geocode to, so an exact-string or exact-coordinate match would be
+// fragile in a way that's invisible until it silently never fires.
+// Mirrors exactly how fishing.js already matches its own precached
+// spots the same way.
+const PRECACHE_WEATHER_URL = "data/precache-weather.json";
+const PRECACHE_PROXIMITY_KM = 2;
+// Looser than RECENT_LOCATION_CACHE_MS's 15 minutes — GitHub's own
+// schedule is best-effort (can drift 15-45+ minutes under load, see the
+// workflow file's own comment on this), so judging precached data
+// "fresh" against that same tight window would mean it's almost always
+// borderline-stale the moment it's used. 30 minutes matches the target
+// refresh interval plus realistic drift.
+const PRECACHE_LOCATION_CACHE_MS = 30 * 60 * 1000;
+
+let precacheDataPromise = null;
+// Shared by fishing.js too (loaded after this file, same global scope)
+// — one fetch of the one file, not a separate copy per feature.
+function loadPrecacheData() {
+  if (!precacheDataPromise) {
+    precacheDataPromise = fetch(PRECACHE_WEATHER_URL)
+      .then(res => res.ok ? res.json() : null)
+      .catch(() => null); // missing file, offline, whatever — precache is only ever a bonus, never required
+  }
+  return precacheDataPromise;
+}
+
+async function tryPrecachedHourlyForecast(lat, lon) {
+  const data = await loadPrecacheData();
+  if (!data?.weather?.length) return null;
+  if (Date.now() - Date.parse(data.dataAsOf) > PRECACHE_LOCATION_CACHE_MS) return null;
+  return data.weather.find(w => haversineKm(lat, lon, w.lat, w.lon) <= PRECACHE_PROXIMITY_KM) || null;
+}
+
+async function fetchHourlyForecast(lat, lon, force = false) {
   state.hourly.status = "loading";
   state.hourly.error = null;
 
   try {
+    // Checked first, before spending any of the nine live requests below
+    // — this is the actual point of the precache feature: for a handful
+    // of places kept warm by the GitHub Action, the front page's own
+    // hourly/headline figures can come from a small local file instead
+    // of nine parallel Open-Meteo calls. Everything downstream
+    // (applyHourlyBlend, the headline render) treats this identically to
+    // a live result — it IS a live result's exact shape, just fetched by
+    // GitHub a little earlier rather than by this device right now.
+    // Skipped entirely when force is true (the headline's own refresh
+    // button) — a deliberate "get me the real current figure" request
+    // should never quietly hand back a several-minutes-old file instead.
+    const precached = force ? null : await tryPrecachedHourlyForecast(lat, lon);
+    if (precached) {
+      applyHourlyBlend(precached.sources, precached.times, {
+        uvIndex: precached.uvIndex,
+        cloudCoverLow: precached.cloudCoverLow,
+        cloudCoverMid: precached.cloudCoverMid,
+        cloudCoverHigh: precached.cloudCoverHigh,
+        dailyByDate: precached.dailyByDate
+      });
+      return;
+    }
+
     // Fetched in parallel now, not one-at-a-time. Awaiting each of the
     // nine REAL_SOURCES fully before starting the next meant a single
     // slow or hung request added its own full timeout to the wait for
@@ -1655,7 +2211,7 @@ async function fetchHourlyForecast(lat, lon) {
       const params = new URLSearchParams({
         latitude: lat,
         longitude: lon,
-        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m" + (id === "metoffice" ? ",uv_index,cloud_cover_low,cloud_cover_mid,cloud_cover_high" : ""),
+        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m,apparent_temperature" + (id === "metoffice" ? ",uv_index,cloud_cover_low,cloud_cover_mid,cloud_cover_high" : ""),
         models: model,
         wind_speed_unit: "mph",
         forecast_days: 3,
@@ -1682,19 +2238,6 @@ async function fetchHourlyForecast(lat, lon) {
     const from = startIdx >= 0 ? startIdx : 0;
     const sharedTimes = metofficeData.hourly.time.slice(from);
 
-    state.hourly.uvIndex = metofficeData.hourly.uv_index.slice(from);
-    state.hourly.cloudCoverLow = metofficeData.hourly.cloud_cover_low.slice(from);
-    state.hourly.cloudCoverMid = metofficeData.hourly.cloud_cover_mid.slice(from);
-    state.hourly.cloudCoverHigh = metofficeData.hourly.cloud_cover_high.slice(from);
-    state.hourly.sunriseByDate = {};
-    state.hourly.sunsetByDate = {};
-    state.hourly.uvMaxByDate = {};
-    metofficeData.daily.time.forEach((date, i) => {
-      state.hourly.sunriseByDate[date] = metofficeData.daily.sunrise[i];
-      state.hourly.sunsetByDate[date] = metofficeData.daily.sunset[i];
-      state.hourly.uvMaxByDate[date] = metofficeData.daily.uv_index_max[i];
-    });
-
     const perSource = {};
     REAL_SOURCES.forEach(({ id }) => {
       const data = byId.get(id);
@@ -1706,55 +2249,22 @@ async function fetchHourlyForecast(lat, lon) {
         windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined),
         pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined),
         soilTemperature: data.hourly.soil_temperature_0cm.slice(from, from + sharedTimes.length || undefined),
-        dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined)
+        dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined),
+        feelsLike: data.hourly.apparent_temperature.slice(from, from + sharedTimes.length || undefined)
       };
     });
 
-    state.hourly.times = sharedTimes;
-    const count = sharedTimes.length;
-
-    // Each real source's own FFV correction is applied per hour first
-    // (same day-bucket convention used throughout the hourly view — an
-    // hour before midnight tonight is "day 1", the next day is "day 2"),
-    // then the corrected values are medianed together across sources —
-    // mirroring exactly how the daily table blends Met Office and ECMWF.
-    function blend(field, conditionName) {
-      return Array.from({ length: count }, (_, i) => {
-        const day = i < 24 ? 1 : 2;
-        const values = REAL_SOURCES.map(({ id }) => {
-          const raw = perSource[id]?.[field]?.[i];
-          if (raw === null || raw === undefined) return null;
-          const source = CONFIG.forecasters.find(s => s.id === id);
-          const ffv = ffvFor(source, conditionName, day);
-          return ffv !== null ? applyCorrection(raw, ffv, conditionName) : raw;
-        }).filter(v => v !== null && v !== undefined);
-        return values.length ? median(values) : null;
-      });
-    }
-
-    state.hourly.temperature = blend("temperature", "temperature");
-    state.hourly.precipitation = blend("precipitation", "rain");
-    state.hourly.windSpeed = blend("windSpeed", "wind");
-    // Gust has no FFV history of its own — there's no dedicated Gust
-    // condition to compare against Actual the way Wind/Rain/etc. do, so
-    // this reuses Wind's own learned ratio as the closest available
-    // correction rather than showing the raw model figure uncorrected.
-    state.hourly.windGust = blend("windGust", "wind");
-    state.hourly.pressure = blend("pressure", "pressure");
-    state.hourly.soilTemperature = blend("soilTemperature", "soilTemperature");
-    state.hourly.dewPoint = blend("dewPoint", "dewPoint");
-    // Direction can't be medianed the way speed can (it's angular, not
-    // linear) — first real source with a reading for that hour, same
-    // convention as anyRealWindDirection() uses for the daily table.
-    state.hourly.windDirection = Array.from({ length: count }, (_, i) => {
-      for (const { id } of REAL_SOURCES) {
-        const d = perSource[id]?.windDirection?.[i];
-        if (d !== null && d !== undefined) return d;
-      }
-      return null;
+    applyHourlyBlend(perSource, sharedTimes, {
+      uvIndex: metofficeData.hourly.uv_index.slice(from),
+      cloudCoverLow: metofficeData.hourly.cloud_cover_low.slice(from),
+      cloudCoverMid: metofficeData.hourly.cloud_cover_mid.slice(from),
+      cloudCoverHigh: metofficeData.hourly.cloud_cover_high.slice(from),
+      dailyByDate: Object.fromEntries(metofficeData.daily.time.map((date, i) => [date, {
+        sunrise: metofficeData.daily.sunrise[i],
+        sunset: metofficeData.daily.sunset[i],
+        uvMax: metofficeData.daily.uv_index_max[i]
+      }]))
     });
-
-    state.hourly.status = "ready";
   } catch (err) {
     state.hourly.status = "error";
     state.hourly.error = err.message || "Could not load hourly forecast";
@@ -1803,6 +2313,41 @@ function renderHistoryStatus() {
   }
 }
 
+// Replays a history-shaped file — { areaCode, days: { <date>: { actual,
+// models: { <sourceId>: { <day 1-7>: {...} } } } } }, the exact shape
+// both data/history.json (collect-weather.mjs, one area, daily) and
+// data/backfill/<areaCode>.json (backfill-weather.mjs, many areas,
+// monthly) already share — into (mean, actual) FFV samples. Shared by
+// loadCommittedHistory below and backfillRealSourceHistory's
+// precomputed-file path further down, so there's one implementation of
+// "how a collected file becomes FFV samples", not two that could drift
+// apart the way fetchHourlyForecast's blend logic once nearly did (see
+// applyHourlyBlend's own comment).
+function applyHistoryFileToFFV(data, store, eligStore) {
+  let samplesAdded = 0;
+  Object.keys(data.days || {}).forEach(date => {
+    const dayEntry = data.days[date];
+    if (!dayEntry.actual) return;
+
+    realSourceIds().forEach(sourceId => {
+      if (!dayEntry.models?.[sourceId]) return;
+
+      REAL_DATA_CONDITIONS.forEach(conditionName => {
+        const actual = dayEntry.actual[conditionName];
+        if (actual === null || actual === undefined) return;
+
+        for (let day = 1; day <= 7; day++) {
+          const mean = meanFromHistoryDay(dayEntry, sourceId, day, conditionName);
+          if (!mean) continue;
+          recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, date);
+          samplesAdded += 1;
+        }
+      });
+    });
+  });
+  return samplesAdded;
+}
+
 async function loadCommittedHistory() {
   if (!state.areaCode) return;
 
@@ -1833,7 +2378,7 @@ async function loadCommittedHistory() {
       return;
     }
 
-    const dates = Object.keys(data.days || {});
+    const dayCount = Object.keys(data.days || {}).length;
 
     const store = loadFFVStore(state.areaCode);
     const eligStore = loadEligibilityStore(state.areaCode);
@@ -1847,30 +2392,12 @@ async function loadCommittedHistory() {
       });
     });
 
-    dates.forEach(date => {
-      const dayEntry = data.days[date];
-      if (!dayEntry.actual) return;
-
-      realSourceIds().forEach(sourceId => {
-        if (!dayEntry.models?.[sourceId]) return;
-
-        REAL_DATA_CONDITIONS.forEach(conditionName => {
-          const actual = dayEntry.actual[conditionName];
-          if (actual === null || actual === undefined) return;
-
-          for (let day = 1; day <= 7; day++) {
-            const mean = meanFromHistoryDay(dayEntry, sourceId, day, conditionName);
-            if (!mean) continue;
-            recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, date);
-          }
-        });
-      });
-    });
+    applyHistoryFileToFFV(data, store, eligStore);
 
     saveFFVStore(state.areaCode, store);
     saveEligibilityStore(state.areaCode, eligStore);
     state.history.status = "ready";
-    state.history.dayCount = dates.length;
+    state.history.dayCount = dayCount;
   } catch (err) {
     state.history.status = "error";
     state.history.error = err.message || "Could not load collected history";
@@ -1932,7 +2459,105 @@ let loadLocationGeneration = 0;
 // starts a second fetch or gives up on the first one.
 const LOAD_SLOW_WARNING_MS = 45000;
 
-function loadLocationData() {
+// Runs fn only once EVERY classic <script> on the page has executed.
+//
+// This exists because setTimeout(fn, 0) does NOT guarantee that, which
+// is a genuinely easy thing to get wrong: a zero-delay timer queued
+// while app.js is still executing can be run by the browser BETWEEN two
+// following <script> tags, since the parser is free to yield there. In
+// index.html, app.js is first and tide-ui.js is fourth — so a timer
+// queued from app.js frequently fired while renderTideRow simply did
+// not exist yet. The `typeof renderTideRow === "function"` guard at the
+// call site then skipped it silently, with no error anywhere, and the
+// tide card stayed hidden exactly as its static HTML defines it. That
+// was reproducible on every page load after the first (the cache
+// fast-path below is only taken when a recent snapshot exists), which
+// is precisely the "tide vanishes after visiting Settings or the map"
+// report.
+//
+// DOMContentLoaded is the event that actually means what was wanted
+// here: it fires after the parser has finished and every classic script
+// has run, so anything defined by any of them is guaranteed present.
+// If the document has already finished parsing by the time this is
+// called (any later, user-triggered switch), there is nothing to wait
+// for and a plain timer is correct.
+function whenAllScriptsReady(fn) {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", fn, { once: true });
+  } else {
+    setTimeout(fn, 0);
+  }
+}
+
+function loadLocationData(force = false) {
+  // Skip the fetch ENTIRELY when a still-fresh cached snapshot already
+  // covers this exact postcode — resetForLocationChange() (always called
+  // immediately before this, by every caller: Switch button, saved-place
+  // tap, header chip, geolocation, page bootstrap, and swiping between
+  // saved places) already restored and painted it, a few lines up the
+  // call stack. This is what turns the recent-location cache into a
+  // genuine request-saving cache rather than only a "show something
+  // instantly while still fetching anyway" one — see
+  // RECENT_LOCATION_CACHE_MS's own comment for the full reasoning.
+  // Every caller gets this for free without knowing anything about it;
+  // none of them need to change.
+  //
+  // force=true (the headline's own refresh button — see
+  // headlineRefreshButton below) skips this AND the precache check
+  // inside fetchHourlyForecast, going straight to a genuine live fetch
+  // regardless of either cache's age.
+  if (!force) {
+    const cache = loadRecentLocationCache();
+    const snap = cache[state.postcode];
+    if (snap && Date.now() - snap.cachedAt <= RECENT_LOCATION_CACHE_MS) {
+      // cloude:location-ready is normally dispatched from inside
+      // runLoadLocationData() below, once a real fetch resolves — the
+      // map strip (map-strip.js) has no other way to learn where to
+      // re-centre itself, and this skip path bypasses that function
+      // entirely. Without firing it here too, the strip silently kept
+      // showing wherever it was before the switch — permanently, since
+      // nothing else was ever going to prompt it to move — which is
+      // exactly the "map strip doesn't match the place chip" bug this
+      // fixes. state.lat/state.lon are already correct at this point
+      // (restored from the very same cached snapshot by
+      // resetForLocationChange(), just before this function was
+      // called), so this is genuine, not a guess.
+      // Deferred with setTimeout rather than dispatched immediately: on
+      // a fresh page load (not just an in-page switch) this whole branch
+      // runs synchronously as part of app.js's own top-level script
+      // execution, which happens BEFORE the browser even reaches the
+      // <script src="mapstrip3.js"> tag further down index.html.
+      // Dispatching immediately meant the event fired and was gone
+      // before mapstrip3.js's own listener had been registered to hear
+      // it — the map strip then sat showing nothing until something
+      // else nudged it. A zero-delay timeout runs only once every
+      // script tag on the page has finished its own initial synchronous
+      // execution, so every listener — mapstrip3.js's included — is
+      // guaranteed to already be in place by the time this actually
+      // fires.
+      // Both the event dispatch AND the tide render below are deferred
+      // into the same zero-delay timeout, for the same reason: on a
+      // fresh page load (not just an in-page switch) this whole branch
+      // runs synchronously as part of app.js's own top-level script
+      // execution — which happens BEFORE the browser has reached
+      // mapstrip3.js's <script> tag (so it hasn't registered its
+      // listener yet) AND before tide-ui.js's <script> tag (so
+      // renderTideRow doesn't exist as a function yet either — calling
+      // it immediately here silently did nothing, every single time,
+      // since `typeof renderTideRow` was "undefined" at this exact
+      // point in the page's load sequence). A zero-delay timeout runs
+      // only once every script tag on the page has finished its own
+      // initial synchronous execution, so both the map strip's listener
+      // and tide-ui.js's function are guaranteed to exist by the time
+      // this actually fires.
+      whenAllScriptsReady(() => {
+        document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat: state.lat, lon: state.lon } }));
+        if (typeof renderTideRow === "function") renderTideRow();
+      });
+      return Promise.resolve();
+    }
+  }
+
   // Only ever one fetch actually runs at a time — every fetch function
   // (fetchActualWeather, fetchRealSourceLive, fetchHourlyForecast)
   // writes straight into this same shared state.actual/state.realSources/
@@ -1952,6 +2577,13 @@ function loadLocationData() {
   // new place immediately either way (its cached snapshot, or a plain
   // loading state) — queueing only affects how soon its FRESH data
   // actually arrives, never what's shown in the meantime.
+  //
+  // A forced refresh that arrives mid-flight is queued the same way —
+  // its own "force" doesn't carry through the requeue below, so it
+  // falls back to normal caching rules on retry. Rare in practice (the
+  // button is only reachable when the page is already showing settled
+  // data, i.e. nothing mid-flight), and not worth the extra complexity
+  // of threading force through the requeue for that edge case alone.
   if (loadLocationDataPromise) {
     if (loadLocationPromisePostcode !== state.postcode) {
       loadLocationQueuedPostcode = state.postcode;
@@ -1975,7 +2607,7 @@ function loadLocationData() {
     }
   }, LOAD_SLOW_WARNING_MS);
 
-  loadLocationDataPromise = runLoadLocationData().finally(() => {
+  loadLocationDataPromise = runLoadLocationData(force).finally(() => {
     clearTimeout(warnTimeoutId);
     loadLocationDataPromise = null;
     loadLocationPromisePostcode = null;
@@ -1993,7 +2625,7 @@ function loadLocationData() {
   return loadLocationDataPromise;
 }
 
-async function runLoadLocationData() {
+async function runLoadLocationData(force = false) {
   // Captured up front so a late-arriving result from an abandoned or
   // timed-out request can tell it's been superseded by a newer switch —
   // and skip committing/rendering itself over the newer, correct data.
@@ -2026,14 +2658,39 @@ async function runLoadLocationData() {
     // than waiting for the weather fetches below (which can take
     // noticeably longer) to finish first.
     renderPlaceChip();
+    // Tide and fishing depend on none of the fetches below — not the
+    // headline forecast, not the nine parallel FFV accuracy-tracking
+    // calls, nothing. They only get their own coordinates and hit their
+    // own, entirely separate sources (EA/Admiralty for tide, Open-Meteo
+    // wind/pressure for fishing). Previously they were only ever reached
+    // via renderHeadlineGrid at the very end of this function, meaning
+    // every launch made them wait behind the full Promise.all below —
+    // up to eleven unrelated fetches — for no correctness reason at all.
+    // Firing them here, right when lat/lon become known, lets both start
+    // their own (independently cached) work immediately. renderTideRow
+    // cascades into renderFishingRow itself. The later call still made
+    // from renderHeadlineGrid becomes a cheap, harmless re-render of
+    // whatever's now settled — getOrBuildTideFit/fetchFishingForecast
+    // already coalesce a second call while the first's still in flight,
+    // so this never triggers a duplicate fetch.
+    if (typeof renderTideRow === "function") renderTideRow();
     await Promise.all([
       fetchActualWeather(lat, lon),
       ...REAL_SOURCES.map(({ id, model }) => fetchRealSourceLive(id, model, lat, lon)),
       loadCommittedHistory(),
-      fetchHourlyForecast(lat, lon)
+      fetchHourlyForecast(lat, lon, force)
     ]);
 
-    if (state.postcode !== requestedFor) return; // a newer switch has since taken over — this result is stale, leave it alone
+    if (state.postcode !== requestedFor) {
+      // Superseded, but see cacheCurrentLocationSnapshot's own comment:
+      // this fetch genuinely completed for requestedFor, and nothing
+      // else could have touched state.actual/state.hourly in the
+      // meantime (switches are strictly queued, never concurrent) — so
+      // this is real, correct data for that place, worth caching under
+      // its own postcode even though display has already moved on.
+      cacheCurrentLocationSnapshot(requestedFor);
+      return;
+    }
 
     // The map strip (map-strip.js, front page only) starts its own,
     // separate fetch here — deliberately AFTER the actual weather above
@@ -2043,6 +2700,40 @@ async function runLoadLocationData() {
     // doesn't need to know map-strip.js exists at all; on any other page
     // there's simply no listener and this is a no-op.
     document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat, lon } }));
+
+    // Mark the display settled and cache the snapshot HERE — the moment
+    // the data itself is complete — rather than only at the very bottom
+    // of this function, after all the bookkeeping below has finished.
+    //
+    // This was a real and badly-timed gap. Everything below is
+    // bookkeeping, and some of it (the one-off backfill for a genuinely
+    // new area) is many more network round trips that can run for a long
+    // time on a real connection. Until it finished, currentDisplayIsComplete
+    // stayed false and no snapshot was written — so a place that had
+    // visibly finished loading on screen still had nothing cached for it.
+    // Switching to it (swipe, chip, saved-place tap) therefore found no
+    // snapshot, took the cold path, blanked the headline, and re-fetched
+    // everything from scratch: measured at 6-10s even against a fast
+    // local mock, and far worse on a phone. From the outside that reads
+    // as "the chip name changed and nothing else did".
+    //
+    // The superseded branch a few lines above ALREADY caches at exactly
+    // this point, for exactly this reason ("this fetch genuinely
+    // completed for requestedFor"). The same is just as true when the
+    // request was not superseded — so this makes the two paths agree
+    // rather than leaving the normal, successful case as the only one
+    // that waits.
+    //
+    // The identical block at the bottom of this function is deliberately
+    // left in place: it re-renders and re-caches once the bookkeeping has
+    // genuinely finished, refreshing the snapshot's timestamp. This is a
+    // strictly earlier addition, not a move.
+    currentDisplayIsComplete = true;
+    renderActualStatus();
+    renderRealSourceStatus();
+    renderHeadline();
+    renderTable();
+    cacheCurrentLocationSnapshot();
 
     // Everything from here on is bookkeeping (learning FFV, and the
     // one-off backfill for a genuinely new area) rather than data the
@@ -2143,6 +2834,8 @@ function actualValueFor(conditionName, rollbackDays) {
       return state.actual.soilTemp_mean[idx];
     case "dewPoint":
       return state.actual.dewPoint_mean[idx];
+    case "feelsLike":
+      return state.actual.feelsLike_mean[idx];
     default:
       return null;
   }
@@ -2179,6 +2872,7 @@ function realSourceValueFor(sourceId, conditionName, day, rollbackDays) {
     case "pressure": return byDay.pressure[idx] ?? null;
     case "soilTemperature": return byDay.soilTemp[idx] ?? null;
     case "dewPoint": return byDay.dewPoint[idx] ?? null;
+    case "feelsLike": return byDay.feelsLike[idx] ?? null;
     case "sunshine": return byDay.sunshine[idx] ?? null;
     default: return null;
   }
@@ -2346,11 +3040,11 @@ function ensureAccuracyEmaSeeded(entry) {
 // separate running average alongside the ratio one, rather than
 // reinterpreting.
 function isRatioCondition(conditionName) {
-  // Temperature, Pressure, Soil Temp, and Dew Point all sit on scales
-  // without a practically-meaningful zero for this purpose — same
-  // reasoning as Temperature/Pressure above, applied consistently to the
-  // two newer °C-scale conditions.
-  return !["temperature", "pressure", "soilTemperature", "dewPoint"].includes(conditionName);
+  // Temperature, Pressure, Soil Temp, Dew Point, and Feels Like all sit
+  // on scales without a practically-meaningful zero for this purpose —
+  // same reasoning as Temperature/Pressure above, applied consistently
+  // to every °C-scale condition since.
+  return !["temperature", "pressure", "soilTemperature", "dewPoint", "feelsLike"].includes(conditionName);
 }
 
 function applyCorrection(mean, ffv, conditionName) {
@@ -2565,7 +3259,14 @@ function updateAccuracyTrend() {
     if (!stats) return;
     const series = (store[conditionName] ??= []);
     if (series.length && series[series.length - 1].date === today) return; // already snapshotted today
-    series.push({ date: today, avgError: stats.avgError });
+    const point = { date: today, avgError: stats.avgError };
+    // rawAvgError may not exist yet (e.g. right after a reset, before any
+    // forecaster has raw history again) — omit the key entirely rather
+    // than storing null, so renderAccuracyTrend can tell "no data yet"
+    // apart from a genuine zero when it draws the raw-average line.
+    const rawAvgError = rawAverageErrorFor(conditionName);
+    if (rawAvgError !== null) point.rawAvgError = rawAvgError;
+    series.push(point);
     if (series.length > ACCURACY_TREND_MAX_POINTS) {
       series.splice(0, series.length - ACCURACY_TREND_MAX_POINTS);
     }
@@ -2698,8 +3399,31 @@ function recordFFVSample(store, conditionName, sourceId, day, mean, actual, elig
 // page load WOULD double-count if real sources were included, since a
 // revisit re-adds the same days; the committed-history replay avoids
 // that by rebuilding from scratch each time rather than incrementing.
+//
+// Demo sources don't get that same protection, though — this function's
+// own EMA (see recordFFVSample) has no equivalent rebuild-from-scratch
+// step, so calling it twice on the same day's data folds that day into
+// the rolling average twice. Nothing previously stopped that: this runs
+// once per completed weather load, which — since the fast-path caching
+// fix — is roughly once per 15-minute cache window, or on every manual
+// refresh, so a day visited several times could get meaningfully
+// over-weighted relative to one visited once. updateAccuracyTrend()
+// just below already solves this exact problem for its own store by
+// checking its last entry's date before writing — this borrows that
+// same "once per calendar day" idea via its own small marker store,
+// following the project's existing convention (see the eligibility
+// store's own comment) of a separate small store rather than adding an
+// oddly-shaped field into the FFV store itself.
+function ffvRunDateStorageKey(areaCode) {
+  return `forecast-compare:ffvRunDate:${areaCode}`;
+}
+
 function updateFFVHistory() {
   if (!state.areaCode || state.actual.status !== "ready") return;
+
+  const today = isoDate(new Date());
+  const runDateStore = cachedLoadStore("ffvRunDate", state.areaCode, ffvRunDateStorageKey(state.areaCode));
+  if (runDateStore.date === today) return; // already learnt from today's actual values for this area
 
   const store = loadFFVStore(state.areaCode);
   const eligStore = loadEligibilityStore(state.areaCode);
@@ -2735,6 +3459,7 @@ function updateFFVHistory() {
   saveFFVStore(state.areaCode, store);
   saveEligibilityStore(state.areaCode, eligStore);
   saveAppAccuracyStore(state.areaCode, appStore);
+  cachedSaveStore("ffvRunDate", state.areaCode, ffvRunDateStorageKey(state.areaCode), { date: today });
 }
 
 // Returns the learned FFV for this source/condition/day, or null if there
@@ -2769,7 +3494,7 @@ function ffvSampleTotal(conditionName) {
 // Approximate 0-100 closeness scale per condition — the error (in real
 // units) at which the score bottoms out at 0. Deliberately simple, not a
 // formal statistic; the average-error-in-units figure is the primary one.
-const ACCURACY_SCALE = { rain: 5, cloudLow: 60, cloudMid: 60, cloudHigh: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3, soilTemperature: 4, dewPoint: 6 };
+const ACCURACY_SCALE = { rain: 5, cloudLow: 60, cloudMid: 60, cloudHigh: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3, soilTemperature: 4, dewPoint: 6, feelsLike: 8 };
 
 function accuracyPercent(avgError, conditionName) {
   if (avgError === null) return null;
@@ -2812,7 +3537,22 @@ function accuracyStatsFor(source, conditionName) {
   };
 }
 
-
+// ---- Raw baseline: "if you'd just believed an arbitrary forecaster" ----
+// Averages accuracyStatsFor(...).avgErrorRaw across every forecaster that
+// currently has raw error data for this condition. Deliberately a plain
+// mean across sources rather than sample-count-weighted like the FFV
+// combine does — the question here is "how would an ordinary uncorrected
+// forecast have looked", and letting one long-running source dominate
+// would defeat that. Feeds the "Accuracy over time" graph's raw-average
+// line — see updateAccuracyTrend/renderAccuracyTrend.
+function rawAverageErrorFor(conditionName) {
+  if (!state.areaCode) return null;
+  const errors = CONFIG.forecasters
+    .map(source => accuracyStatsFor(source, conditionName)?.avgErrorRaw)
+    .filter(v => v !== null && v !== undefined);
+  if (!errors.length) return null;
+  return errors.reduce((a, b) => a + b, 0) / errors.length;
+}
 
 function formatError(avgError, conditionName, mode) {
   if (avgError === null) return "–";
@@ -2843,14 +3583,55 @@ function median(values) {
 // shows what a given person actually finds useful — Sunshine matters a
 // lot to a gardener, barely at all to someone else, and there's no
 // reason to force either way.
+// One small icon per headline cell, sat to the left of its label/value
+// — hand-drawn inline SVG (stroke="currentColor", same 1.4-1.6 stroke
+// weight as the settings/hour-play icons already use elsewhere),
+// matching this project's existing convention of never pulling in an
+// icon font or external asset for something this small. Coloured via
+// currentColor from .headline-cell-icon (style.css), not hardcoded per
+// icon, so it always matches var(--accent-dark) for whichever theme is
+// active, same as the cell's own background now does.
+// Headline-only shortened names for the two conditions long enough to
+// wrap their label onto a second line once HEADLINE_CELL_ICONS' icon
+// started eating into the same width — see the label-building code
+// below for the full reasoning. CONFIG.conditions[name].name (the full
+// "Temperature"/"Pressure") is untouched and still used everywhere else.
+const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Press", feelsLike: "Feels" };
+
+const HEADLINE_CELL_ICONS = {
+  // Half sun on the horizon with up/down ticks: sunrise and sunset.
+  sun: '<svg viewBox="0 0 18 18" fill="none"><path d="M4.5 12 a4.5 4.5 0 0 1 9 0" stroke="currentColor" stroke-width="1.4"/><line x1="1.5" y1="12" x2="16.5" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M7 15 L9 16.5 L11 15" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 4 L9 2.5 L11 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  // An eye: visibility.
+  visibility: '<svg viewBox="0 0 18 18" fill="none"><path d="M1.5 9 C4 4.5 14 4.5 16.5 9 C14 13.5 4 13.5 1.5 9 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="9" cy="9" r="2.3" stroke="currentColor" stroke-width="1.4"/></svg>',
+  rain: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  temperature: '<svg viewBox="0 0 18 18" fill="none"><line x1="9" y1="3" x2="9" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13" r="2.3" stroke="currentColor" stroke-width="1.4"/></svg>',
+  wind: '<svg viewBox="0 0 18 18" fill="none"><path d="M2 6 h8 a2 2 0 1 0 -2 -2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 10 h11 a2 2 0 1 1 -2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 14 h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  pressure: '<svg viewBox="0 0 18 18" fill="none"><path d="M3 12 a6 6 0 1 1 12 0" stroke="currentColor" stroke-width="1.4"/><line x1="9" y1="12" x2="12" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="9" cy="12" r="1" fill="currentColor"/></svg>',
+  sunshine: '<svg viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="3" stroke="currentColor" stroke-width="1.4"/><line x1="9" y1="1.5" x2="9" y2="3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="9" y1="14.5" x2="9" y2="16.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="1.5" y1="9" x2="3.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="14.5" y1="9" x2="16.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="3.6" y1="3.6" x2="5" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="13" y1="13" x2="14.4" y2="14.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="14.4" y1="3.6" x2="13" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="5" y1="13" x2="3.6" y2="14.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  cloud: '<svg viewBox="0 0 18 18" fill="none"><path d="M5.5 13 a3 3 0 0 1 0 -6 a4 4 0 0 1 7.6 -1 a3.2 3.2 0 0 1 -0.6 7 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  soilTemperature: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 16 V9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M9 9 C9 5 12 4 14 4 C14 7 12 9 9 9 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 11 C9 8.5 7 7.5 5 7.5 C5 10 7 11 9 11 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
+  dewPoint: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 2 C9 2 4 8 4 11.5 C4 14 6.5 16 9 16 C11.5 16 14 14 14 11.5 C14 8 9 2 9 2 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><line x1="5.5" y1="11" x2="12.5" y2="11" stroke="currentColor" stroke-width="1.2"/></svg>',
+  // Temperature's own thermometer bulb/stem, with two short curved lines
+  // either side suggesting air moving around it — the wind/humidity
+  // effect "feels like" is actually about, distinguishing it at a glance
+  // from plain Temperature's bare thermometer.
+  feelsLike: '<svg viewBox="0 0 18 18" fill="none"><line x1="9" y1="3" x2="9" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13" r="2.3" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 6 C4 6 4 8 2.5 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M15.5 6 C14 6 14 8 15.5 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>'
+};
+
 const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
-const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "tide", "fishing"];
+// "sun" (sunrise / sunset) and "visibility" added v81 — like tide and
+// fishing they aren't scored weather conditions; their cells are built by
+// sunvis.js (see the branch in renderHeadline).
+const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "feelsLike", "sun", "visibility", "tide", "fishing"];
 const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
 const DEFAULT_HEADLINE_TOGGLES = {
   pressure: true,
   sunshine: true,
   soilTemperature: false,
   dewPoint: false,
+  feelsLike: false,
+  sun: false,
+  visibility: false,
   tide: false,
   fishing: false
 };
@@ -3152,6 +3933,7 @@ function hourlyValueFor(conditionName) {
     case "pressure": return state.hourly.pressure[idx] ?? null;
     case "soilTemperature": return state.hourly.soilTemperature[idx] ?? null;
     case "dewPoint": return state.hourly.dewPoint[idx] ?? null;
+    case "feelsLike": return state.hourly.feelsLike[idx] ?? null;
     default: return null; // Sunshine has no hourly reading — see renderHeadline
   }
 }
@@ -3209,6 +3991,8 @@ function liveTodayValueFor(conditionName) {
       return state.hourly.soilTemperature[0] ?? null;
     case "dewPoint":
       return state.hourly.dewPoint[0] ?? null;
+    case "feelsLike":
+      return state.hourly.feelsLike[0] ?? null;
     default:
       return null;
   }
@@ -3296,7 +4080,7 @@ function temperatureRangeFor(rollbackDays) {
 // actually frost. Deliberately just a colour tint — no text, no
 // notification — the "gentle nudge" this was asked for, not another
 // warning to grow fatigued by.
-const FROST_TEMP_THRESHOLD = 2; // °C — ground frost can form even when air temp reads a little above freezing
+const FROST_TEMP_THRESHOLD = 4; // °C — ground frost can form even when air temp reads a few degrees above freezing
 const FROST_CLOUD_THRESHOLD = 40; // % — below this counts as "clear enough"
 const FROST_WIND_THRESHOLD = 8; // mph — below this counts as "light enough"
 
@@ -3460,10 +4244,19 @@ function pressureTrendArrowSvg({ delta, hours }) {
   const angle = 15 + (magnitude / 4) * 75; // 15°(barely inclined) .. 90°(vertical)
   const weight = 1.8 + (magnitude / 4) * 2.2; // 1.8 (thin) .. 4 (bold)
   const rotation = per3h >= 0 ? -angle : angle; // negative (CCW) = up-right when rising, positive (CW) = down-right when falling
+  // Arrowhead enlarged on request (was a fixed 5 long x 7.5 tall, which
+  // looked small next to the bolder shafts). Now 8 long, and its height
+  // grows a little with the shaft weight so a bold arrow still has a
+  // head in proportion: 10 tall on the thinnest arrow, 12 on the boldest.
+  // The shaft stops just inside the head's base so its round cap
+  // doesn't poke out either side of the point.
+  const headLen = 8;
+  const headHalf = 4.2 + weight * 0.45; // 5.0 .. 6.0
+  const baseX = 24 - headLen;
   return (
     `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" style="transform: rotate(${rotation}deg)">` +
-    `<line x1="3" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="${weight.toFixed(1)}" stroke-linecap="round"/>` +
-    `<polygon points="19,8.25 24,12 19,15.75" fill="currentColor"/>` +
+    `<line x1="2" y1="12" x2="${baseX + 1}" y2="12" stroke="currentColor" stroke-width="${weight.toFixed(1)}" stroke-linecap="round"/>` +
+    `<polygon points="${baseX},${(12 - headHalf).toFixed(1)} 24,12 ${baseX},${(12 + headHalf).toFixed(1)}" fill="currentColor"/>` +
     `</svg>`
   );
 }
@@ -3551,7 +4344,8 @@ function renderHeadline() {
   // somewhere else.
   if (!currentDisplayIsComplete && stillSettling) {
     headlineGrid.innerHTML = "";
-    if (headlineDate) headlineDate.textContent = "";
+    if (headlineDateText) headlineDateText.textContent = "";
+    if (headlineDatePlace) headlineDatePlace.textContent = "";
     const loadingMsg = document.createElement("p");
     loadingMsg.className = "headline-loading";
     loadingMsg.textContent = "Loading weather…";
@@ -3580,8 +4374,8 @@ function renderHeadline() {
 
   const day = freshestDayFor(state.rollback);
 
-  if (headlineDate) {
-    headlineDate.textContent = state.rollback === 0
+  if (headlineDateText) {
+    headlineDateText.textContent = state.rollback === 0
       // "Today" now means "the next 24/48h from now" (see
       // displayWindowHourCount) rather than the calendar day — with 48h
       // selected that window genuinely spans into tomorrow, so the
@@ -3590,12 +4384,33 @@ function renderHeadline() {
       ? (loadHourRange() === 48 ? "Today and Tomorrow" : "Today")
       : formatDateLong(targetDateForRollback(state.rollback));
   }
+  // The current place name, to the right of the date/window text — same
+  // currentPlaceLabel() the header's own place chip uses, so the two
+  // can never disagree about what the current place is called.
+  if (headlineDatePlace) headlineDatePlace.textContent = currentPlaceLabel();
 
   const hourDate = currentHourDate();
   const showHourly = state.hourlyActive && state.hourly.status === "ready";
   const night = showHourly && !isDaytime(hourDate);
 
   activeHeadlineConditions().forEach(conditionName => {
+    // Wraps this whole per-condition body — same principle already
+    // applied to a per-source failure elsewhere in this file ("a source
+    // that fails here just sits out this run"), generalised to every
+    // condition rather than just tide/fishing's own explicit guard just
+    // below. Without this, an uncaught throw partway through ONE
+    // condition's cell (a genuine bug, a null the code didn't expect)
+    // doesn't just lose that one cell — forEach has no per-iteration
+    // isolation of its own, so it silently stops the ENTIRE loop right
+    // there, and every condition after it in HEADLINE_OPTIONAL_CONDITIONS'
+    // fixed order (pressure, sunshine, cloud, soilTemperature, dewPoint)
+    // never renders at all. Reported as: enabling Cloud alone made Soil
+    // Temp and Dew Point vanish too, leaving only the 3 core cells plus
+    // Pressure (the ones already built before Cloud's turn) — exactly
+    // what a bug in Cloud's own rendering, with no isolation, would do
+    // to whatever's queued after it.
+    try {
+
     // Tide and Fishing don't go through this generic per-forecaster cell
     // loop at all — each has its own data source, own full-width card,
     // and its own render path (renderTideRow/renderFishingRow, called
@@ -3608,10 +4423,28 @@ function renderHeadline() {
     // lookup below for either would throw and break this entire loop.
     if (conditionName === "tide" || conditionName === "fishing") return;
 
+    // Sunrise/sunset and Visibility: own data, own cell builder in
+    // sunvis.js (loaded after this file, hence the guard). Same reason as
+    // tide/fishing above: no CONFIG.conditions entry to look up.
+    if (conditionName === "sun" || conditionName === "visibility") {
+      if (typeof buildSunVisHeadlineCell === "function") {
+        const extraCell = buildSunVisHeadlineCell(conditionName);
+        if (extraCell) headlineGrid.appendChild(extraCell);
+      }
+      return;
+    }
+
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "headline-cell";
-    cell.addEventListener("click", () => openHourlySheet(conditionName));
+    cell.addEventListener("click", () => {
+      // savedPlaceSwiped is set by the swipe-to-switch-place handling
+      // near switchToPostcode below — a swipe that started on this cell
+      // still generates a click afterwards, which needs swallowing the
+      // same way tide/fishing's own swipe already does for their rows.
+      if (savedPlaceSwiped) { savedPlaceSwiped = false; return; }
+      openHourlySheet(conditionName);
+    });
 
     const label = document.createElement("span");
     label.className = "headline-label";
@@ -3625,11 +4458,40 @@ function renderHeadline() {
     // not a number, and has no CONFIG.conditions entry of its own to
     // read a unit from (see the branch below).
     const showingUVPercent = conditionName === "sunshine" && showHourly && !night;
-    label.textContent = conditionName === "cloud"
-      ? "Cloud"
-      : showingUVPercent
-      ? `${CONFIG.conditions[conditionName].name} %`
-      : `${CONFIG.conditions[conditionName].name} ${unitLabel(conditionName)}`;
+    // Shortened here ONLY — CONFIG.conditions[name].name (the full
+    // "Temperature"/"Pressure") still shows everywhere else: Compare's
+    // dropdown, Settings' units list, the detail sheet title. This is
+    // purely about fitting THIS cell now that its icon (see
+    // HEADLINE_CELL_ICONS) eats into the same width the label has to
+    // fit in — confirmed on a real device that "Temperature °C" and
+    // "Pressure hPa" were the two long enough to wrap onto a second
+    // line, pushing those two cells to 3 lines tall against every
+    // other cell's 2, breaking the grid's own row rhythm. Every other
+    // condition's name was already short enough not to need this.
+    const headlineName = HEADLINE_LABEL_NAME[conditionName] || CONFIG.conditions[conditionName]?.name;
+    if (conditionName === "cloud") {
+      label.textContent = "Cloud";
+    } else if (showingUVPercent) {
+      label.textContent = `${headlineName} %`;
+    } else if (conditionName === "pressure") {
+      // hPa specifically kept mixed-case (a lowercase h, capital P) —
+      // .headline-label otherwise uppercases everything via CSS
+      // (text-transform), which is exactly what was turning this into
+      // "HPA". unitLabel("pressure") already returns the correct "hPa"
+      // string; text-transform: none on this one span is what actually
+      // lets it render as typed rather than the parent's uppercase
+      // silently overriding it. Every other condition's unit (mm, mph,
+      // °C) reads fine uppercased, so this exemption stays scoped to
+      // just this one span rather than turning off uppercase for the
+      // whole label.
+      label.append(`${headlineName} `);
+      const unitSpan = document.createElement("span");
+      unitSpan.className = "headline-label-unit-cased";
+      unitSpan.textContent = unitLabel("pressure");
+      label.appendChild(unitSpan);
+    } else {
+      label.textContent = `${headlineName} ${unitLabel(conditionName)}`;
+    }
 
     if (conditionName === "sunshine") {
       // Sunshine itself has no hourly concept — a daily total doesn't
@@ -3755,7 +4617,16 @@ function renderHeadline() {
     valueRow.className = "headline-value-row";
     valueRow.appendChild(valueEl);
 
-    cell.append(label, valueRow);
+    const icon = document.createElement("span");
+    icon.className = "headline-cell-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = HEADLINE_CELL_ICONS[conditionName] || "";
+
+    const textWrap = document.createElement("div");
+    textWrap.className = "headline-cell-text";
+    textWrap.append(label, valueRow);
+
+    cell.append(icon, textWrap);
 
     if (conditionName === "wind") {
       const direction = showHourly
@@ -3806,6 +4677,18 @@ function renderHeadline() {
     }
 
     headlineGrid.appendChild(cell);
+
+    } catch (err) {
+      // This one condition is skipped — nothing rendered for it this
+      // pass — but every OTHER condition still gets its normal turn,
+      // which is the entire point of this wrapper. No on-screen error
+      // (a missing headline cell isn't worth interrupting the page
+      // over), but still surfaced somewhere real rather than silently
+      // swallowed entirely — if the error-catcher pattern from map.html
+      // ever gets added to the front page too, this is exactly the kind
+      // of throw it would want to catch.
+      console.error(`Headline cell for "${conditionName}" failed to render:`, err);
+    }
   });
 
   renderUnderperformBanner();
@@ -4179,6 +5062,10 @@ function sheetRenderSunStrip(hourTimes, lowSeries, midSeries, highSeries) {
 // readout lives in the fixed bar above the graph rather than under the
 // finger — the one place guaranteed not to get covered by the hand doing
 // the dragging.
+// Undoes the previous graph's sheet-wide scrub listeners - see the end
+// of attachSheetScrubber.
+let activeSheetScrubCleanup = null;
+
 function attachSheetScrubber({ svg, pts, extraHeight, formatReadout, defaultReadout }) {
   const touchArea = sheetSvgEl("rect", { x: 0, y: 0, width: SHEET_W, height: SHEET_H + extraHeight, class: "graph-touch-area" });
   svg.appendChild(touchArea);
@@ -4218,23 +5105,57 @@ function attachSheetScrubber({ svg, pts, extraHeight, formatReadout, defaultRead
     readoutValue.textContent = defaultReadout.value;
   }
 
+  // The finger can now scrub from anywhere between the top of the graph
+  // and the bottom of the screen, not just on the graph itself - so a
+  // finger held BELOW the graph leaves the whole graph, its times and the
+  // readout bar above it in view. Only sideways movement scrubs: up/down
+  // still scrolls the sheet (touch-action pan-y, set on the sheet while
+  // this graph is showing), exactly as the graph area already behaved.
+  // Buttons and links are left alone. Listeners live on the sheet itself
+  // and remove themselves the moment this graph is replaced - another
+  // condition, or the tide/fishing sheets, which reuse the same sheet
+  // without knowing anything about this.
+  if (activeSheetScrubCleanup) activeSheetScrubCleanup();
+  const sheetEl = svg.closest(".sheet") || svg;
+  const bodyEl = svg.closest("#sheetBody") || sheetEl;
   let dragging = false;
-  touchArea.addEventListener("pointerdown", e => {
+
+  const onDown = e => {
+    if (!svg.isConnected) { cleanup(); return; }
+    if (e.target.closest && e.target.closest("button, a, input, select, textarea, label")) return;
+    if (e.clientY < svg.getBoundingClientRect().top) return;
     dragging = true;
-    touchArea.setPointerCapture(e.pointerId);
+    try { sheetEl.setPointerCapture(e.pointerId); } catch { /* fine without it */ }
     showAt(hourFromClientX(e.clientX));
-  });
-  touchArea.addEventListener("pointermove", e => {
+  };
+  const onMove = e => {
     if (!dragging) return;
     showAt(hourFromClientX(e.clientX));
-  });
-  ["pointerup", "pointercancel", "pointerleave"].forEach(evt => {
-    touchArea.addEventListener(evt, () => {
-      if (!dragging) return;
-      dragging = false;
-      reset();
-    });
-  });
+  };
+  const onEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+    reset();
+  };
+  const endEvents = ["pointerup", "pointercancel", "lostpointercapture"];
+
+  sheetEl.addEventListener("pointerdown", onDown);
+  sheetEl.addEventListener("pointermove", onMove);
+  endEvents.forEach(evt => sheetEl.addEventListener(evt, onEnd));
+  sheetEl.style.touchAction = "pan-y";
+
+  const observer = new MutationObserver(() => { if (!svg.isConnected) cleanup(); });
+  observer.observe(bodyEl, { childList: true, subtree: true });
+
+  function cleanup() {
+    sheetEl.removeEventListener("pointerdown", onDown);
+    sheetEl.removeEventListener("pointermove", onMove);
+    endEvents.forEach(evt => sheetEl.removeEventListener(evt, onEnd));
+    sheetEl.style.touchAction = "";
+    observer.disconnect();
+    if (activeSheetScrubCleanup === cleanup) activeSheetScrubCleanup = null;
+  }
+  activeSheetScrubCleanup = cleanup;
 
   reset();
 }
@@ -4301,7 +5222,10 @@ function openHourlySheet(conditionName) {
   // both routinely longer than every other condition's plain single
   // number, so they get a slightly smaller readout size to keep them
   // comfortably on one line instead of the default full size.
-  readoutValue.classList.toggle("is-compact", conditionName === "dewPoint" || conditionName === "wind");
+  // Rain added alongside dewPoint/wind's existing reasons for this —
+  // "2.3mm/hr · Very heavy rain" is real width, and this bar was never
+  // sized with a phrase that long in mind.
+  readoutValue.classList.toggle("is-compact", conditionName === "dewPoint" || conditionName === "wind" || conditionName === "rain");
 
   if (state.hourly.status !== "ready") {
     const empty = document.createElement("p");
@@ -4328,10 +5252,21 @@ function openHourlySheet(conditionName) {
         const display = raw.map(v => convertForDisplay(v, "rain"));
         const g = sheetRenderBar(hourTimes, display, "#2f6f4f", "rain");
         sheetBody.appendChild(g.wrap);
+        // Intensity word alongside the figure, not instead of it — the
+        // number is still what a returning user actually compares day to
+        // day, "Heavy rain" just gives a newcomer (or anyone not
+        // fluent in mm/hr) an instant read without doing that
+        // conversion in their head. Classified from raw[i] (true mm/hr)
+        // rather than display[i], so it never shifts with the person's
+        // own unit choice — see rainIntensityLabel's own comment.
+        const readoutLabel = i => {
+          const word = rainIntensityLabel(raw[i]);
+          return `${formatConverted(display[i], "rain")}${unitLabel("rain")}${word ? ` · ${word}` : ""}`;
+        };
         attachSheetScrubber({
           ...g,
-          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "rain")}${unitLabel("rain")}` }),
-          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "rain")}${unitLabel("rain")}` }
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: readoutLabel(i) }),
+          defaultReadout: { time: "Now", value: readoutLabel(0) }
         });
         // Each bar is that ONE hour's rainfall, not a running total — on
         // its own that reads oddly next to the headline's whole-day
@@ -4414,6 +5349,16 @@ function openHourlySheet(conditionName) {
           ...g,
           formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "soilTemperature")}${unitLabel("soilTemperature")}` }),
           defaultReadout: { time: "Now", value: `${formatConverted(display[0], "soilTemperature")}${unitLabel("soilTemperature")}` }
+        });
+      } else if (conditionName === "feelsLike") {
+        const raw = state.hourly.feelsLike.slice(0, count);
+        const display = raw.map(v => convertForDisplay(v, "feelsLike"));
+        const g = sheetRenderLine(hourTimes, display, "#c1440e", "feelsLike");
+        sheetBody.appendChild(g.wrap);
+        attachSheetScrubber({
+          ...g,
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "feelsLike")}${unitLabel("feelsLike")}` }),
+          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "feelsLike")}${unitLabel("feelsLike")}` }
         });
       } else if (conditionName === "dewPoint") {
         const dewRaw = state.hourly.dewPoint.slice(0, count);
@@ -4577,15 +5522,43 @@ function renderAccuracyTrend() {
     return;
   }
 
-  const values = series.map(pt => pt.avgError);
-  const W = 320, H = 90, PAD_L = 34, PAD_B = 16, PAD_T = 8;
   const svgNS = "http://www.w3.org/2000/svg";
+  const correctedValues = series.map(pt => pt.avgError);
+
+  // Raw-average line: only the points that actually have a rawAvgError
+  // recorded (older snapshots, from before this line existed or from a
+  // gap in raw history, won't). Kept as {index, value} pairs rather than
+  // a dense array so a gap doesn't have to be faked as zero or
+  // interpolated — it's drawn as separate contiguous segments below,
+  // so a break in the data shows as a break in the line.
+  const rawPoints = series
+    .map((pt, i) => ({ i, v: pt.rawAvgError }))
+    .filter(pt => pt.v !== undefined && pt.v !== null);
+
+  // Needs at least two points to draw a line at all, same reasoning as
+  // the "not enough history" guard above for the corrected series.
+  const showRaw = rawPoints.length >= 2;
+
+  if (showRaw) {
+    const legend = document.createElement("div");
+    legend.className = "accuracy-trend-legend";
+    legend.innerHTML =
+      '<span class="accuracy-trend-legend-item"><span class="accuracy-trend-swatch accuracy-trend-swatch-corrected"></span>App corrected</span>' +
+      '<span class="accuracy-trend-legend-item"><span class="accuracy-trend-swatch accuracy-trend-swatch-raw"></span>Raw average</span>';
+    container.appendChild(legend);
+  }
+
+  const W = 320, H = 90, PAD_L = 34, PAD_B = 16, PAD_T = 8;
   const svg = document.createElementNS(svgNS, "svg");
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("class", "graph-svg");
 
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
+  // Shared scale across both lines, so the raw line's position is
+  // genuinely comparable to the corrected line's rather than each being
+  // scaled to its own range.
+  const allValues = showRaw ? correctedValues.concat(rawPoints.map(p => p.v)) : correctedValues;
+  const minV = Math.min(...allValues);
+  const maxV = Math.max(...allValues);
   const range = Math.max(0.001, maxV - minV);
   const plotW = W - PAD_L - 10;
   const plotH = H - PAD_T - PAD_B;
@@ -4612,9 +5585,38 @@ function renderAccuracyTrend() {
     svg.appendChild(label);
   });
 
-  const pts = values.map((v, i) => [xFor(i), yFor(v)]);
+  // Raw-average line drawn first (underneath the corrected line), in
+  // contiguous segments so a gap in the raw history shows as a break
+  // rather than a misleading straight line jumping across days with no
+  // data at all.
+  if (showRaw) {
+    let segment = [];
+    let lastI = null;
+    const flushSegment = () => {
+      if (segment.length >= 2) {
+        const segPath = document.createElementNS(svgNS, "path");
+        segPath.setAttribute("d", "M" + segment.map(p => p.join(",")).join(" L"));
+        segPath.setAttribute("fill", "none");
+        segPath.setAttribute("stroke", "var(--amber)");
+        segPath.setAttribute("stroke-width", "2");
+        segPath.setAttribute("stroke-dasharray", "5,4");
+        segPath.setAttribute("stroke-linecap", "round");
+        segPath.setAttribute("stroke-linejoin", "round");
+        svg.appendChild(segPath);
+      }
+      segment = [];
+    };
+    rawPoints.forEach(pt => {
+      if (lastI !== null && pt.i !== lastI + 1) flushSegment();
+      segment.push([xFor(pt.i), yFor(pt.v)]);
+      lastI = pt.i;
+    });
+    flushSegment();
+  }
+
+  const correctedPts = correctedValues.map((v, i) => [xFor(i), yFor(v)]);
   const path = document.createElementNS(svgNS, "path");
-  path.setAttribute("d", "M" + pts.map(p => p.join(",")).join(" L"));
+  path.setAttribute("d", "M" + correctedPts.map(p => p.join(",")).join(" L"));
   path.setAttribute("fill", "none");
   path.setAttribute("stroke", "var(--accent)");
   path.setAttribute("stroke-width", "2");
@@ -4641,6 +5643,32 @@ function renderAccuracyTrend() {
   wrap.className = "graph-wrap accuracy-trend-graph";
   wrap.appendChild(svg);
   container.appendChild(wrap);
+
+  // Callout: a 7-day rolling average of (raw − corrected), i.e. how much
+  // error the FFV correction is currently saving vs an uncorrected
+  // forecast. Averaged over the trailing week rather than just today's
+  // point — a single day's gap is noisy, and the callout is meant to be
+  // a stable "is this actually helping" read rather than a jumpy one.
+  if (showRaw) {
+    const recentRaw = rawPoints.filter(pt => pt.i >= series.length - 7);
+    if (recentRaw.length) {
+      const diffs = recentRaw.map(pt => pt.v - correctedValues[pt.i]);
+      const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+      const valueText = formatValue(Math.abs(avgDiff), state.condition, true) + unitLabel(state.condition);
+      const callout = document.createElement("div");
+      if (avgDiff > 0) {
+        callout.className = "accuracy-trend-callout";
+        callout.textContent = `Currently adding ${valueText} of accuracy vs raw`;
+      } else {
+        // Honest rather than flattering — if the correction isn't
+        // currently beating a plain raw average, that's worth surfacing,
+        // not smoothing over.
+        callout.className = "accuracy-trend-callout accuracy-trend-callout-warning";
+        callout.textContent = `Not yet beating raw average (${valueText} behind)`;
+      }
+      container.appendChild(callout);
+    }
+  }
 
   const caption = document.createElement("p");
   caption.className = "sheet-footnote accuracy-trend-caption";
@@ -5023,6 +6051,7 @@ const BACKFILL_FIELD_FOR_CONDITION = {
   pressure: "pressure",
   soilTemperature: "soilTemp",
   dewPoint: "dewPoint",
+  feelsLike: "feelsLike",
   sunshine: "sunshine"
 };
 
@@ -5062,6 +6091,7 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       `pressure_msl_previous_day${d}`,
       `soil_temperature_0cm_previous_day${d}`,
       `dewpoint_2m_previous_day${d}`,
+      `apparent_temperature_previous_day${d}`,
       `direct_normal_irradiance_previous_day${d}`
     );
   }
@@ -5094,6 +6124,7 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       pressure: aggregateHourlyByDay(hourlyTime, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
       soilTemp: aggregateHourlyByDay(hourlyTime, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
       dewPoint: aggregateHourlyByDay(hourlyTime, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
+      feelsLike: aggregateHourlyByDay(hourlyTime, data.hourly[`apparent_temperature_previous_day${d}`], dayCount, "mean"),
       sunshine: sunshineHoursByDay(hourlyTime, data.hourly[`direct_normal_irradiance_previous_day${d}`], dayCount)
     };
   }
@@ -5110,6 +6141,38 @@ async function backfillRealSourceHistory() {
   state.backfill = { status: "loading", error: null, samplesAdded: 0 };
   renderBackfillStatus();
 
+  // Check for a precomputed year of real-source history for this exact
+  // area first — collected monthly by a GitHub Action (see
+  // scripts/backfill-weather.mjs) for the app's own known saved places
+  // and favourites, in the exact same shape data/history.json already
+  // uses (see applyHistoryFileToFFV). A hit turns this from "run the
+  // full live year-long fetch, one source at a time, on the phone" into
+  // "download one small file" — the same speed-up the daily history
+  // collection already gives the single FORECAST_AREA_CODE area, just
+  // extended to every precached area. A genuinely new area (never added
+  // to data/precache-config.json) has no file here and falls straight
+  // through to the live fetch below, completely unchanged.
+  try {
+    const res = await fetchWithTimeout(`./data/backfill/${state.areaCode}.json`, { cache: "no-store" }, 15000);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.areaCode === state.areaCode && data.days && Object.keys(data.days).length) {
+        const store = loadFFVStore(state.areaCode);
+        const eligStore = loadEligibilityStore(state.areaCode);
+        const samplesAdded = applyHistoryFileToFFV(data, store, eligStore);
+        saveFFVStore(state.areaCode, store);
+        saveEligibilityStore(state.areaCode, eligStore);
+        state.backfill = { status: "done", error: null, samplesAdded, failedSourceIds: [] };
+        renderBackfillStatus();
+        renderTable();
+        return;
+      }
+    }
+  } catch {
+    // No precomputed file for this area, or it failed to load/parse —
+    // fall through to the live fetch below exactly as before.
+  }
+
   try {
     const end = todayAtMidnight();
     const start = addDays(end, -BACKFILL_DAYS);
@@ -5121,7 +6184,7 @@ async function backfillRealSourceHistory() {
       latitude: state.lat,
       longitude: state.lon,
       daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max,sunshine_duration",
-      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m",
+      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m,apparent_temperature",
       start_date: isoDate(start),
       end_date: isoDate(end),
       wind_speed_unit: "mph",
@@ -5141,6 +6204,7 @@ async function backfillRealSourceHistory() {
       pressure: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.pressure_msl, dayCount, "mean"),
       soilTemp: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.soil_temperature_0cm, dayCount, "mean"),
       dewPoint: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.dewpoint_2m, dayCount, "mean"),
+      feelsLike: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.apparent_temperature, dayCount, "mean"),
       tempAvg: actualData.daily.temperature_2m_max.map((max, i) => {
         const min = actualData.daily.temperature_2m_min[i];
         return (max !== null && min !== null) ? (max + min) / 2 : null;
@@ -5295,7 +6359,7 @@ function updateHourLabel() {
 function resetHourly() {
   state.hourlyActive = false;
   state.hourIndex = 0;
-  stopHourPlay();
+  stopHourPlay(false);
   if (hourSlider) {
     hourSlider.value = 0;
     updateSliderFill(hourSlider);
@@ -5312,11 +6376,56 @@ function resetHourly() {
 let hourPlayTimer = null;
 const hourPlayButton = document.getElementById("hourPlayButton");
 
-function stopHourPlay() {
+// Holds Play's own smooth position (0, 0.5, 1, 1.5, ...) independently
+// of hourSlider.value. Confirmed on a real device that assigning a
+// fractional value to hourSlider.value directly does NOT reliably hold
+// — the map's own scrub-time pill and debug readout only ever showed
+// whole numbers back, and the 48h range specifically overran to double
+// its real max (96) rather than stopping at 48, an asymmetry neither
+// spec reading nor reasoning from here fully explains. Rather than
+// chase exactly why a range input's own value resists holding a
+// fractional intermediate, this stops depending on it doing that at
+// all: hourSlider.value now only ever gets set to a genuine whole
+// number (Math.round of this), so it behaves completely normally for
+// every purpose that already reads it (state.hourIndex, native
+// dragging, keyboard steps). The true fractional position is handed to
+// anything that wants smoother motion (currently just the map strip)
+// through a dedicated event instead of through the slider element at
+// all — see the CustomEvent dispatch below and mapstrip3.js's own
+// listener for it.
+let hourPlayRaw = 0;
+
+// settle: pass false when the caller is about to put the slider
+// somewhere else itself (resetHourly), so this doesn't first announce a
+// stray "settled on hour N" that the reset then contradicts. Anything
+// else - including the pointerdown listener, which passes an Event -
+// settles as normal.
+function stopHourPlay(settle) {
   if (hourPlayTimer) {
     clearTimeout(hourPlayTimer);
     hourPlayTimer = null;
   }
+  // Play lets the knob glide through half-hours (see
+  // scheduleHourPlayStep), so on stopping, put the slider back to
+  // whole-hour steps for dragging, and settle the knob on the hour the
+  // headline is already showing (rounded DOWN, matching the input
+  // handler below) - the map strip is told too, so everything ends on
+  // the same hour. Only when actually mid-glide: pointerdown calls this
+  // on every touch, and a plain drag shouldn't trigger an extra render.
+  if (hourSlider) {
+    const current = Number(hourSlider.value) || 0;
+    const whole = Math.floor(current);
+    if (current !== whole && settle !== false) {
+      hourSlider.value = whole;
+      updateSliderFill(hourSlider);
+      hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+  // Resyncs to wherever the slider actually is (a whole number, always)
+  // rather than leaving a stale fractional position behind — if Play is
+  // started again later, possibly after a manual drag moved things
+  // on, it should resume smoothly from THAT point, not silently jump.
+  if (hourSlider) hourPlayRaw = Number(hourSlider.value) || 0;
   if (hourPlayButton) {
     hourPlayButton.setAttribute("aria-label", "Play");
     // .hidden rather than a class or plain style.display would be the
@@ -5339,10 +6448,26 @@ function stopHourPlay() {
 // draw, so the failure mode this avoids is unlikely to bite here in
 // practice — but the fix costs nothing to apply up front, and it's one
 // less thing to have to debug twice.
+//
+// Advances hourPlayRaw by 0.5 at half the previous delay — same total
+// time to play through the full range, twice as many frames.
+// hourSlider.value itself only ever receives Math.round(hourPlayRaw) —
+// always a genuine whole number — so the ordinary "input" handler below
+// (and everything downstream of state.hourIndex) needs no change at
+// all and behaves exactly as it always has. The map strip gets the true
+// fractional position via a separate CustomEvent instead, dispatched
+// only when hourPlayRaw actually lands on a genuine half-hour, so a
+// drag-triggered stop mid-step never leaves a stray smoothed frame
+// on screen.
+// Pause between Play steps on the front page, in milliseconds. Was
+// 350; cut to 292 (20% faster) on request - smaller = faster. Each step
+// is half an hour, so this is about 0.58s per hour of forecast.
+const HOUR_PLAY_DELAY_MS = 292;
+
 function scheduleHourPlayStep() {
   hourPlayTimer = setTimeout(() => {
     const max = Number(hourSlider.max) || 0;
-    const next = Number(hourSlider.value) + 1;
+    const next = hourPlayRaw + 0.5;
     if (next > max) {
       // Stops at the end rather than looping back to "Now" — this is a
       // look-ahead through the day, not a radar-style loop, so running
@@ -5351,18 +6476,42 @@ function scheduleHourPlayStep() {
       stopHourPlay();
       return;
     }
-    hourSlider.value = next;
-    // Dispatched rather than calling the "input" handler above
-    // directly, so Play stays a second caller of that existing logic
-    // rather than a fork of it — anything that changes there (unit
-    // handling, label formatting) is picked up automatically.
-    hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    hourPlayRaw = next;
+    // The knob itself now glides through every half-hour along with
+    // the map strip's rain, rather than jumping once an hour. The
+    // earlier on-device finding that the slider "wouldn't hold" a
+    // fractional value was the slider's own step="1" snapping it back
+    // to a whole number - the slider now uses fine steps all the time
+    // (HOUR_SLIDER_FINE_STEP, below), for dragging as well as Play.
+    const previousHour = Math.floor(Number(hourSlider.value) || 0);
+    hourSlider.value = hourPlayRaw;
+    updateSliderFill(hourSlider);
+    // The headline's figures still only change on a genuine new whole
+    // hour - rounded DOWN, so they change as the knob reaches the hour
+    // mark, not half an hour early as Math.round used to.
+    const wholeHour = Math.floor(hourPlayRaw);
+    if (previousHour !== wholeHour) {
+      // Dispatched rather than calling the "input" handler above
+      // directly, so Play stays a second caller of that existing logic
+      // rather than a fork of it — anything that changes there (unit
+      // handling, label formatting) is picked up automatically. Only
+      // fired on a tick that actually lands on a new whole hour, not
+      // every half-hour tick — the headline itself has nothing finer
+      // than hourly data to show, so re-running its render on every
+      // half-hour tick would just repeat the same numbers for no
+      // reason.
+      hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    // The map strip's own smoother reading — fired every tick,
+    // including the half-hour ones the block above deliberately skips.
+    hourSlider.dispatchEvent(new CustomEvent("cloude:hour-play-raw", { detail: { raw: hourPlayRaw }, bubbles: true }));
     scheduleHourPlayStep();
-  }, 700);
+  }, HOUR_PLAY_DELAY_MS);
 }
 
 function startHourPlay() {
   if (hourPlayTimer || !hourSlider) return;
+  hourPlayRaw = Number(hourSlider.value) || 0;
   scheduleHourPlayStep();
   if (hourPlayButton) {
     hourPlayButton.setAttribute("aria-label", "Pause");
@@ -5383,12 +6532,62 @@ hourPlayButton?.addEventListener("click", () => {
 // pointerdown only ever happens from an actual touch.
 hourSlider?.addEventListener("pointerdown", stopHourPlay);
 
+// The slider moves in tenths of an hour rather than whole hours, so the
+// knob follows a finger smoothly instead of clicking from notch to
+// notch (each hour is only a few pixels of track, which made a manual
+// drag feel jerky). The figures still only ever show whole hours (see
+// the input handler below), the map strip blends its rain between the
+// two real hours either side - exactly as it already does for Play -
+// and letting go settles the knob on the nearest whole hour.
+// Overrides the step="1" in index.html.
+const HOUR_SLIDER_FINE_STEP = "0.1";
+
 if (hourSlider) {
+  hourSlider.step = HOUR_SLIDER_FINE_STEP;
   hourSlider.max = String(loadHourRange());
   updateSliderFill(hourSlider);
 
+  // Letting go of a manual drag: settle on the nearest whole hour, which
+  // is the hour the figures are already showing (rounded, see below), so
+  // nothing on screen changes except the knob tidying itself up.
+  // "change" fires on release for a range input, not during the drag.
+  hourSlider.addEventListener("change", () => {
+    if (hourPlayTimer) return;
+    const current = Number(hourSlider.value) || 0;
+    const whole = Math.round(current);
+    if (current !== whole) {
+      hourSlider.value = whole;
+      hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+
   hourSlider.addEventListener("input", () => {
-    state.hourIndex = Number(hourSlider.value);
+    // Rounded, not a direct read of hourSlider.value — Play now steps
+    // by 0.5 (see scheduleHourPlayStep) so the raw value can be
+    // fractional between whole-hour frames. Every hourly array this
+    // indexes into is still genuinely hourly data, so rounding here
+    // (rather than trying to interpolate every reader of
+    // state.hourIndex) is what keeps the headline's own numbers honest
+    // — the map strip reads hourSlider.value directly for its own
+    // smoother rain-colour interpolation instead (see mapstrip3.js),
+    // so nothing is lost by rounding it here for this card's purposes.
+    // Math.floor (was Math.round): during Play the knob glides through
+    // half-hours, and the figures should change as it reaches each hour
+    // mark rather than half an hour before. A manual drag only ever
+    // lands on whole numbers, where floor and round are identical.
+    //
+    // Rounded (to the nearest hour) for a manual drag, so the figures
+    // agree with where letting go will settle the knob. Play keeps
+    // Math.floor so its figures change as the knob reaches each hour.
+    const sliderValue = Number(hourSlider.value);
+    const newHourIndex = hourPlayTimer ? Math.floor(sliderValue) : Math.round(sliderValue);
+    updateSliderFill(hourSlider);
+    // The slider now reports many positions per hour (see
+    // HOUR_SLIDER_FINE_STEP). Rebuilding the headline for each one would
+    // repeat identical work and make the drag stutter - only a genuinely
+    // different hour needs it. The map strip listens separately.
+    if (newHourIndex === state.hourIndex && state.hourlyActive === (newHourIndex !== 0)) return;
+    state.hourIndex = newHourIndex;
     // Only a genuinely different hour switches to the hourly reading —
     // landing back on "Now" (0) behaves as if the slider was never
     // touched, so it matches what's shown on launch instead of jumping
@@ -5398,6 +6597,13 @@ if (hourSlider) {
     updateSliderFill(hourSlider);
     updateHourLabel();
     renderHeadline();
+    // Keeps the map strip's corner figures tracking whichever hour this
+    // card itself is now showing (see MAP_STRIP_CORNERS, mapstrip3.js)
+    // — on request, so they move together with the headline rather than
+    // the corners sitting frozen on an old hour while everything else
+    // moves. Guarded since this file also runs on pages that never load
+    // mapstrip3.js at all (compare.html, map.html).
+    if (typeof updateMapStripCorners === "function") updateMapStripCorners();
   });
 }
 
@@ -5451,9 +6657,27 @@ window.addEventListener("online", () => {
 // so it clears itself either way without needing a manual tap. Cheap and
 // harmless when there's nothing wrong — it's a no-op unless
 // state.actual.status is genuinely "error".
+//
+// Forced (loadLocationData(true)), not a bare loadLocationData() call —
+// unforced, the very first thing it does is check for a fresh recent-
+// location cache snapshot and, if one exists, short-circuit straight to
+// re-announcing that SAME cached data (re-dispatching cloude:location-
+// ready, re-running renderTideRow) without ever attempting a real fetch
+// or touching state.actual.status at all. Since a cache snapshot from
+// before the error usually still exists and stays "fresh" for several
+// minutes, that shortcut was being taken on every single tick — meaning
+// this retry could never actually resolve the error it exists to clear,
+// only repeat the same cached announcement forever, every 30 seconds,
+// for as long as the tab stayed open. That's what was actually behind
+// tide's own value visibly recalculating (from a fresh Date.now()) once
+// every cycle with nothing else on screen changing, and occasionally
+// blanking outright from two of those announcements landing close
+// together. force=true skips the cache shortcut entirely, so this now
+// does what its own name implies — a genuine retry, not a repeating
+// no-op dressed up as one.
 setInterval(() => {
   if (state.actual.status === "error") {
-    loadLocationData();
+    loadLocationData(true);
   }
 }, 30000);
 
@@ -5551,13 +6775,28 @@ if (backfillButton) {
 // vs hills for tomorrow, say) used to mean a full blank-then-reload every
 // single time, even switching straight back to somewhere just looked at
 // moments ago. This keeps a short-lived snapshot of the last
-// successfully completed load per place, so switching back within a few
-// minutes shows that data immediately, with a fresh fetch still kicked
-// off silently behind it. It only ever stores a genuinely COMPLETE,
-// already-rendered snapshot, never a partial one, so this doesn't reopen
-// the "flash of inconsistent data" problem fixed earlier — it's showing
-// data that was fully correct a few minutes ago, the same trade-off any
-// ordinary weather app's own caching already makes.
+// successfully completed load per place, so switching back within the
+// window below shows that data immediately.
+//
+// Used to also kick off a fresh fetch silently behind every cached
+// display, every time, regardless — which meant this only ever helped
+// perceived speed, not actual request count, and was a big part of why
+// ordinary use (a few place switches, a few scrolls) could still hit
+// Open-Meteo's daily/hourly limits. loadLocationData() now checks this
+// same cache itself and skips the fetch ENTIRELY while it's still within
+// RECENT_LOCATION_CACHE_MS — see the guard at the top of that function.
+// Widened from 5 to 15 minutes to go with that change: a 5-minute
+// skip-window would have meant "swipe over to compare, swipe back a
+// minute later" still refiring the full nine-source fetch most of the
+// time, which defeats the point of caching for a quick back-and-forth
+// comparison between two or three places.
+//
+// It only ever stores a genuinely COMPLETE, already-rendered snapshot,
+// never a partial one, so this doesn't reopen the "flash of
+// inconsistent data" problem fixed earlier — it's showing data that was
+// fully correct up to 15 minutes ago, not live-to-the-second, which is
+// the actual trade-off being made here in exchange for the fewer
+// requests and the instant redisplay.
 //
 // Backed by sessionStorage rather than a plain in-memory variable — this
 // is a plain multi-page site (index.html, compare.html, settings.html,
@@ -5567,8 +6806,11 @@ if (backfillButton) {
 // (cleared only when the browser tab/window itself actually closes),
 // which is the lifetime this feature is actually meant to have — a
 // plain variable was silently making the buffer far less reliable than
-// it looked like it should be.
-const RECENT_LOCATION_CACHE_MS = 5 * 60 * 1000;
+// it looked like it should be. Deliberately NOT localStorage: this is
+// meant to cover a session of comparing a handful of places, not "every
+// place ever looked at" — see the session's own discussion on why that
+// wider idea was shelved.
+const RECENT_LOCATION_CACHE_MS = 15 * 60 * 1000;
 const RECENT_LOCATION_CACHE_KEY = "forecast-compare:recentLocationCache";
 
 function loadRecentLocationCache() {
@@ -5597,10 +6839,28 @@ function saveRecentLocationCache(cache) {
 // (whether or not this cache path was involved), so the screen still
 // updates once fresh data is genuinely ready.
 
-function cacheCurrentLocationSnapshot() {
+// A location switch is always strictly queued, never run concurrently
+// with another (see loadLocationData's own promise-reuse/queueing) — so
+// when a fetch's own "am I still current" check fails below because a
+// newer switch already took over, state.actual/state.hourly at THIS
+// exact moment still genuinely holds THIS fetch's own, fully correct
+// result: the next (superseding) location's fetch can't have started
+// yet, since it's queued strictly behind this one finishing. That made
+// it safe to accept an explicit postcode here instead of always reading
+// state.postcode — see the call site right before the "stale, leave it
+// alone" guard in runLoadLocationData, which is what actually needed
+// this: a completed fetch was being abandoned right at the finish line,
+// with nothing ever caching it for its OWN postcode purely because
+// display had already moved on to somewhere else by the time it landed.
+// Confirmed as the cause of a real report: swiping to a second place
+// and back again within seconds forced a full reload rather than a
+// cache hit, because the FIRST place's fetch — despite completing
+// successfully — never got the chance to cache itself if the swipe away
+// happened before it finished.
+function cacheCurrentLocationSnapshot(forPostcode = state.postcode) {
   if (state.actual.status !== "ready") return; // only a fully completed load is worth caching
   const cache = loadRecentLocationCache();
-  cache[state.postcode] = {
+  cache[forPostcode] = {
     actual: state.actual,
     realSources: state.realSources,
     hourly: state.hourly,
@@ -5674,18 +6934,148 @@ function switchToPostcode(pc) {
   loadLocationData();
 }
 
+// ---- Swipe-to-switch-saved-place (map strip + headline card) ----
+// Same technique as tide/fishing's own swipe (see tide-ui.js) — pointer
+// tracking used ONLY to detect a genuine swipe, which sets a flag to
+// swallow the click/tap that follows it; everything else falls through
+// to native tap handling untouched.
+//
+// Two separate swipe targets (the map strip, and the headline card)
+// rather than one shared wrapper around both: wrapping them in a new
+// parent div would pull .map-strip out from being a DIRECT child of
+// .app-home, which is exactly what the .app-home > *:not(.map-strip) /
+// .map-strip flex-shrink rule (see style.css) depends on to size the
+// strip correctly — breaking that was the one thing this needed to
+// avoid, since it's what keeps the date bar on screen.
+//
+// #hourSlider (and its Play button) are explicitly excluded from the
+// headline card's own tracking, rather than given a swipe-friendly
+// touch-action. CSS touch-action cascades down to descendants — an
+// ancestor's value can only ever be narrowed further by a child, never
+// widened back out — so giving .headline itself a pan-y touch-action
+// would have narrowed what's available to the slider inside it too,
+// right where it needs its own native drag least disturbed. Bailing out
+// of tracking entirely the moment a gesture starts on the slider
+// sidesteps that risk rather than trying to tune CSS around it.
+let savedPlaceSwiped = false;
+
+function switchToAdjacentSavedPlace(direction) {
+  const places = loadPlaces();
+  if (places.length < 2) return;
+  const currentIndex = places.findIndex(p => p.postcode === state.postcode);
+  // Not currently on a saved place at all (an adopted map coordinate, or
+  // a Switch that was never saved) — no sensible "adjacent" place to
+  // compute, so just land on the first saved one regardless of swipe
+  // direction, rather than doing nothing.
+  if (currentIndex === -1) {
+    switchToPostcode(places[0].postcode);
+    return;
+  }
+  const nextIndex = (currentIndex + direction + places.length) % places.length;
+  switchToPostcode(places[nextIndex].postcode);
+}
+
+function attachSavedPlaceSwipe(el, excludeSelector) {
+  if (!el) return;
+  const SWIPE_THRESHOLD_PX = 32;
+  let startX = null, startY = null, pointerId = null;
+
+  el.addEventListener("pointerdown", e => {
+    if (pointerId !== null) return;
+    if (excludeSelector && e.target.closest(excludeSelector)) return; // let this control handle its own gesture entirely
+    pointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    // NO setPointerCapture here — same load-bearing omission, and same
+    // reason, as tide-ui.js's own pair swipe (see the long note there).
+    // Capturing on pointerdown, before a swipe-vs-tap decision has been
+    // made, retargets the whole rest of the gesture — the final `click`
+    // included — onto THIS element. Since this is attached to ancestors
+    // (.headline, which wraps every headline cell, and .map-strip), that
+    // meant a plain tap on a headline cell fired its click on .headline
+    // instead of on the cell, so the cell's own click listener never ran
+    // and its hourly graph sheet never opened. Verified in a real
+    // browser: all eight headline cells reported an empty sheet title
+    // and zero sheet content on tap with capture in place, and opened
+    // correctly the moment it was removed.
+    //
+    // Capture was never needed for the swipe: touch pointers get
+    // implicit capture on their own target, and since this element is an
+    // ancestor of whatever gets tapped, pointermove events bubble up to
+    // these handlers regardless.
+  });
+
+  el.addEventListener("pointermove", e => {
+    if (startX === null || e.pointerId !== pointerId) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      switchToAdjacentSavedPlace(dx < 0 ? 1 : -1);
+      savedPlaceSwiped = true;
+      startX = null; startY = null; pointerId = null; // one switch per gesture — don't re-trigger on further movement
+    }
+  });
+
+  el.addEventListener("pointerup", e => {
+    if (e.pointerId === pointerId) { startX = null; startY = null; pointerId = null; }
+  });
+  el.addEventListener("pointercancel", e => {
+    if (e.pointerId === pointerId) { startX = null; startY = null; pointerId = null; }
+  });
+}
+
+const mapStripEl = document.querySelector(".map-strip");
+attachSavedPlaceSwipe(mapStripEl);
+if (mapStripEl) {
+  // The strip is a plain <a href="map.html">, not a JS click handler —
+  // preventDefault() is what swallows a swipe-generated click here,
+  // rather than simply not calling a function the way tide/fishing's
+  // buttons do.
+  mapStripEl.addEventListener("click", e => {
+    if (savedPlaceSwiped) { savedPlaceSwiped = false; e.preventDefault(); }
+  });
+}
+
+attachSavedPlaceSwipe(document.querySelector(".headline"), "#hourSlider, #hourPlayButton, #headlineRefreshButton");
+
+// Trims a label down to before its first comma ("Bridgwater, Somerset"
+// -> "Bridgwater") — a separate copy of tide/fishing's own
+// shortPlaceLabel() (tide-ui.js), not a shared call to it: tide-ui.js
+// isn't loaded on every page this could eventually run on, and this
+// file is meant to work standalone. A label with no comma (a custom
+// rename, or a plain postcode) is returned unchanged.
+function trimPlaceLabelCounty(label) {
+  const text = String(label || "");
+  const comma = text.indexOf(",");
+  return comma === -1 ? text : text.slice(0, comma).trim();
+}
+
+// Shared by the header's place chip and the headline card's own place
+// label (see renderHeadline) — one source of truth for "what do we call
+// the current place right now", so the two can never show a different
+// name for the same place.
+//
+// A saved place's own label wins if there is one; otherwise fall back
+// to whatever resolveLocation() last resolved this postcode to — for an
+// adopted map coordinate, that's the reverse-geocoded village/town name
+// once it's back (or the plain lat/lon before it arrives, or if it
+// never finds one) — before falling back to the raw postcode/coordinate
+// string itself, which only shows if neither of those exist yet (e.g.
+// the very first paint, before any lookup has had a chance to run at
+// all). County dropped from whichever of those wins — deliberately only
+// HERE, not in the dropdown menu (renderPlaceMenu) or Settings' own
+// list (renderPlacesList), which both still show a place's full label
+// directly: two same-named places in different counties need to stay
+// tellable apart exactly where you're choosing between them, same
+// reasoning tide/fishing's own county-dropping already follows.
+function currentPlaceLabel() {
+  const match = loadPlaces().find(place => place.postcode === state.postcode);
+  return trimPlaceLabelCounty(match ? match.label : (state.actual.coordLabel || state.postcode || "Set location"));
+}
+
 function renderPlaceChip() {
   if (!placeChipLabel) return;
-  const match = loadPlaces().find(place => place.postcode === state.postcode);
-  // A saved place's own label wins if there is one; otherwise fall back
-  // to whatever resolveLocation() last resolved this postcode to —
-  // for an adopted map coordinate, that's the reverse-geocoded village/
-  // town name once it's back (or the plain lat/lon before it arrives,
-  // or if it never finds one) — before falling back to the raw
-  // postcode/coordinate string itself, which only shows if neither of
-  // those exist yet (e.g. the very first paint, before any lookup has
-  // had a chance to run at all).
-  placeChipLabel.textContent = match ? match.label : (state.actual.coordLabel || state.postcode || "Set location");
+  placeChipLabel.textContent = currentPlaceLabel();
 }
 
 function closePlaceMenu() {
@@ -5806,6 +7196,58 @@ function renderPlacesList() {
 
     row.appendChild(info);
 
+    // Only offered for a real postcode-shaped place — a plain place name
+    // resolves to rounded coordinates (see resolveLocation), not an
+    // outward code, and the whole point of the shared favourite list is
+    // never putting anything less anonymous than that in the public
+    // repo. See outwardCodeOf() and favourite-relay-worker.js.
+    const outcode = outwardCodeOf(place.postcode);
+    if (outcode) {
+      const favouritesAdded = loadFavouritesAdded();
+      const alreadyFavourited = favouritesAdded.includes(outcode);
+      const atLocalCap = favouritesAdded.length >= FAVOURITES_PER_PERSON_CAP;
+
+      // A filled star alone was too easy to miss at a glance (confirmed
+      // in testing) — this text badge makes "already favourited" legible
+      // without needing to notice a colour change. info is already
+      // appended to row above, but it's still a live reference, so
+      // appending to it here still lands in the right place.
+      if (alreadyFavourited) {
+        const badge = document.createElement("span");
+        badge.className = "place-row-favourite-badge";
+        badge.textContent = "★ Shared favourite";
+        info.appendChild(badge);
+      }
+
+      const favBtn = document.createElement("button");
+      favBtn.type = "button";
+      favBtn.className = "place-row-favourite" + (alreadyFavourited ? " is-favourited" : "");
+      favBtn.textContent = alreadyFavourited ? "★" : "☆";
+      favBtn.setAttribute("aria-label", alreadyFavourited
+        ? `${outcode} is in the shared favourites`
+        : `Add ${outcode} to shared favourites`);
+      favBtn.disabled = alreadyFavourited || (atLocalCap && !alreadyFavourited);
+      favBtn.title = alreadyFavourited
+        ? "Already in the shared favourites"
+        : atLocalCap
+          ? `You've added your ${FAVOURITES_PER_PERSON_CAP} favourites already`
+          : "Add to shared favourites (visible to everyone using this app)";
+      favBtn.addEventListener("click", async () => {
+        favBtn.disabled = true;
+        favBtn.textContent = "…";
+        const result = await postFavourite("weather", outcode);
+        if (result.ok || result.alreadyExists) {
+          saveFavouritesAdded([...loadFavouritesAdded(), outcode]);
+          renderPlacesList();
+        } else {
+          favBtn.disabled = false;
+          favBtn.textContent = "☆";
+          alert(result.full ? result.message : (result.error || "Couldn't add that favourite."));
+        }
+      });
+      row.appendChild(favBtn);
+    }
+
     const switchBtn = document.createElement("button");
     switchBtn.type = "button";
     switchBtn.className = "place-row-switch";
@@ -5820,6 +7262,10 @@ function renderPlacesList() {
     removeBtn.setAttribute("aria-label", `Remove ${place.label}`);
     removeBtn.textContent = "✕";
     removeBtn.addEventListener("click", () => {
+      // Deliberately does NOT touch the shared favourites list or this
+      // device's own favouritesAdded record — favourites are sticky by
+      // design (agreed: removing a locally saved place shouldn't pull
+      // it out from under anyone else relying on the same shared slot).
       savePlaces(loadPlaces().filter(saved => saved.postcode !== place.postcode));
       renderPlacesList();
       renderPlaceMenu();
@@ -5971,6 +7417,44 @@ if (useMyLocationButton) {
 }
 
 if (placesList) renderPlacesList();
+
+// Frees up this device's favourite slots when a favourite has since been
+// removed from the shared list (by hand-editing data/precache-config.json
+// on GitHub - there's no in-app delete). Without this, each device kept
+// counting a removed favourite against its own 4-per-person limit
+// forever, and kept showing it as "★ Shared favourite".
+//
+// Reads the same copy of precache-config.json the site itself serves
+// (a plain relative path, so it keeps working if the repo is ever
+// renamed or moved again). The service worker hands back its cached copy
+// first and refreshes it in the background, so a removal may take one
+// extra app-open to show up. Offline or any failure: does nothing, and
+// the device's list stays exactly as it was.
+async function syncFavouritesAddedWithShared() {
+  const local = loadFavouritesAdded();
+  if (!local.length) return;
+  try {
+    const res = await fetchWithTimeout("data/precache-config.json");
+    if (!res.ok) return;
+    const config = await res.json();
+    const shared = new Set(
+      [...(config.weatherFavourites || []), ...(config.fishingFavourites || [])]
+        .map(f => String(f.outcode || "").toUpperCase())
+    );
+    // A list with nothing in it at all is more likely a bad read than a
+    // genuine "everything was deleted" - leave things alone rather than
+    // wipe every slot on a fluke.
+    if (!shared.size) return;
+    const kept = local.filter(code => shared.has(String(code).toUpperCase()));
+    if (kept.length !== local.length) {
+      saveFavouritesAdded(kept);
+      if (placesList) renderPlacesList();
+    }
+  } catch {
+    // offline or unreadable - leave this device's list as it is
+  }
+}
+syncFavouritesAddedWithShared();
 
 if (rollback) {
   updateSliderFill(rollback);
