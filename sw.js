@@ -553,9 +553,19 @@
 // Bumped to v138: Visibility cell shows a bold number like the other
 // cells, with the word in smaller text.
 // Bumped to v139: front-page Sunshine label shortened to "Sun hrs".
-const SHELL_CACHE_NAME = "cloude-shell-v139";
+// Bumped to v140: Visibility label shortened to "Vis km" so it can't
+// wrap on a narrow phone; its number now rounds down so it always
+// agrees with the word beside it; solar.html / solar.js / solar-ui.js /
+// apple-touch-icon.png added to SHELL_FILES now they're confirmed to
+// exist (see the v59 note), so Solar works offline without having to
+// be opened online first.
+const SHELL_CACHE_NAME = "cloude-shell-v140";
 const SHELL_FILES = [
   "index.html",
+  "solar.html",
+  "solar.js",
+  "solar-ui.js",
+  "apple-touch-icon.png",
   "compare.html",
   "settings.html",
   "help.html",

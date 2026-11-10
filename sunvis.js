@@ -11,9 +11,9 @@
 // app.
 //
 // Visibility: Open-Meteo's forecast for the hour on the hour slider, in
-// shipping-forecast words (Good over 10 km, Moderate 4–10 km, Poor
-// 1–4 km, Very poor under 1 km) with the distance beside it in the unit
-// chosen in Settings → Units (km or miles). Forecast only, so it shows
+// a bold distance in the unit chosen in Settings → Units (km or miles),
+// with shipping-forecast words beside it (Good over 10 km, Moderate
+// 4–10 km, Poor 1–4 km, Very poor under 1 km). Forecast only, so it shows
 // "—" when the Date slider is off today.
 //
 // Kept in its own file so it can't disturb app.js.
@@ -63,8 +63,12 @@ function sunVisUsesMiles() {
 // changes size as it moves). Under 1 gets a decimal so fog doesn't just
 // read "0".
 function sunVisDistanceNumber(metres) {
+  // Rounded DOWN, never up, so the number can't disagree with the word
+  // beside it: rounding to nearest showed 9.6 km as "10 Moderate" and
+  // 0.96 km as "1.0 Very poor". Erring low is also the safer way round
+  // for visibility.
   const value = sunVisUsesMiles() ? metres / 1609.344 : metres / 1000;
-  return value < 1 ? value.toFixed(1) : String(Math.round(value));
+  return value < 1 ? (Math.floor(value * 10) / 10).toFixed(1) : String(Math.floor(value));
 }
 
 function sunVisDistanceText(metres) {
@@ -184,8 +188,10 @@ function buildSunVisHeadlineCell(conditionName) {
   }
 
   if (conditionName === "visibility") {
-    // Unit on the label line like every other cell ("VISIBILITY KM").
-    const { cell, valueEl, valueRow } = sunVisCellShell("visibility", sunVisUsesMiles() ? "Visibility mi" : "Visibility km");
+    // Unit on the label line like every other cell. Shortened to "Vis"
+    // (10 Nov) for the same reason Sunshine became "Sun hrs": the longer
+    // "VISIBILITY KM" wrapped onto two lines on a narrow phone.
+    const { cell, valueEl, valueRow } = sunVisCellShell("visibility", sunVisUsesMiles() ? "Vis mi" : "Vis km");
     if ((state.rollback || 0) !== 0) {
       valueEl.textContent = "—";
       return cell;
