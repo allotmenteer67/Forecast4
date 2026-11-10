@@ -552,7 +552,8 @@
 // missing after returning from the map or Callout.
 // Bumped to v138: Visibility cell shows a bold number like the other
 // cells, with the word in smaller text.
-const SHELL_CACHE_NAME = "cloude-shell-v138";
+// Bumped to v139: front-page Sunshine label shortened to "Sun hrs".
+const SHELL_CACHE_NAME = "cloude-shell-v139";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

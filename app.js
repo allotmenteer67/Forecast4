@@ -3649,7 +3649,9 @@ function median(values) {
 // started eating into the same width — see the label-building code
 // below for the full reasoning. CONFIG.conditions[name].name (the full
 // "Temperature"/"Pressure") is untouched and still used everywhere else.
-const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Press", feelsLike: "Feels" };
+// Sunshine added 10 Nov: "SUNSHINE HRS" wrapped onto two lines on a phone,
+// making that cell taller than its neighbours; "SUN HRS" fits on one.
+const HEADLINE_LABEL_NAME = { temperature: "Temp", pressure: "Press", feelsLike: "Feels", sunshine: "Sun" };
 
 const HEADLINE_CELL_ICONS = {
   // Half sun on the horizon with up/down ticks: sunrise and sunset.
