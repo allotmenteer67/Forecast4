@@ -575,7 +575,14 @@
 // the card full width on the time slider, the crossing circle centred in
 // the clear map above it, and bearing letters where each line comes on
 // screen (so A and B tell apart at night).
-const SHELL_CACHE_NAME = "cloude-shell-v142";
+// Bumped to v143: Coast map's nearest dry ground and way off follow the
+// slider ("Nearest dry ground at 11:50", "cut by then"), and the "now"
+// figures are worked out again as time passes instead of staying as
+// they were when the pin was set.
+// Bumped to v144: "Nearest open way off" — the nearest way off that's
+// still open (now, or at the slider's time), not just the nearest; if
+// every one is cut, the nearest, marked "all cut". Callout matches.
+const SHELL_CACHE_NAME = "cloude-shell-v144";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

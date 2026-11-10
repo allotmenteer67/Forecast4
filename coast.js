@@ -902,28 +902,75 @@ function computeFix() {
 }
 
 // Nearest dry ground (now) and nearest way off, saved with the pin so
-// the callout screen can show them.
+// the callout screen can show them. Worked out again whenever "now"
+// moves on (it used to stay as it was when the pin was set, however
+// much the tide had changed since).
 async function describePin() {
   const pin = coast.pin;
   if (!pin || !coast.index) return;
   const shore = await nearestDryGround(pin);
   if (coast.pin !== pin) return; // moved meanwhile
-  let way = null;
-  for (const a of coast.access) {
-    const d = distanceM(pin, a);
-    if (!way || d < way.distM) way = { distM: d, a };
-  }
   pin.shore = shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), bearingM: Math.round(trueToMag(bearingT(pin, shore))) % 360, lat: shore.lat, lon: shore.lon } : null;
-  if (way) {
-    const ct = cutTimeFromNow(way.a.foot);
-    pin.wayOff = {
-      distM: Math.round(way.distM), bearing: bearingT(pin, way.a), bearingM: Math.round(trueToMag(bearingT(pin, way.a))) % 360, lat: way.a.lat, lon: way.a.lon,
-      kind: way.a.kind, cut: ct ? (ct.state === "now" ? "cut now" : ct.state === "at" ? `cut ${clockTime(ct.time)}` : "above high tide") : null
-    };
-  } else pin.wayOff = null;
+  // The nearest way off still open now, not just the nearest.
+  pin.wayOff = pickWayOff(pin, cutTimeFromNow, "now");
   savePins();
   updatePinCard();
+  scheduleAhead();
 }
+
+// The nearest way off that's still open at the time (cut, from the
+// cut-time function given: now, or the slider's time). If every way off
+// is cut, the nearest one, marked so. Without a tide, simply the nearest.
+function pickWayOff(pin, cutFn, cutWord) {
+  const all = coast.access.map(a => ({ a, distM: distanceM(pin, a), ct: cutFn(a.foot) }))
+    .sort((p, q) => p.distM - q.distM);
+  if (!all.length) return null;
+  const open = all.find(w => !w.ct || w.ct.state !== "now");
+  const w = open || all[0];
+  const cut = !w.ct ? null
+    : !open ? `all cut ${cutWord}`
+    : w.ct.state === "at" ? `cut ${clockTime(w.ct.time)}` : "above high tide";
+  return {
+    distM: Math.round(w.distM), bearing: bearingT(pin, w.a), bearingM: Math.round(trueToMag(bearingT(pin, w.a))) % 360,
+    lat: w.a.lat, lon: w.a.lon, kind: w.a.kind, cut, allCut: !open && !!w.ct,
+    open: !!open && !!w.ct  // known to be open (needs the tide)
+  };
+}
+
+// ---- The same, for the slider's time ----
+// With the slider ahead of now, the card's dry ground and way off are
+// for that time ("Nearest dry ground at 07:50"), and "show" draws the
+// route to that time's dry ground. The pin itself keeps the values for
+// now, which the Callout screen shows.
+let aheadTimer = null, aheadGen = 0;
+function scheduleAhead() {
+  clearTimeout(aheadTimer);
+  aheadTimer = setTimeout(computeAhead, 120); // waits for the slider to settle
+}
+async function computeAhead() {
+  const gen = ++aheadGen;
+  const pin = coast.pin;
+  if (!pin || coast.offsetMin === 0 || !coast.index) {
+    if (coast.ahead) { coast.ahead = null; updatePinCard(); queueDraw(); }
+    return;
+  }
+  const when = slideTime();
+  const shore = await nearestDryGround(pin, when);
+  if (gen !== aheadGen || coast.pin !== pin) return; // slider or pin moved meanwhile
+  const wayOff = pickWayOff(pin, cutTime, "by then"); // open at the slider's time
+  coast.ahead = {
+    pin, atMs: when.getTime(), wayOff,
+    shore: shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), lat: shore.lat, lon: shore.lon } : null
+  };
+  updatePinCard();
+  queueDraw();
+}
+// What the card and route lines show: the slider's time when it's ahead.
+function shownAhead() {
+  return coast.offsetMin !== 0 && coast.ahead && coast.ahead.pin === coast.pin ? coast.ahead : null;
+}
+function shownShore() { const a = shownAhead(); return a ? a.shore : coast.pin && coast.pin.shore; }
+function shownWayOff() { const a = shownAhead(); return a ? a.wayOff : coast.pin && coast.pin.wayOff; }
 
 // Cut time from the real "now", whatever the slider says.
 function cutTimeFromNow(footOd) {
@@ -937,9 +984,9 @@ function cutTimeFromNow(footOd) {
 // Searches the detailed tiles within ~1.5 km of the point for the
 // closest ground that's dry at the current real time; beyond that, the
 // coarse land outline. Returns { lat, lon, distM } or null.
-async function nearestDryGround(pt) {
+async function nearestDryGround(pt, when = new Date()) {
   const g = coast.index.grid, T = g.tileSize;
-  const now = tideOdAt(new Date());
+  const now = tideOdAt(when);
   const row = Math.floor((g.north - pt.lat) / g.dLat);
   const col = Math.floor((pt.lon - g.west) / g.dLon);
   const tr = Math.floor(row / T), tc = Math.floor(col / T);
@@ -1097,12 +1144,16 @@ function updatePinCard() {
     lines.push(`<div class="pc-title pc-pos"><span class="pc-pin" style="background:${c.bg}"></span><b>${escapeHtml(pos)}</b><span class="pc-gap"></span>` +
       `<button class="pc-mini" type="button" data-rename="${i}">Name</button>${many ? `<button class="pc-mini" type="button" data-remove="${i}" aria-label="Remove ${escapeHtml(pin.label)}">✕</button>` : ""}</div>`);
     if (pin.source && !isGrid) lines.push(`<div class="pc-dim">Reported: ${escapeHtml(pin.source)}</div>`);
-    const p = pin;
-    // These two lines can be tapped to draw the route from the pin.
-    if (p.shore && p.shore.distM < 10) lines.push(`<div class="pc-dim">On dry ground now</div>`);
-    else if (p.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(p.shore.distM)}</b> ${bearingText(p.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
+    // For now, or for the slider's time when it's ahead (labelled with
+    // the time those figures are for). These two lines can be tapped to
+    // draw the route from the pin.
+    const ah = shownAhead();
+    const at = ah ? `at ${clockTime(new Date(ah.atMs))}` : "now";
+    const shore = shownShore(), wayOff = shownWayOff();
+    if (shore && shore.distM < 10) lines.push(`<div class="pc-dim">On dry ground ${at}</div>`);
+    else if (shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground ${at}: <b>${distText(shore.distM)}</b> ${bearingText(shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
     else if (!coast.tide) lines.push(`<div class="pc-dim">Nearest dry ground: needs the tide, which hasn't loaded</div>`);
-    if (p.wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">Nearest way off: <b>${distText(p.wayOff.distM)}</b> ${bearingText(p.wayOff.bearing)}${p.wayOff.cut ? ` · ${p.wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
+    if (wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">${wayOff.open ? "Nearest open way off" : "Nearest way off"}: <b>${distText(wayOff.distM)}</b> ${bearingText(wayOff.bearing)}${wayOff.cut ? ` · ${wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
   }
   const hideLines = !!(meOn() && coast.me);
   // With Me on, the card keeps to the boat, the track and the target:
@@ -1163,7 +1214,7 @@ function updatePinCard() {
   on(".pc-tap", el => {
     const which = el.dataset.show;
     coast.show[which] = !coast.show[which];
-    const target = which === "shore" ? coast.pin && coast.pin.shore : coast.pin && coast.pin.wayOff;
+    const target = which === "shore" ? shownShore() : shownWayOff();
     if (coast.show[which] && target && typeof target.lat === "number") fitPinAnd(target);
     updatePinCard();
   });
@@ -2331,8 +2382,8 @@ function drawPinAndMe() {
   const { ctx } = coast;
   const pin = coast.pin, me = coast.me;
   drawBearingLine();
-  if (pin && coast.show.shore) drawRouteLine(pin.shore, "#ffe08a");
-  if (pin && coast.show.way) drawRouteLine(pin.wayOff, "#5fe08a");
+  if (pin && coast.show.shore && shownShore()) drawRouteLine(shownShore(), "#ffe08a");
+  if (pin && coast.show.way && shownWayOff()) drawRouteLine(shownWayOff(), "#5fe08a");
   if (me) drawTrack();
   if (me && typeof drawCompassWedge === "function") drawCompassWedge();
   if (me) {
@@ -2687,6 +2738,7 @@ function setUpSlider() {
     coast.offsetMin = Number(s.value) * SLIDER_STEP_MIN;
     updateTimeLabel();
     queueDraw();
+    scheduleAhead();
   });
   const backToNow = () => {
     resetBaseTime();
@@ -2695,6 +2747,7 @@ function setUpSlider() {
     updateTimeLabel();
     invalidateTiles();
     queueDraw();
+    scheduleAhead(); // back to the "now" figures
   };
   $("coastAhead").addEventListener("click", () => { if (coast.offsetMin !== 0) backToNow(); });
   // Keep "now" moving while the slider is at now. The once-a-minute
@@ -2707,7 +2760,7 @@ function setUpSlider() {
     if (coast.offsetMin !== 0) return;
     const before = coast.baseTime;
     resetBaseTime();
-    if (coast.baseTime !== before) { updateTimeLabel(); invalidateTiles(); queueDraw(); }
+    if (coast.baseTime !== before) { updateTimeLabel(); invalidateTiles(); queueDraw(); if (coast.pin) describePin(); }
   };
   setInterval(tick, 30000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
