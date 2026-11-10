@@ -58,6 +58,15 @@ function sunVisUsesMiles() {
   return typeof conditionUnit === "function" && conditionUnit("visibility") === "imperial";
 }
 
+// The bold headline figure on its own, matching the other cells (which
+// put the unit on the label line, e.g. "RAIN MM", so only the number
+// changes size as it moves). Under 1 gets a decimal so fog doesn't just
+// read "0".
+function sunVisDistanceNumber(metres) {
+  const value = sunVisUsesMiles() ? metres / 1609.344 : metres / 1000;
+  return value < 1 ? value.toFixed(1) : String(Math.round(value));
+}
+
 function sunVisDistanceText(metres) {
   if (sunVisUsesMiles()) {
     const miles = metres / 1609.344;
@@ -175,7 +184,8 @@ function buildSunVisHeadlineCell(conditionName) {
   }
 
   if (conditionName === "visibility") {
-    const { cell, valueEl, valueRow } = sunVisCellShell("visibility", "Visibility");
+    // Unit on the label line like every other cell ("VISIBILITY KM").
+    const { cell, valueEl, valueRow } = sunVisCellShell("visibility", sunVisUsesMiles() ? "Visibility mi" : "Visibility km");
     if ((state.rollback || 0) !== 0) {
       valueEl.textContent = "—";
       return cell;
@@ -186,14 +196,15 @@ function buildSunVisHeadlineCell(conditionName) {
       valueEl.textContent = "—";
       return cell;
     }
-    valueEl.textContent = sunVisWord(metres);
+    // Bold number as the headline figure, as on the other cells, with
+    // the word (Good / Moderate / Poor / Very poor) in smaller text after
+    // it. Was the other way round (bold word, small distance) until 9 Nov.
+    valueEl.textContent = sunVisDistanceNumber(Math.max(0, metres));
     valueEl.style.whiteSpace = "nowrap";
-    if (metres >= 0) {
-      const dist = document.createElement("span");
-      dist.textContent = sunVisDistanceText(metres);
-      dist.style.cssText = "font-size:0.8em;font-weight:600;opacity:0.75;white-space:nowrap;";
-      valueRow.appendChild(dist);
-    }
+    const word = document.createElement("span");
+    word.textContent = sunVisWord(metres);
+    word.style.cssText = "font-size:0.8em;font-weight:600;opacity:0.75;white-space:nowrap;";
+    valueRow.appendChild(word);
     return cell;
   }
   return null;

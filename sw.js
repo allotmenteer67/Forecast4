@@ -550,7 +550,9 @@
 // check line removed.
 // Bumped to v137: front-page Visibility / Sunrise cells no longer go
 // missing after returning from the map or Callout.
-const SHELL_CACHE_NAME = "cloude-shell-v137";
+// Bumped to v138: Visibility cell shows a bold number like the other
+// cells, with the word in smaller text.
+const SHELL_CACHE_NAME = "cloude-shell-v138";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
