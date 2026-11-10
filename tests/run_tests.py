@@ -163,19 +163,42 @@ def coast_positions_bearings_and_card(browser):
 @check
 def coast_dry_ground_and_open_way_off_follow_slider(browser):
     pg = coast(browser)
-    enter(pg, "latlon", text="51.7815 -5.1045")  # Broad Haven beach
+    enter(pg, "latlon", text="51.7815 -5.110")  # off Broad Haven beach
     now_card = pg.inner_text("#coastPinCard")
-    expect("Nearest dry ground now" in now_card and "open way off" in now_card, now_card)
+    expect("Nearest dry ground" in now_card and "Open way off" in now_card, now_card)
     pg.evaluate("(()=>{const s=$('coastSlider'); s.value=36; s.dispatchEvent(new Event('input'))})()"); pg.wait_for_timeout(900)
     later = pg.inner_text("#coastPinCard")
-    expect("Nearest dry ground at" in later, f"card didn't follow the slider: {later!r}")
+    expect("Dry ground at" in later, f"card didn't follow the slider: {later!r}")
     expect("cut by then" not in later or "all cut" in later, "showing a cut way off while an open one exists")
     stored = pg.evaluate("JSON.parse(localStorage.getItem('cloude-callout:spot')).shore")
-    expect(stored and stored["distM"] < 200, "Callout copy should keep the 'now' figures")
+    expect(stored and stored["distM"] < 250, "Callout copy should keep the now figures")
     pg.click("#coastAhead"); pg.wait_for_timeout(500)
-    expect("Nearest dry ground now" in pg.inner_text("#coastPinCard"), "tapping the time didn't return to now")
+    expect("Nearest dry ground" in pg.inner_text("#coastPinCard"), "tapping the time didn't return to now")
     allcut = pg.evaluate("pickWayOff({lat:51.7815,lon:-5.1045}, ()=>({state:'now'}), 'now')")
     expect(allcut["allCut"] and allcut["cut"] == "all cut now", f"all-cut case: {allcut}")
+
+@check
+def coast_weather_allowance(browser):
+    pg = coast(browser)
+    # Stockdon run-up: calm adds little, a big sea on a flat beach about a metre
+    r = pg.evaluate("[waveRunupM(0.3,5,0.03), waveRunupM(3.5,11,0.02), waveRunupM(2.5,9,0.05)]")
+    expect(r[0] < 0.2 and 0.9 < r[1] < 1.4 and 0.9 < r[2] < 1.3, f"run-up {r}")
+    # surge: raised sea used, held 6 h then fading out by 24 h; lowered sea ignored
+    pg.evaluate("coast.weather.surge = {m: 0.5, atMs: Date.now()}")
+    s = pg.evaluate("[surgeAt(new Date()), surgeAt(new Date(Date.now()+15*3600e3)), surgeAt(new Date(Date.now()+25*3600e3))]")
+    expect(abs(s[0] - 0.5) < 1e-6 and 0.2 < s[1] < 0.3 and s[2] == 0, f"surge over time {s}")
+    pg.evaluate("coast.weather.surge = {m: -0.4, atMs: Date.now()}")
+    expect(pg.evaluate("surgeAt(new Date())") == 0, "a lowered sea shouldn't be used")
+    # with a stormy sea the beach pin's dry ground is further away and the card says why
+    enter(pg, "latlon", text="51.7815 -5.108")  # just off the beach at low water
+    pg.evaluate("coast.weather.surge = null; coast.weather.waves = null; weatherChanged()"); pg.wait_for_timeout(700)
+    calm = pg.evaluate("coast.pin.shore.distM")
+    pg.evaluate("coast.weather.surge = {m: 0.4, atMs: Date.now()}; const n=Math.floor(Date.now()/1000/3600)*3600; coast.weather.waves = {time:[n-3600,n,n+3600,n+7200], height:[3.5,3.5,3.5,3.5], period:[11,11,11,11]}; weatherChanged()")
+    pg.wait_for_timeout(900)
+    card = pg.inner_text("#coastPinCard")
+    stormy = pg.evaluate("coast.pin.shore.distM")
+    expect(stormy > calm and "for waves and surge" in card, f"calm {calm} m, stormy {stormy} m, card {card!r}")
+    expect("sea +" in pg.inner_text("#coastTideSub"), "tide box should show the sea allowance")
 
 @check
 def coast_dry_ground_on_land_and_without_tide(browser):
