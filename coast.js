@@ -927,10 +927,37 @@ function cutTimeFromNow(footOd) {
 async function nearestDryGround(pt) {
   const g = coast.index.grid, T = g.tileSize;
   const now = tideOdAt(new Date());
-  const cover = now === null ? 0 : codeFor(now);
   const row = Math.floor((g.north - pt.lat) / g.dLat);
   const col = Math.floor((pt.lon - g.west) / g.dLon);
   const tr = Math.floor(row / T), tc = Math.floor(col / T);
+  // A pin on ordinary land beyond the survey strip (a clifftop field,
+  // a lane) has no height, so it used to be sent to the nearest surveyed
+  // cliff edge — towards the sea. If the land outline says it's land and
+  // the survey has nothing there, it's on dry ground.
+  if (coast.mask) {
+    const own = coast.index.tiles.find(t => t.r === tr && t.c === tc);
+    let code = 0;
+    if (own) {
+      const e = tileEntry(own);
+      if (!e.codes) await decodeTile(e);
+      if (e.codes) code = e.codes[(row - tr * T) * T + (col - tc * T)];
+    }
+    // Surveyed ground 8 m or more above OD is above any tide or surge,
+    // so it's dry even when the tide hasn't loaded.
+    if (code >= codeFor(8)) return { lat: pt.lat, lon: pt.lon, distM: 0 };
+    if (code === 0) {
+      const m = coast.mask;
+      const mx = Math.floor((pt.lon - g.west) / m.dLon), my = Math.floor((g.north - pt.lat) / m.dLat);
+      if (mx >= 0 && my >= 0 && mx < m.canvas.width && my < m.canvas.height &&
+          m.canvas.getContext("2d").getImageData(mx, my, 1, 1).data[3] > 0) {
+        return { lat: pt.lat, lon: pt.lon, distM: 0 };
+      }
+    }
+  }
+  // No tide: no answer. Counting every surveyed cell as dry (as before)
+  // pointed people at seabed. The card says it needs the tide instead.
+  if (now === null) return null;
+  const cover = codeFor(now);
   let best = null;
   const near = coast.index.tiles.filter(t => Math.abs(t.r - tr) <= 1 && Math.abs(t.c - tc) <= 1);
   for (const meta of near) {
@@ -1061,7 +1088,9 @@ function updatePinCard() {
     if (pinGrid) lines.push(`<div class="pc-grid">Grid ref ${pinGrid}</div>`);
     if (p.source) lines.push(`<div class="pc-dim">Reported: ${escapeHtml(p.source)}</div>`);
     // These two lines can be tapped to draw the route from the pin.
-    if (p.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(p.shore.distM)}</b> ${bearingText(p.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
+    if (p.shore && p.shore.distM < 10) lines.push(`<div class="pc-dim">On dry ground now</div>`);
+    else if (p.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(p.shore.distM)}</b> ${bearingText(p.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
+    else if (!coast.tide) lines.push(`<div class="pc-dim">Nearest dry ground: needs the tide, which hasn't loaded</div>`);
     if (p.wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">Nearest way off: <b>${distText(p.wayOff.distM)}</b> ${bearingText(p.wayOff.bearing)}${p.wayOff.cut ? ` · ${p.wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
   });
   const hideLines = !!(meOn() && coast.me);
@@ -1143,8 +1172,21 @@ function escapeHtml(t) {
 // With no E/W given, a positive longitude is taken as west (this map is
 // in west Wales). Returns { lat, lon } or null.
 function parseLatLon(text) {
-  const t = String(text).toUpperCase().replace(/[°º′'’″"”:,;]/g, " ").replace(/\s+/g, " ").trim();
+  let t = String(text).toUpperCase().replace(/[°º′'’″"”:,;]/g, " ");
+  // A dash between figures is a separator, not a minus: "51-46.2N"
+  // was read as 51° minus 46.2′ (about 30 nm out). A minus sign at the
+  // start of a number still counts.
+  t = t.replace(/(\d)\s*[-–]\s*(\d)/g, "$1 $2");
+  // Dots as separators, "51.46.2N 5.08.7W": degrees.minutes.decimal.
+  t = t.replace(/(\d+)\.(\d+\.\d+)/g, "$1 $2");
+  t = t.replace(/\s+/g, " ").trim();
   if (!t) return null;
+  // Run-together degrees and minutes, as some GPS sets show it:
+  // "5146.2N 00508.7W" (ddmm.m dddmm.m).
+  const packed = /^([NS])?\s?(\d{2})(\d{2}(?:\.\d+)?)\s?([NS])?\s([EW])?\s?(\d{3})(\d{2}(?:\.\d+)?)\s?([EW])?$/.exec(t);
+  if (packed && (packed[1] || packed[4]) && (packed[5] || packed[8])) {
+    t = `${packed[2]} ${packed[3]}${packed[1] || packed[4]} ${packed[6]} ${packed[7]}${packed[5] || packed[8]}`;
+  }
   const hasS = /S/.test(t), hasE = /E/.test(t), hasW = /W/.test(t);
   // Split at the first longitude letter or into numbers.
   const nums = (t.match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
@@ -1154,6 +1196,11 @@ function parseLatLon(text) {
   else if (nums.length === 4) { lat = dm(nums[0], nums[1]); lon = dm(nums[2], nums[3]); if (nums[0] < 0) lat = -lat; if (nums[2] < 0) lon = -lon; }
   else if (nums.length === 6) { lat = dm(nums[0], nums[1], nums[2]); lon = dm(nums[3], nums[4], nums[5]); if (nums[0] < 0) lat = -lat; if (nums[3] < 0) lon = -lon; }
   else return null;
+  // Minutes or seconds of 60 or more mean a figure was misread or mistyped.
+  if (nums.length >= 4) {
+    const extra = nums.length === 4 ? [nums[1], nums[3]] : [nums[1], nums[2], nums[4], nums[5]];
+    if (extra.some(v => v < 0 || v >= 60)) return null;
+  }
   if (hasS && lat > 0) lat = -lat;
   if (hasW && lon > 0) lon = -lon;
   if (!hasE && !hasW && lon > 0) lon = -lon; // west Wales: assume west
@@ -1307,23 +1354,36 @@ function squareNote(g) {
   return g.squareM >= 10 ? ` (${g.squareM >= 1000 ? g.squareM / 1000 + " km" : g.squareM + " m"} square — its centre)` : "";
 }
 
+// Shown under a position that falls outside this map: almost always a
+// misread or mistyped figure.
+function outsideNote(p) {
+  const b = COAST_AREA.bounds;
+  if (!p || (p.lat <= b.north && p.lat >= b.south && p.lon >= b.west && p.lon <= b.east)) return "";
+  const mid = { lat: (b.north + b.south) / 2, lon: (b.west + b.east) / 2 };
+  return ` — ⚠ outside this map (${distText(distanceM(mid, p))} from it): check the figures`;
+}
+// What Set pin will do: add a pin, or move the selected one.
+function pinGoText() {
+  return coast.pins.length && !entryAsNew() ? `Move ${coast.pin ? coast.pin.label : "pin"} here` : "Set pin";
+}
+
 function updateEntryPreview() {
   const el = $("entPreview");
   if (coast.entry.mode === "latlon") {
     const text = $("entLatLonInput").value;
     const p = parseLatLon(text);
     const g = p ? null : gridEntry(text);
-    el.textContent = p ? `= ${degMin(p.lat, p.lon)}` : g ? `Grid ref ${g.text} = ${degMin(g.lat, g.lon)}` : (text ? "Can't read that yet" : "");
-    el.classList.toggle("bad", !p && !g && !!text);
-    $("entGo").textContent = "Set pin";
+    el.textContent = p ? `= ${degMin(p.lat, p.lon)}${outsideNote(p)}` : g ? `Grid ref ${g.text} = ${degMin(g.lat, g.lon)}${outsideNote(g)}` : (text ? "Can't read that yet" : "");
+    el.classList.toggle("bad", (!p && !g && !!text) || !!outsideNote(p || g));
+    $("entGo").textContent = pinGoText();
     return;
   }
   if (coast.entry.mode === "grid") {
     const text = $("entGridInput").value;
     const g = gridEntry(text);
-    el.textContent = g ? `= ${degMin(g.lat, g.lon)}${squareNote(g)}` : (text ? "Can't read that yet — two letters then the figures, e.g. SM 812 093" : "");
-    el.classList.toggle("bad", !g && !!text);
-    $("entGo").textContent = "Set pin";
+    el.textContent = g ? `= ${degMin(g.lat, g.lon)}${squareNote(g)}${outsideNote(g)}` : (text ? "Can't read that yet — two letters then the figures, e.g. SM 812 093" : "");
+    el.classList.toggle("bad", (!g && !!text) || !!outsideNote(g));
+    $("entGo").textContent = pinGoText();
     return;
   }
   const r = placeResult();
@@ -1346,8 +1406,9 @@ function updateEntryPreview() {
     $("entGo").textContent = `Draw bearing ${id}`;
     return;
   }
-  el.textContent = `Pin ${r.source} = ${degMin(r.point.lat, r.point.lon)}`;
-  $("entGo").textContent = "Set pin";
+  el.textContent = `Pin ${r.source} = ${degMin(r.point.lat, r.point.lon)}${outsideNote(r.point)}`;
+  el.classList.toggle("bad", !!outsideNote(r.point));
+  $("entGo").textContent = pinGoText();
 }
 
 function applyEntry() {
@@ -1428,6 +1489,7 @@ function setUpEntry() {
   document.querySelectorAll("#entUnits button").forEach(b => b.addEventListener("click", () => { coast.entry.unit = b.dataset.unit; renderEntry(); }));
   document.querySelectorAll("#entBType button").forEach(b => b.addEventListener("click", () => { coast.entry.bearingType = b.dataset.bt; renderEntry(); }));
   $("entGo").addEventListener("click", applyEntry);
+  $("entAsNew").addEventListener("change", updateEntryPreview);
   $("entPractice").addEventListener("click", applyPractice);
   $("entVariation").textContent = `Magnetic variation here: ${Math.abs(declinationNow()).toFixed(1)}° ${declinationNow() < 0 ? "W" : "E"} (WMM2025).`;
 }
@@ -1812,7 +1874,12 @@ async function loadNames() {
     }[k] ?? 6);
     const have = new Set((data.names || []).map(n => n.name));
     const extra = REFERENCE_PLACES.filter(r => !have.has(r.name)).map(r => ({ ...r, kind: "Villages and places", ref: true }));
-    coast.names = (data.names || []).concat(extra).sort((a, b) => rank(a.kind) - rank(b.kind));
+    // Within towns and villages, real villages and towns first, then
+    // hamlets and the rest: otherwise a hamlet earlier in the file
+    // (Walton West) took the space and Little Haven itself — the
+    // lifeboat's own village, on the opening view — wasn't labelled.
+    const sub = n => (n.kind === "Villages and places" && /^(town|village)$/i.test(n.detail || "")) ? 0 : 1;
+    coast.names = (data.names || []).concat(extra).sort((a, b) => rank(a.kind) - rank(b.kind) || sub(a) - sub(b));
   } catch {
     coast.names = REFERENCE_PLACES.map(r => ({ ...r, kind: "Villages and places", ref: true }));
   }
@@ -1824,8 +1891,18 @@ function tileEntry(meta) {
   return e;
 }
 
-async function decodeTile(e) {
-  if (e.loading || e.codes) return;
+// Anyone asking while a tile is already loading waits for that same
+// load (e.loadPromise) rather than getting back nothing: the nearest-dry-
+// ground search used to skip a tile the map happened to be loading at
+// that moment, so the answer depended on timing (850 m one go, 0 m the
+// next for the same pin).
+function decodeTile(e) {
+  if (e.codes) return Promise.resolve();
+  if (e.loadPromise) return e.loadPromise;
+  e.loadPromise = decodeTileNow(e).finally(() => { e.loadPromise = null; });
+  return e.loadPromise;
+}
+async function decodeTileNow(e) {
   e.loading = true;
   try {
     const img = await loadImage(COAST_TILE_DIR + e.meta.file);

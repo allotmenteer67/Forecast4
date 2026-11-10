@@ -579,7 +579,8 @@ function renderPinLine() {
   const pin = readJson(CALLOUT_SPOT_KEY, null);
   if (!pin || typeof pin.lat !== "number") { el.hidden = true; el.innerHTML = ""; return; }
   const parts = [];
-  if (pin.shore) parts.push(`dry ground <b>${pinDistText(pin.shore.distM)}</b> ${pinBearingText(pin.shore)}`);
+  if (pin.shore && pin.shore.distM < 10) parts.push("on dry ground");
+  else if (pin.shore) parts.push(`dry ground <b>${pinDistText(pin.shore.distM)}</b> ${pinBearingText(pin.shore)}`);
   if (pin.wayOff) parts.push(`way off <b>${pinDistText(pin.wayOff.distM)}</b> ${pinBearingText(pin.wayOff)}${pin.wayOff.cut ? ` (${pin.wayOff.cut})` : ""}`);
   if (pin.source) parts.unshift(`reported ${escapeHtml(pin.source)}`);
   el.innerHTML = `<span class="dot"></span><span class="pin-text">Pin set on the Coast map: weather and sea are for the pin${parts.length ? "<br>" + parts.join(" · ") : ""}</span><button id="calloutPinClear" type="button">Clear</button>`;

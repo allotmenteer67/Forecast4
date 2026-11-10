@@ -558,7 +558,13 @@
 // agrees with the word beside it; solar.html / solar.js / solar-ui.js /
 // apple-touch-icon.png added to SHELL_FILES now they're confirmed to
 // exist (see the v59 note), so Solar works offline without having to
-// be opened online first.
+// be opened online first. Coast map, same version: "nearest dry ground"
+// no longer guesses with no tide, says "On dry ground" for a pin on
+// land, and no longer depends on whether a tile was mid-load; lat/long
+// typed with dashes, dots or run together is read correctly, impossible
+// minutes are refused, and a position off the map is flagged; "Set pin"
+// says "Move Pin 1 here" when that's what it will do; Little Haven is
+// labelled on the opening view. Callout says "on dry ground" to match.
 const SHELL_CACHE_NAME = "cloude-shell-v140";
 const SHELL_FILES = [
   "index.html",
