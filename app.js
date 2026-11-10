@@ -2594,6 +2594,18 @@ function loadLocationData(force = false) {
       whenAllScriptsReady(() => {
         document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat: state.lat, lon: state.lon } }));
         if (typeof renderTideRow === "function") renderTideRow();
+        // Redraw the headline cells too. On this fast path the cells were
+        // first drawn from the saved snapshot while app.js was still
+        // loading, before sunvis.js (which builds the Visibility and
+        // Sunrise/set cells) existed, so those two cells were silently
+        // left out. Nothing else redraws the headline on this path, so
+        // they stayed missing: the 9 Nov "Visibility vanishes after
+        // visiting the map or Callout, back after a relaunch" report (a
+        // relaunch usually finds the snapshot too old for this path and
+        // takes the full load instead, which draws after everything has
+        // loaded). Same cause and same cure as the earlier tide fix just
+        // above.
+        if (typeof renderHeadline === "function") renderHeadline();
       });
       return Promise.resolve();
     }

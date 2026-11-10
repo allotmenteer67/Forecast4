@@ -548,7 +548,9 @@
 // temporary on-screen check line.
 // Bumped to v136: iPad clear line corrected to 40px and the temporary
 // check line removed.
-const SHELL_CACHE_NAME = "cloude-shell-v136";
+// Bumped to v137: front-page Visibility / Sunrise cells no longer go
+// missing after returning from the map or Callout.
+const SHELL_CACHE_NAME = "cloude-shell-v137";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
