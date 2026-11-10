@@ -582,7 +582,11 @@
 // Bumped to v144: "Nearest open way off" — the nearest way off that's
 // still open (now, or at the slider's time), not just the nearest; if
 // every one is cut, the nearest, marked "all cut". Callout matches.
-const SHELL_CACHE_NAME = "cloude-shell-v144";
+// Bumped to v145: Coast map allows for weather — predicted tide plus
+// surge (from the gauge) plus wave run-up (from the marine forecast and
+// the beach's slope) — for its colours, cut-offs, dry ground and ways
+// off; estimated beach now counts as dry ground (marked on the card).
+const SHELL_CACHE_NAME = "cloude-shell-v145";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

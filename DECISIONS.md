@@ -103,6 +103,18 @@ at night, sometimes with poor signal.
   - no distance between pins — the scale line is enough.
 - Nearest dry ground and way off follow the time slider, and the "now"
   figures update as time passes. The Callout screen always shows "now".
+- Weather allowance (Nov 2026): everything that asks "is this covered?" —
+  map colours, cut-offs, dry ground, ways off — uses the predicted tide
+  **plus surge plus wave run-up**. Surge = Milford Haven gauge's measured
+  level minus its prediction over the last hour, raised sea only (≥10 cm),
+  held 6 h then fading to nothing at 24 h. Run-up = Stockdon (2006) from
+  Open-Meteo marine wave height and peak period offshore and the beach's
+  own slope from the LiDAR. The tide box still shows the predicted tide,
+  with "sea +0.8 m" beside it. **Rejected:** a fixed safety margin — it
+  ignores the weather (0.5 m means something very different in a force 7).
+- Estimated beach (heights the LiDAR missed, filled in) counts as dry
+  ground, marked "Estimated beach" on the card; it used to be skipped,
+  which sent people the long way round.
 - Way off is the nearest **open** one (not just the nearest); if all are cut,
   the nearest, marked "all cut".
 - No dry-ground answer without the tide (it used to point at seabed); a pin

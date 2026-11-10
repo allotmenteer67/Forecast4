@@ -197,6 +197,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
 
 // ---- State ----
 const coast = {
+  weather: { surge: null, waves: null, viewSlope: null }, // see "Weather allowance"
   index: null,
   mask: null,          // { canvas, width, height }
   names: [],
@@ -484,6 +485,164 @@ function tideOdAt(date) {
   return applyTideFudge(predictTideLevel(t.fit, hours), t.fudge);
 }
 
+// ---- Weather allowance: surge and waves ----
+// The tide above is the predicted tide on a calm day. Real water comes
+// further up the beach when the weather holds the sea up (surge) and
+// when waves run up the beach. Everything that asks "is this covered?"
+// — the map's colours and cut-offs, dry ground, ways off — uses
+// waterOdAt(), which adds both. The tide box keeps showing the
+// predicted tide. Rough by nature: the wave forecast is coarse near the
+// shore, and the gauge is at the station, not the beach.
+const WAVES_KEY = `cloude-coast:waves:${COAST_AREA.id}`;
+const DEFAULT_BEACH_SLOPE = 0.04;          // about 1 in 25, if the ground can't say
+
+// Surge: the gauge's latest measured level against its own prediction,
+// averaged over the last hour of readings. Only a raised sea is used
+// (a lowered one would make things look safer than the tide tables), and
+// only 10 cm or more (smaller is within the prediction's own error).
+// It's held for 6 hours, then fades out by 24 hours.
+async function loadSurge() {
+  const t = coast.tide;
+  if (!t || !t.station || !t.gaugeFit || typeof EA_READINGS_BASE === "undefined") return;
+  try {
+    const res = await fetchWithTimeout(`${EA_READINGS_BASE}/${t.station.measureId}/readings?_sorted&_limit=8`, {}, 15000);
+    if (!res.ok) return;
+    const data = await res.json();
+    const rs = (data.items || []).map(i => ({ ms: Date.parse(i.dateTime), level: i.value }))
+      .filter(r => typeof r.level === "number" && r.ms > Date.now() - 3 * 3600000).sort((a, b) => b.ms - a.ms).slice(0, 4);
+    if (!rs.length) { coast.weather.surge = null; return; }
+    const resid = rs.map(r => r.level - applyTideFudge(predictTideLevel(t.gaugeFit, (r.ms - t.gaugeEpochMs) / 3600000), t.gaugeFudge));
+    coast.weather.surge = { m: resid.reduce((a, b) => a + b, 0) / resid.length, atMs: rs[0].ms };
+    weatherChanged();
+  } catch { /* no signal: no surge allowance */ }
+}
+function surgeAt(date) {
+  const s = coast.weather.surge;
+  if (!s || s.m < 0.1) return 0;
+  const ageH = (date.getTime() - s.atMs) / 3600000;
+  const fade = ageH <= 6 ? 1 : ageH >= 24 ? 0 : (24 - ageH) / 18;
+  return Math.min(s.m, 2) * fade;
+}
+
+// Waves: Open-Meteo's marine forecast just offshore (the wind spot),
+// kept on the phone so it still works with no signal.
+async function loadWaves() {
+  const saved = readJson(WAVES_KEY, null);
+  if (saved && saved.time && saved.time[saved.time.length - 1] > Date.now() / 1000 + 12 * 3600 && Date.now() - saved.fetchedAt < 3 * 3600000) {
+    coast.weather.waves = saved; weatherChanged(); return;
+  }
+  try {
+    const spot = windSpot();
+    const url = "https://marine-api.open-meteo.com/v1/marine" +
+      `?latitude=${spot.lat}&longitude=${spot.lon}` +
+      "&hourly=wave_height,wave_period,wave_peak_period&timeformat=unixtime&timezone=UTC&past_days=1&forecast_days=2";
+    const res = await fetchWithTimeout(url, {}, 15000);
+    if (res.ok) {
+      const h = (await res.json()).hourly;
+      if (h && Array.isArray(h.time)) {
+        coast.weather.waves = { fetchedAt: Date.now(), time: h.time, height: h.wave_height, period: h.wave_peak_period || h.wave_period, meanPeriod: h.wave_period };
+        writeJson(WAVES_KEY, coast.weather.waves);
+      }
+    }
+  } catch { /* no signal */ }
+  if (!coast.weather.waves && saved) coast.weather.waves = saved;
+  weatherChanged();
+}
+// Wave height (m) and period (s) at a time, or null.
+function wavesAt(date) {
+  const w = coast.weather.waves;
+  if (!w) return null;
+  const t = date.getTime() / 1000;
+  let i = -1;
+  for (let k = 0; k < w.time.length; k++) if (w.time[k] <= t) i = k;
+  if (i < 0 || t - w.time[i] > 3 * 3600) return null;
+  const j = Math.min(i + 1, w.time.length - 1), f = j > i ? (t - w.time[i]) / (w.time[j] - w.time[i]) : 0;
+  const lerp = (a, b) => typeof a === "number" && typeof b === "number" ? a + (b - a) * f : (typeof a === "number" ? a : null);
+  const H = lerp(w.height[i], w.height[j]);
+  let T = lerp(w.period[i], w.period[j]);
+  if (T === null && w.meanPeriod) T = lerp(w.meanPeriod[i], w.meanPeriod[j]);
+  return H === null || T === null ? null : { H, T };
+}
+// How far up the beach waves reach above the still water, from wave
+// height, period and the beach's slope (Stockdon et al. 2006, the
+// standard formula; it's the height the bigger waves reach, not every
+// wave). A flat beach and a big sea give the most.
+function waveRunupM(H, T, slope) {
+  if (!(H > 0) || !(T > 0)) return 0;
+  const L0 = 9.81 * T * T / (2 * Math.PI);
+  const HL = Math.sqrt(H * L0);
+  const iribarren = slope / Math.sqrt(H / L0);
+  if (iribarren < 0.3) return 0.043 * HL;
+  return 1.1 * (0.35 * slope * HL + Math.sqrt(H * L0 * (0.563 * slope * slope + 0.004)) / 2);
+}
+// The weather allowance at a time for a beach of this slope (tan).
+function allowanceAt(date, slope = coast.weather.viewSlope) {
+  const surge = surgeAt(date);
+  const w = wavesAt(date);
+  const runup = w ? waveRunupM(w.H, w.T, slope || DEFAULT_BEACH_SLOPE) : 0;
+  return { surge, runup, total: surge + runup, haveWaves: !!w };
+}
+// Water level the ground has to be above to count as dry: predicted
+// tide plus the weather allowance.
+function waterOdAt(date, slope) {
+  const t = tideOdAt(date);
+  return t === null ? null : t + allowanceAt(date, slope).total;
+}
+// The typical slope (tan) of the beach around a point, at the heights
+// the sea is reaching: from the decoded detailed tiles only.
+function beachSlopeNear(pt, tideOd) {
+  if (!coast.index) return null;
+  const g = coast.index.grid, T = g.tileSize;
+  const row = Math.floor((g.north - pt.lat) / g.dLat), col = Math.floor((pt.lon - g.west) / g.dLon);
+  const tr = Math.floor(row / T), tc = Math.floor(col / T);
+  const lo = codeFor(tideOd - 0.5), hi = codeFor(tideOd + 2.5);
+  const R = Math.round(500 / (g.dLat * KY)); // within about 500 m
+  const vals = [];
+  for (const meta of coast.index.tiles) {
+    if (Math.abs(meta.r - tr) > 1 || Math.abs(meta.c - tc) > 1) continue;
+    const e = tileEntry(meta);
+    if (!e.codes) continue;
+    for (let y = 0; y < T; y += 2) {
+      const gy = meta.r * T + y;
+      if (Math.abs(gy - row) > R) continue;
+      for (let x = 0; x < T; x += 2) {
+        const gx = meta.c * T + x;
+        if (Math.abs(gx - col) > R) continue;
+        const code = e.codes[y * T + x];
+        if (code === 0 || code < lo || code > hi) continue;
+        const deg = e.slopes[y * T + x];
+        if (deg >= IMPASSABLE_DEG) continue; // cliffs aren't beaches
+        vals.push(Math.tan(deg * Math.PI / 180));
+      }
+    }
+  }
+  if (vals.length < 30) return null;
+  vals.sort((a, b) => a - b);
+  return Math.min(0.25, Math.max(0.01, vals[Math.floor(vals.length / 2)]));
+}
+// The slope for the map's colours and cut-offs: the beach in the middle
+// of the view, checked again when the view settles.
+function updateViewSlope() {
+  if (!coast.tide) return;
+  const now = tideOdAt(slideTime());
+  const s = beachSlopeNear(coast.view, now);
+  if (s === null) return;
+  const old = coast.weather.viewSlope;
+  if (old && Math.abs(s - old) / old < 0.15) return;
+  coast.weather.viewSlope = s;
+  weatherChanged();
+}
+// Something in the allowance changed: redo everything that depends on it.
+function weatherChanged() {
+  if (!coast.tide) return;
+  buildSeries();
+  coast.cutoffKey = null;
+  invalidateTiles();
+  updateTimeLabel();
+  queueDraw();
+  if (coast.pin && typeof describePin === "function") describePin();
+}
+
 async function loadTide() {
   if (typeof nearestTideStation !== "function") return;
   const cfg = COAST_AREA.tide;
@@ -510,7 +669,8 @@ async function loadTide() {
         epochMs, fudge: null,
         cdOffset: local.cdOffset, baseCdOffset: local.cdOffset,
         label: station.label,
-        sourceText: `Tide for ${place}: ${station.label} gauge with ${place}'s Admiralty correction, as on the tide card (fit within ${Math.round(local.rmsM * 100)} cm)`
+        sourceText: `Tide for ${place}: ${station.label} gauge with ${place}'s Admiralty correction, as on the tide card (fit within ${Math.round(local.rmsM * 100)} cm)`,
+        station, gaugeFit: built.fit, gaugeFudge: fudge, gaugeEpochMs: epochMs
       };
     } else {
       coast.tide = {
@@ -522,7 +682,8 @@ async function loadTide() {
         fudge,
         cdOffset, baseCdOffset: cdOffset,
         label: station.label,
-        sourceText: `Tide from ${station.label}`
+        sourceText: `Tide from ${station.label}`,
+        station, gaugeFit: built.fit, gaugeFudge: fudge, gaugeEpochMs: epochMs
       };
       applyTideZone(true);
     }
@@ -535,15 +696,20 @@ async function loadTide() {
   updateTimeLabel();
   queueDraw();
   if (coast.tide && !coast.tide.fixed) loadTideZones().then(queueDraw);
+  if (coast.tide) { loadSurge(); loadWaves(); }
 }
 
 // Water level now and in 30 min, in m OD, for the slider time.
+// now/later include the weather allowance (what the map colours use);
+// tideNow/tideRate are the predicted tide alone, for the tide box.
 function levelsForSlider() {
   const t = slideTime();
-  const now = tideOdAt(t);
-  if (now === null) return null;
-  const later = tideOdAt(new Date(t.getTime() + 30 * 60000));
-  return { now, later, rate: (later - now) * 2 };
+  const tideNow = tideOdAt(t);
+  if (tideNow === null) return null;
+  const t2 = new Date(t.getTime() + 30 * 60000);
+  const tideLater = tideOdAt(t2);
+  const a1 = allowanceAt(t), a2 = allowanceAt(t2);
+  return { now: tideNow + a1.total, later: tideLater + a2.total, rate: (tideLater - tideNow) * 2, tideNow, allowance: a1 };
 }
 
 function setTideText(main, sub) {
@@ -642,12 +808,13 @@ function updateTimeLabel() {
   renderWind();
   const lv = levelsForSlider();
   if (!lv) return;
-  const shown = coast.tide.cdOffset !== null ? lv.now - coast.tide.cdOffset : lv.now;
+  const shown = coast.tide.cdOffset !== null ? lv.tideNow - coast.tide.cdOffset : lv.tideNow;
   const datum = coast.tide.cdOffset !== null ? "" : " (gauge datum)";
   const abs = Math.abs(lv.rate);
   const state = abs < 0.25 ? "Turning" : (lv.rate > 0 ? "Rising" : "Falling") + (abs >= 0.9 ? " fast" : "");
+  const extra = lv.allowance.total >= 0.1 ? ` · sea +${lv.allowance.total.toFixed(1)} m` : "";
   setTideText(`Tide ${shown.toFixed(1)} m${datum} · ${state}`,
-    `${lv.rate >= 0 ? "+" : "−"}${abs.toFixed(1)} m/h`);
+    `${lv.rate >= 0 ? "+" : "−"}${abs.toFixed(1)} m/h${extra}`);
   const bar = document.querySelector(".info-bar");
   if (bar) bar.title = coast.tide.sourceText || `Tide from ${coast.tide.label}`;
   renderNextTide(t);
@@ -910,7 +1077,8 @@ async function describePin() {
   if (!pin || !coast.index) return;
   const shore = await nearestDryGround(pin);
   if (coast.pin !== pin) return; // moved meanwhile
-  pin.shore = shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), bearingM: Math.round(trueToMag(bearingT(pin, shore))) % 360, lat: shore.lat, lon: shore.lon } : null;
+  pin.shore = shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), bearingM: Math.round(trueToMag(bearingT(pin, shore))) % 360, lat: shore.lat, lon: shore.lon,
+    estimated: !!shore.estimated, allowM: shore.allowM || 0, haveWaves: !!shore.haveWaves } : null;
   // The nearest way off still open now, not just the nearest.
   pin.wayOff = pickWayOff(pin, cutTimeFromNow, "now");
   savePins();
@@ -960,7 +1128,8 @@ async function computeAhead() {
   const wayOff = pickWayOff(pin, cutTime, "by then"); // open at the slider's time
   coast.ahead = {
     pin, atMs: when.getTime(), wayOff,
-    shore: shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), lat: shore.lat, lon: shore.lon } : null
+    shore: shore ? { distM: Math.round(shore.distM), bearing: bearingT(pin, shore), lat: shore.lat, lon: shore.lon,
+      estimated: !!shore.estimated, allowM: shore.allowM || 0, haveWaves: !!shore.haveWaves } : null
   };
   updatePinCard();
   queueDraw();
@@ -1017,28 +1186,41 @@ async function nearestDryGround(pt, when = new Date()) {
   // No tide: no answer. Counting every surveyed cell as dry (as before)
   // pointed people at seabed. The card says it needs the tide instead.
   if (now === null) return null;
-  const cover = codeFor(now);
   let best = null;
   const near = coast.index.tiles.filter(t => Math.abs(t.r - tr) <= 1 && Math.abs(t.c - tc) <= 1);
   for (const meta of near) {
     const e = tileEntry(meta);
     e.used = performance.now();
     if (!e.codes) await decodeTile(e);
+  }
+  // The water allowed for waves and surge, for this beach's own slope.
+  const slope = beachSlopeNear(pt, now) || DEFAULT_BEACH_SLOPE;
+  const allow = allowanceAt(when, slope);
+  const water = now + allow.total;
+  const cover = codeFor(water);
+  const unsurveyedDry = water < UNSURVEYED_DRY_OD;
+  for (const meta of near) {
+    const e = tileEntry(meta);
     if (!e.codes) continue;
     for (let y = 0; y < T; y++) {
       const gy = meta.r * T + y;
       for (let x = 0; x < T; x++) {
-        const code = e.codes[y * T + x];
-        if (code === 0 || code <= cover || e.flags[y * T + x] === FLAG_ESTIMATED) continue;
+        const i = y * T + x, code = e.codes[i];
+        // Measured ground above the water; ground the survey missed
+        // whose height was estimated (beaches, mostly) counts too, and is
+        // marked as estimated; so does unsurveyed foreshore once the
+        // water is well down, as on the map.
+        if (code === 0 ? !(unsurveyedDry && e.flags[i]) : code <= cover) continue;
         const gx = meta.c * T + x;
         const dy = (gy - row) * g.dLat * KY, dx = (gx - col) * g.dLon * KX;
         const d2 = dx * dx + dy * dy;
-        if (!best || d2 < best.d2) best = { d2, gy, gx };
+        if (!best || d2 < best.d2) best = { d2, gy, gx, est: code === 0 || e.flags[i] === FLAG_ESTIMATED };
       }
     }
   }
   if (best) {
-    return { lat: g.north - (best.gy + 0.5) * g.dLat, lon: g.west + (best.gx + 0.5) * g.dLon, distM: Math.sqrt(best.d2) };
+    return { lat: g.north - (best.gy + 0.5) * g.dLat, lon: g.west + (best.gx + 0.5) * g.dLon, distM: Math.sqrt(best.d2),
+             estimated: best.est, allowM: allow.total, haveWaves: allow.haveWaves };
   }
   if (!coast.mask) return null;
   const m = coast.mask, c = m.canvas;
@@ -1151,9 +1333,19 @@ function updatePinCard() {
     const at = ah ? `at ${clockTime(new Date(ah.atMs))}` : "now";
     const shore = shownShore(), wayOff = shownWayOff();
     if (shore && shore.distM < 10) lines.push(`<div class="pc-dim">On dry ground ${at}</div>`);
-    else if (shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground ${at}: <b>${distText(shore.distM)}</b> ${bearingText(shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
+    // Kept short so each fits one line on a small phone.
+    else if (shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">${ah ? `Dry ground ${at}` : "Nearest dry ground"}: <b>${distText(shore.distM)}</b> ${bearingText(shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
+    // Whether that's estimated ground, and what the water was allowed
+    // for, so the figure can be judged.
+    if (shore && shore.distM >= 10 && coast.tide) {
+      const bits = [];
+      if (shore.estimated) bits.push("Estimated beach");
+      if (shore.allowM >= 0.1) bits.push(`sea +${shore.allowM.toFixed(1)} m for waves and surge`);
+      else if (!shore.haveWaves) bits.push("no wave forecast: calm sea assumed");
+      if (bits.length) { const t = bits.join(" · "); lines.push(`<div class="pc-dim">${t[0].toUpperCase() + t.slice(1)}</div>`); }
+    }
     else if (!coast.tide) lines.push(`<div class="pc-dim">Nearest dry ground: needs the tide, which hasn't loaded</div>`);
-    if (wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">${wayOff.open ? "Nearest open way off" : "Nearest way off"}: <b>${distText(wayOff.distM)}</b> ${bearingText(wayOff.bearing)}${wayOff.cut ? ` · ${wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
+    if (wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">${wayOff.open ? "Open way off" : "Nearest way off"}: <b>${distText(wayOff.distM)}</b> ${bearingText(wayOff.bearing)}${wayOff.cut ? ` · ${wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
   }
   const hideLines = !!(meOn() && coast.me);
   // With Me on, the card keeps to the boat, the track and the target:
@@ -1715,7 +1907,7 @@ function buildSeries() {
   if (!coast.tide) { coast.series = null; return; }
   const n = SERIES_HOURS * 60 / SERIES_STEP_MIN + 1;
   const levels = new Float32Array(n);
-  for (let i = 0; i < n; i++) levels[i] = tideOdAt(new Date(coast.baseTime + i * SERIES_STEP_MIN * 60000));
+  for (let i = 0; i < n; i++) levels[i] = waterOdAt(new Date(coast.baseTime + i * SERIES_STEP_MIN * 60000));
   coast.series = { startMs: coast.baseTime, levels };
 }
 
@@ -1751,6 +1943,7 @@ function scheduleCutoff() {
 }
 
 function computeCutoff() {
+  updateViewSlope();
   if (!coast.index || coast.view.mpp > CUTOFF_MPP) { clearCutoff(); return; }
   const lv = levelsForSlider();
   if (!lv) { clearCutoff(); return; }
@@ -2854,7 +3047,7 @@ async function initCoast() {
   queueDraw();
   loadTide().then(() => { if (coast.pin) describePin(); });
   loadWind();
-  setInterval(() => { coast.windData = null; loadWind(); }, 30 * 60000);
+  setInterval(() => { coast.windData = null; loadWind(); if (coast.tide) { loadSurge(); loadWaves(); } }, 30 * 60000);
   prefetchAllTiles();
 }
 
