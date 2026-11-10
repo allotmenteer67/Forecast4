@@ -569,7 +569,13 @@
 // (the box on the map says Now, or "In 2 h · 07:30" — tap it to come back
 // to now); "now" catches up as soon as the map comes back to the front
 // instead of showing the time it was left at.
-const SHELL_CACHE_NAME = "cloude-shell-v141";
+// Bumped to v142: Coast map pin card redesigned — a coloured button per
+// pin (same colour as the pin and its name tag on the map), the selected
+// pin's position shown once as reported, bearings as small A/B/C buttons,
+// the card full width on the time slider, the crossing circle centred in
+// the clear map above it, and bearing letters where each line comes on
+// screen (so A and B tell apart at night).
+const SHELL_CACHE_NAME = "cloude-shell-v142";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

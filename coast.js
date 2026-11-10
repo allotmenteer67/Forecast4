@@ -97,6 +97,16 @@ const LINE_KEY = "cloude-coast:line"; // bearing lines with no distance (up to 3
 const PINS_KEY = "cloude-coast:pins"; // all pins (up to 3) and which is selected
 const MAX_PINS = 3, MAX_LINES = 3;
 const LINE_COLOURS = { A: "#ff9a3c", B: "#e6ef4a", C: "#c39bff" };
+// Each pin keeps its own colour (by its number, so removing one doesn't
+// recolour the rest): on the map, on its name tag and on its button on
+// the card. Dark, middling and bright on purpose: night mode turns every
+// colour into red by brightness, so they still tell apart at night.
+const PIN_COLOURS = [
+  { bg: "#e5484d", fg: "#ffffff" },  // Pin 1: red
+  { bg: "#5ce1e6", fg: "#0e1116" },  // Pin 2: teal
+  { bg: "#f4f1ea", fg: "#0e1116" }   // Pin 3: white
+];
+function pinColour(p) { return PIN_COLOURS[((p && p.id ? p.id : 1) - 1) % PIN_COLOURS.length]; }
 const BEARING_ERROR_DEG = 5; // allowed error in a reported bearing, for the circle round a fix
 // Magnetic variation (declination) for the area's middle from the World
 // Magnetic Model WMM2025, which is exactly linear in time over its life
@@ -1077,30 +1087,32 @@ function updatePinCard() {
   const lines = [];
   const pin = coast.pin;
   const many = coast.pins.length > 1;
-  coast.pins.forEach((p, i) => {
-    const selected = i === coast.sel;
-    if (!selected) {
-      // Other pins: one line, tap to select.
-      const rel = pin ? ` · ${distText(distanceM(pin, p))} ${bearingText(bearingT(pin, p))} from ${escapeHtml(pin.label)}` : "";
-      lines.push(`<div class="pc-other" data-sel="${i}"><span class="pc-pin other"></span>${escapeHtml(p.label)}<span class="pc-dim">${rel}</span><span class="pc-show">select</span></div>`);
-      return;
-    }
-    lines.push(`<div class="pc-title"><span class="pc-pin"></span>${many || p.label !== "Pin 1" ? `${escapeHtml(p.label)} · ` : "Pin · "}${degMin(p.lat, p.lon)}` +
-      ` <button class="pc-mini" type="button" data-rename="${i}">Name</button>${many ? ` <button class="pc-mini" type="button" data-remove="${i}" aria-label="Remove this pin">✕</button>` : ""}</div>`);
-    const pinGrid = gridText(p.lat, p.lon);
-    if (pinGrid) lines.push(`<div class="pc-grid">Grid ref ${pinGrid}</div>`);
-    if (p.source) lines.push(`<div class="pc-dim">Reported: ${escapeHtml(p.source)}</div>`);
+  // The pins themselves are buttons along the top (see below); only the
+  // selected pin's details show. Its position is shown once, the way it
+  // was reported: a grid ref stays a grid ref, anything else is lat/long.
+  if (pin) {
+    const i = coast.sel, c = pinColour(pin);
+    const isGrid = !!(pin.source && /^Grid ref /.test(pin.source));
+    const pos = isGrid ? pin.source.replace(/\s*\(.*\)$/, "") : degMin(pin.lat, pin.lon);
+    lines.push(`<div class="pc-title pc-pos"><span class="pc-pin" style="background:${c.bg}"></span><b>${escapeHtml(pos)}</b><span class="pc-gap"></span>` +
+      `<button class="pc-mini" type="button" data-rename="${i}">Name</button>${many ? `<button class="pc-mini" type="button" data-remove="${i}" aria-label="Remove ${escapeHtml(pin.label)}">✕</button>` : ""}</div>`);
+    if (pin.source && !isGrid) lines.push(`<div class="pc-dim">Reported: ${escapeHtml(pin.source)}</div>`);
+    const p = pin;
     // These two lines can be tapped to draw the route from the pin.
     if (p.shore && p.shore.distM < 10) lines.push(`<div class="pc-dim">On dry ground now</div>`);
     else if (p.shore) lines.push(`<div class="pc-tap${coast.show.shore ? " on" : ""}" data-show="shore">Nearest dry ground now: <b>${distText(p.shore.distM)}</b> ${bearingText(p.shore.bearing)}<span class="pc-show">${coast.show.shore ? "hide" : "show"}</span></div>`);
     else if (!coast.tide) lines.push(`<div class="pc-dim">Nearest dry ground: needs the tide, which hasn't loaded</div>`);
     if (p.wayOff) lines.push(`<div class="pc-tap way${coast.show.way ? " on" : ""}" data-show="way">Nearest way off: <b>${distText(p.wayOff.distM)}</b> ${bearingText(p.wayOff.bearing)}${p.wayOff.cut ? ` · ${p.wayOff.cut}` : ""}<span class="pc-show">${coast.show.way ? "hide" : "show"}</span></div>`);
-  });
+  }
   const hideLines = !!(meOn() && coast.me);
   // With Me on, the card keeps to the boat, the track and the target:
   // the bearings list and the crossing details come back with Me off.
-  if (!hideLines) for (const L of coast.lines) {
-    lines.push(`<div class="pc-lineitem${hideLines ? " dim" : ""}" data-editline="${L.id}"><span class="pc-line" style="background:${LINE_COLOURS[L.id]}"></span><b>Bearing ${L.id}</b> · ${escapeHtml(L.label)}<span class="pc-show">edit</span><button class="pc-mini" type="button" data-line="${L.id}" aria-label="Remove bearing ${L.id}">✕</button></div>`);
+  // Bearings as small buttons: "A 297°M". Tap to change (where it was
+  // taken from shows there), ✕ to remove.
+  if (!hideLines && coast.lines.length) {
+    lines.push(`<div class="pc-lines">${coast.lines.map(L =>
+      `<div class="pc-bchip" role="button" data-editline="${L.id}"><span class="pc-line" style="background:${LINE_COLOURS[L.id]}"></span><b>${L.id}</b>&nbsp;${escapeHtml(String(L.label).replace(/ from .*$/, ""))}` +
+      `<button class="pc-mini pc-x" type="button" data-line="${L.id}" aria-label="Remove bearing ${L.id}">✕</button></div>`).join("")}</div>`);
   }
   const fix = computeFix();
   if (hideLines && coast.lines.length) {
@@ -1109,8 +1121,6 @@ function updatePinCard() {
     lines.push(`<div class="pc-warn">These bearings don't cross ahead of the observers — check them.</div>`);
   } else if (fix && fix.poor) {
     lines.push(`<div class="pc-warn">Poor cut: narrow angle, so the position could be well along the lines.</div>`);
-  } else if (coast.lines.length === 1) {
-    lines.push(`<div class="pc-dim">Add a second bearing to see where they cross.</div>`);
   }
   if (coast.me) {
     const acc = Math.round(coast.me.acc);
@@ -1127,11 +1137,15 @@ function updatePinCard() {
     lines.push(`<div class="pc-dim">${coast.meError}</div>`);
   }
   if (coast.pinMode) lines.unshift(`<div class="pc-hint">${coast.pinMode === "new" ? "Tap the map to place the new pin" : coast.pins.length ? `Tap the map to move ${escapeHtml(pin.label)}` : "Tap the map to place the pin"}</div>`);
-  // Clear (pins and lines) and "Another pin" live on the card, so the button row fits a phone.
-  const top = [];
-  if (coast.pins.length && coast.pins.length < MAX_PINS) top.push(`<button class="pc-topbtn pc-add" type="button">+ Another pin</button>`);
-  if (coast.pins.length || coast.lines.length) top.push(`<button class="pc-topbtn" type="button" data-clearall="1">Clear all</button>`);
-  if (top.length) lines.unshift(`<div class="pc-top">${top.join("")}</div>`);
+  // Top row: a button per pin in its own colour (tap to bring it forward),
+  // "+ Pin" while there's room, and Clear all (pins and lines).
+  const top = coast.pins.map((p, i) => {
+    const c = pinColour(p);
+    return `<button class="pc-chip${i === coast.sel ? " on" : ""}" type="button" data-sel="${i}" style="background:${c.bg};color:${c.fg}">${escapeHtml(p.label)}</button>`;
+  });
+  if (coast.pins.length && coast.pins.length < MAX_PINS) top.push(`<button class="pc-topbtn pc-add" type="button">+ Pin</button>`);
+  if (coast.pins.length || coast.lines.length) top.push(`<span class="pc-gap"></span><button class="pc-topbtn" type="button" data-clearall="1">Clear all</button>`);
+  if (top.length) lines.unshift(`<div class="pc-chips">${top.join("")}</div>`);
   card.innerHTML = lines.join("");
   card.hidden = lines.length === 0;
   const on = (sel, fn) => card.querySelectorAll(sel).forEach(el => el.addEventListener("click", ev => { ev.stopPropagation(); fn(el); }));
@@ -1140,7 +1154,7 @@ function updatePinCard() {
     coast.pinMode = false; clearPin();
   });
   on(".pc-add", () => { coast.pinMode = coast.pinMode === "new" ? false : "new"; updatePinCard(); });
-  on("[data-sel]", el => selectPin(Number(el.dataset.sel)));
+  on("[data-sel]", el => { selectPin(Number(el.dataset.sel)); bringIntoView(coast.pin); });
   on("[data-rename]", el => renamePin(Number(el.dataset.rename)));
   on("[data-remove]", el => removePin(Number(el.dataset.remove)));
   on("[data-line]", el => removeLine(el.dataset.line));
@@ -1466,10 +1480,34 @@ function applyPractice() {
   queueDraw();
 }
 
+// Height of the pin card over the bottom of the map (0 when hidden).
+function cardHeight() {
+  const card = $("coastPinCard");
+  return card && !card.hidden ? card.offsetHeight : 0;
+}
+
+// Centres on a point in the clear part of the map — between the tide
+// box at the top and the pin card at the bottom — rather than the middle
+// of the whole map, where the card could cover it (the crossing circle
+// sat half under the card).
 function centreOn(p, spanM) {
   coast.view.lat = p.lat; coast.view.lon = p.lon;
   if (spanM) coast.view.mpp = Math.max(coast.view.mpp, spanM / Math.max(Math.min(coast.w, coast.h), 200));
+  updatePinCard(); // so the card's height is up to date
+  const shiftPx = (mapTopInset() - cardHeight()) / 2;
+  coast.view.lat += shiftPx * coast.view.mpp / KY;
   clampView();
+}
+
+// A pin brought forward from its button: moved into the clear part of
+// the map if it's off the screen or under the card.
+function bringIntoView(p) {
+  if (!p) return;
+  const s = toScreen(p.lat, p.lon);
+  if (s.x < 20 || s.x > coast.w - 20 || s.y < mapTopInset() + 30 || s.y > coast.h - cardHeight() - 10) {
+    centreOn(p);
+    queueDraw();
+  }
 }
 
 function setUpEntry() {
@@ -2081,7 +2119,7 @@ function draw() {
 function fitPinAnd(target) {
   const pin = coast.pin;
   const ptA = toScreen(pin.lat, pin.lon), ptB = toScreen(target.lat, target.lon);
-  const inView = p => p.x > 30 && p.x < coast.w - 30 && p.y > mapTopInset() + 40 && p.y < coast.h - 130;
+  const inView = p => p.x > 30 && p.x < coast.w - 30 && p.y > mapTopInset() + 40 && p.y < coast.h - cardHeight() - 30;
   if (inView(ptA) && inView(ptB)) return;
   coast.view.lat = (pin.lat + target.lat) / 2;
   coast.view.lon = (pin.lon + target.lon) / 2;
@@ -2129,10 +2167,40 @@ function drawBearingLine() {
     ctx.beginPath(); ctx.arc(a.x, a.y, 9, 0, Math.PI * 2); ctx.fillStyle = colour; ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = "#0e1116"; ctx.stroke();
     ctx.font = "800 11px -apple-system, BlinkMacSystemFont, sans-serif";
-    ctx.textAlign = "center"; ctx.fillStyle = "#0e1116"; ctx.fillText(L.id, a.x, a.y + 0.5);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#0e1116"; ctx.fillText(L.id, a.x, a.y + 0.5);
+    // The letter again where the line comes onto the screen, when its
+    // start is off it. At night every line is red, so the letters are
+    // what tell A from B.
+    const box = { x0: 16, y0: mapTopInset() + 16, x1: coast.w - 16, y1: coast.h - cardHeight() - 16 };
+    const inBox = q => q.x >= box.x0 && q.x <= box.x1 && q.y >= box.y0 && q.y <= box.y1;
+    if (!inBox(a)) {
+      const seg = clipSegment(a, b, box);
+      if (seg) {
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        const t = Math.min(seg[1], seg[0] + 30 / Math.max(len, 1));
+        const q = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+        ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, Math.PI * 2); ctx.fillStyle = colour; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = "#0e1116"; ctx.stroke();
+        ctx.fillStyle = "#0e1116"; ctx.fillText(L.id, q.x, q.y + 0.5);
+      }
+    }
     ctx.restore();
   }
   drawFix();
+}
+
+// The part of the line a→b inside a box, as [t0, t1] along it, or null.
+function clipSegment(a, b, box) {
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const edges = [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]];
+  for (const [p, q] of edges) {
+    if (p === 0) { if (q < 0) return null; continue; }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return null; if (r > t0) t0 = r; }
+    else { if (r < t0) return null; if (r < t1) t1 = r; }
+  }
+  return t0 < t1 ? [t0, t1] : null;
 }
 
 // Ticks across a line from `from`, every scale-bar step (no labels: the
@@ -2298,22 +2366,29 @@ function drawPinAndMe() {
 function drawOnePin(p, selected, named) {
   const { ctx } = coast;
   const s = toScreen(p.lat, p.lon);
-  // A map pin: a head on a short stem, the point at the spot.
+  const c = pinColour(p);
+  // A map pin in the pin's own colour: a head on a short stem, the point
+  // at the spot. Others slightly faded, the selected one full strength.
   ctx.save();
+  ctx.globalAlpha = selected ? 1 : 0.8;
   ctx.lineWidth = 2; ctx.strokeStyle = "#0e1116";
   ctx.beginPath();
   ctx.moveTo(s.x, s.y);
   ctx.bezierCurveTo(s.x - 4, s.y - 10, s.x - 10, s.y - 14, s.x - 10, s.y - 21);
   ctx.arc(s.x, s.y - 21, 10, Math.PI, 0);
   ctx.bezierCurveTo(s.x + 10, s.y - 14, s.x + 4, s.y - 10, s.x, s.y);
-  ctx.fillStyle = selected ? "#e5484d" : "#9b3a3e"; ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.arc(s.x, s.y - 21, 3.5, 0, Math.PI * 2); ctx.fillStyle = selected ? "#ffffff" : "#e0b4b6"; ctx.fill();
+  ctx.fillStyle = c.bg; ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(s.x, s.y - 21, 3.5, 0, Math.PI * 2); ctx.fillStyle = "#0e1116"; ctx.fill();
   if (named) {
+    // Name on a tag in the pin's colour, as on its button on the card.
     ctx.font = `${selected ? 700 : 600} 12px -apple-system, BlinkMacSystemFont, sans-serif`;
     ctx.textBaseline = "middle";
-    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(12,16,22,0.9)";
-    ctx.strokeText(p.label, s.x + 13, s.y - 21);
-    ctx.fillStyle = selected ? "#ffffff" : "#d3d1c7"; ctx.fillText(p.label, s.x + 13, s.y - 21);
+    const w = ctx.measureText(p.label).width, x = s.x + 14, y = s.y - 21;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x - 5, y - 10, w + 10, 20, 6); else ctx.rect(x - 5, y - 10, w + 10, 20);
+    ctx.fillStyle = c.bg; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = "#0e1116"; ctx.stroke();
+    ctx.fillStyle = c.fg; ctx.fillText(p.label, x, y + 0.5);
   }
   ctx.restore();
 }

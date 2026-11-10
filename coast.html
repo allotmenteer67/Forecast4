@@ -126,11 +126,28 @@
     .map-controls .spacer { flex: 1; }
     .map-controls button.on { background: #185fa5; border-color: #185fa5; color: #fff; }
     /* Pin and own-position details, along the bottom of the map. */
+    .map-area { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
     .pin-card {
-      position: absolute; left: 8px; right: 8px; bottom: 8px; background: rgba(14,17,22,0.9);
-      border-radius: 12px; padding: 8px 12px; font-size: 14px; line-height: 1.45; pointer-events: none;
-      max-height: 48%; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; background: rgba(14,17,22,0.96);
+      border-radius: 14px 14px 0 0; padding: 8px 14px; font-size: 14px; line-height: 1.45; pointer-events: none;
+      max-height: 55%; overflow-y: auto; -webkit-overflow-scrolling: touch;
     }
+    /* Pins as buttons in their own colours; the selected one bold. */
+    .pc-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 4px; }
+    .pc-chips .pc-gap { margin-left: auto; }
+    .pc-chip { padding: 4px 11px; font-size: 13px; font-weight: 600; border: 0; opacity: 0.7; }
+    .pc-chip.on { opacity: 1; font-weight: 800; box-shadow: inset 0 0 0 2px #0e1116; }
+    .pc-pos { display: flex; align-items: center; gap: 4px; }
+    .pc-pos .pc-gap { margin-left: auto; }
+    .pc-pos b { font-weight: 700; }
+    /* Bearings as small buttons: tap to change, ✕ to remove. */
+    .pc-lines { display: flex; flex-wrap: wrap; gap: 6px; margin: 5px 0 1px; }
+    .pc-bchip {
+      pointer-events: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 2px;
+      border: 1px solid #5f5e5a; border-radius: 10px; padding: 2px 3px 2px 9px; font-size: 13px;
+      font-variant-numeric: tabular-nums; -webkit-tap-highlight-color: transparent;
+    }
+    .pc-bchip .pc-x { padding: 1px 7px; font-size: 12px; margin-left: 4px; border-color: transparent; }
     .pin-card button { pointer-events: auto; }
     .pc-top { display: flex; justify-content: flex-end; gap: 6px; margin: 0 0 4px; }
     .pc-topbtn { padding: 4px 10px; font-size: 13px; }
@@ -272,6 +289,7 @@
     <button id="coastMeBtn" type="button" aria-label="Show my position">Me</button>
   </div>
 
+  <div class="map-area">
   <div class="map-wrap">
     <canvas id="coastCanvas"></canvas>
     <div class="info-bar" aria-live="polite">
@@ -304,7 +322,6 @@
         <p>Tide is a prediction: wind and pressure can raise or lower the real sea level.</p>
       </div>
     </div>
-    <div id="coastPinCard" class="pin-card" hidden></div>
     <div id="compassPanel" class="compass-panel" hidden>
       <div class="cp-top">
         <svg id="compassRose" class="cp-rose" viewBox="0 0 40 40" aria-hidden="true">
@@ -374,6 +391,10 @@
       </div>
     </div>
     <div id="coastMessage" class="message" hidden></div>
+  </div>
+    <!-- The pin card sits outside the map's rounded frame so it can run
+         the full width of the screen, resting on the time slider. -->
+    <div id="coastPinCard" class="pin-card" hidden></div>
   </div>
 
   <section class="time-section">
