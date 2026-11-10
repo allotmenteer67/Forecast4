@@ -110,8 +110,10 @@
     .wind .bf { color: #b4b2a9; font-weight: 500; font-size: 13px; }
     .ahead { margin-left: auto; font-size: 14px; font-weight: 700; color: #b4b2a9; }
     .ahead.future { color: #fac775; }
+    /* Ahead of now: tap the time to come back to now. */
+    .ahead.future { pointer-events: auto; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; padding: 4px 0 4px 8px; margin: -4px 0; }
     /* Slider below the map, so a hand on it doesn't cover the map. */
-    .time-section { padding: 6px 12px 2px; background: #14161a; }
+    .time-section { padding: 8px 12px 2px; background: #14161a; }
     .time-title { display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 2px; }
     .time-title strong { font-weight: 600; }
     .time-title .time { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -375,13 +377,8 @@
   </div>
 
   <section class="time-section">
-    <div class="time-title">
-      <strong>Time</strong>
-      <button id="coastNow" type="button">Now</button>
-      <span id="coastTime" class="time">Now</span>
-    </div>
     <input id="coastSlider" type="range" aria-label="Time ahead">
-    <div class="range-labels"><span>Now</span><span>+12h</span><span>+24h</span></div>
+    <div class="range-labels"><span></span><span>+12h</span><span>+24h</span></div>
   </section>
 
   <footer>Quick picture only — not for safety-critical decisions. <a href="help.html#coast-credits" class="credits-link">Credits</a></footer>

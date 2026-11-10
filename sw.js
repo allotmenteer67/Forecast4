@@ -565,7 +565,11 @@
 // minutes are refused, and a position off the map is flagged; "Set pin"
 // says "Move Pin 1 here" when that's what it will do; Little Haven is
 // labelled on the opening view. Callout says "on dry ground" to match.
-const SHELL_CACHE_NAME = "cloude-shell-v140";
+// Bumped to v141: Coast map's Time / Now / "Now · 05:10" row removed
+// (the box on the map says Now, or "In 2 h · 07:30" — tap it to come back
+// to now); "now" catches up as soon as the map comes back to the front
+// instead of showing the time it was left at.
+const SHELL_CACHE_NAME = "cloude-shell-v141";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

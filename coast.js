@@ -619,12 +619,15 @@ function updateTimeLabel() {
   const t = slideTime();
   const h = Math.floor(coast.offsetMin / 60), m = coast.offsetMin % 60;
   const span = h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${String(m).padStart(2, "0")}`;
-  const ahead = coast.offsetMin === 0 ? "Now" : `In ${span}`;
+  // The one place the map says when it's showing: "Now", or "In 2 h ·
+  // 07:30" when the slider is ahead (tap it to come back to now). The
+  // Time / Now / "Now · 05:10" row under the map was dropped (10 Nov):
+  // it said "Now" three times over and the phone shows the time anyway.
+  const ahead = coast.offsetMin === 0 ? "Now" : `In ${span} · ${clockTime(t)}`;
   // Big clock time on the map itself (so it's in any screenshot), and a
   // short version next to the slider.
   $("coastClock").textContent = clockTime(t);
   $("coastAhead").textContent = ahead;
-  $("coastTime").textContent = coast.offsetMin === 0 ? `Now · ${clockTime(t)}` : `${clockTime(t)} (in ${span})`;
   $("coastAhead").classList.toggle("future", coast.offsetMin !== 0);
   renderWind();
   const lv = levelsForSlider();
@@ -2610,14 +2613,29 @@ function setUpSlider() {
     updateTimeLabel();
     queueDraw();
   });
-  $("coastNow").addEventListener("click", () => {
+  const backToNow = () => {
     resetBaseTime();
     s.value = 0;
     coast.offsetMin = 0;
     updateTimeLabel();
     invalidateTiles();
     queueDraw();
-  });
+  };
+  $("coastAhead").addEventListener("click", () => { if (coast.offsetMin !== 0) backToNow(); });
+  // Keep "now" moving while the slider is at now. The once-a-minute
+  // check below doesn't run while the phone is asleep or the app is in
+  // the background, so coming back to the map showed the old time ("Now
+  // · 05:10" at 05:20) until it next ran. Now also checked the moment the
+  // page comes back to the front. With the slider ahead, the time it
+  // shows is left alone.
+  const tick = () => {
+    if (coast.offsetMin !== 0) return;
+    const before = coast.baseTime;
+    resetBaseTime();
+    if (coast.baseTime !== before) { updateTimeLabel(); invalidateTiles(); queueDraw(); }
+  };
+  setInterval(tick, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 }
 
 function resetBaseTime() {
@@ -2710,10 +2728,6 @@ async function initCoast() {
   loadWind();
   setInterval(() => { coast.windData = null; loadWind(); }, 30 * 60000);
   prefetchAllTiles();
-  // Keep "now" honest if the page is left open.
-  setInterval(() => {
-    if (coast.offsetMin === 0) { resetBaseTime(); updateTimeLabel(); queueDraw(); }
-  }, 60000);
 }
 
 initCoast();
