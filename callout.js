@@ -460,8 +460,15 @@ function calloutTideLocation(spot) {
     const km = haversineKm(spot.lat, spot.lon, loc.lat, loc.lon);
     if (km < bestKm) { bestKm = km; best = loc; }
   });
-  if (best) return { ...best, station: best.station };
-  return { label: station.label, station };
+  // Without an Admiralty check, a spot near a place with Admiralty's
+  // published time differences (Little Haven, Solva, Ramsey Sound… see
+  // tide.js) gets that place's times, as on the coast map.
+  const checked = best && best.discoveryStation && typeof loadSecondaryOffset === "function" && loadSecondaryOffset(best.discoveryStation.id);
+  // 15 km, not the 6 km a tide place uses: the spot is often out in the
+  // bay, and the coast map takes the nearest zone anywhere in it.
+  const timeDiff = !checked && typeof nearestTimeDifference === "function" ? nearestTimeDifference(spot.lat, spot.lon, station.id, 15) : null;
+  if (best) return { ...best, station: best.station, timeDiff };
+  return { label: timeDiff ? timeDiff.name : station.label, station, timeDiff };
 }
 
 let calloutTideToken = 0;
@@ -491,7 +498,23 @@ async function renderTide(spot) {
   const epochMs = Date.parse(built.epochIso);
   const nowHours = (Date.now() - epochMs) / 3600000;
   const fudge = loadTideFudge(location.station.id);
-  const levelAt = hrs => calloutLocationCorrection(location, built.fit, hrs, applyTideFudge(predictTideLevel(built.fit, hrs), fudge));
+  // With published time differences: the place's own fitted tide
+  // (tide.js timeDifferenceFit), so "now", the rate and the highs and
+  // lows are all at the place's times. Otherwise the gauge, with the
+  // saved place's Admiralty correction if it has one.
+  const made = location.timeDiff && typeof timeDifferenceFit === "function" ? timeDifferenceFit(built, location.timeDiff) : null;
+  const placeFit = made ? made.fit : null;
+  const cd = location.station.cdOffsetOD;
+  const placeLevel = (hrs, od) => typeof cd === "number" ? { hours: hrs, level: od - cd, isCD: true } : { hours: hrs, level: od, isCD: false };
+  const levelAt = placeFit
+    ? hrs => placeLevel(hrs, applyTideFudge(predictTideLevel(placeFit, hrs), fudge))
+    : hrs => calloutLocationCorrection(location, built.fit, hrs, applyTideFudge(predictTideLevel(built.fit, hrs), fudge));
+  const eventsBetween = (fromH, toH) => significantTideExtremes(findTideExtremes(placeFit || built.fit, fromH, toH)).map(e => {
+    const r = placeFit
+      ? placeLevel(e.hours, applyTideFudge(e.level, fudge))
+      : calloutLocationCorrection(location, built.fit, e.hours, applyTideFudge(e.level, fudge));
+    return { type: e.type, hours: r.hours, level: r.level, isCD: r.isCD };
+  }).sort((x, y) => x.hours - y.hours);
 
   // Rate of rise or fall over the next half hour, in metres per hour.
   const a = levelAt(nowHours);
@@ -505,19 +528,13 @@ async function renderTide(spot) {
   // Shared with the 24-hour tide view (callout-detail.js).
   window.calloutTideModel = {
     epochMs, levelAt, label: String(location.label).split(",")[0],
-    extremes: (fromH, toH) => findTideExtremes(built.fit, fromH, toH).map(e => {
-      const r = calloutLocationCorrection(location, built.fit, e.hours, applyTideFudge(e.level, fudge));
-      return { type: e.type, hours: r.hours, level: r.level, isCD: r.isCD };
-    }).sort((x, y) => x.hours - y.hours)
+    extremes: eventsBetween
   };
   if (typeof calloutDetailRefresh === "function") calloutDetailRefresh();
 
-  const events = findTideExtremes(built.fit, nowHours - 1, nowHours + 30)
-    .map(e => {
-      const r = calloutLocationCorrection(location, built.fit, e.hours, applyTideFudge(e.level, fudge));
-      return { type: e.type, hours: r.hours, level: r.level, isCD: r.isCD };
-    })
-    .sort((x, y) => x.hours - y.hours)
+  // From 3 hours back: an Admiralty-corrected high or low can come an
+  // hour or more after the gauge's.
+  const events = eventsBetween(nowHours - 3, nowHours + 30)
     .filter(e => e.hours >= nowHours)
     .slice(0, 2);
 

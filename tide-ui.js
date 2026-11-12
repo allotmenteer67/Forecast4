@@ -101,11 +101,19 @@ function tideDateQualifier() {
 // value when there's no secondary offset for this location — which is
 // every location until it's been checked against Admiralty at least
 // once. Centralised here so the row and the sheet apply it identically.
-function applyLocationCorrection(location, fit, hours, odLevel) {
+function applyLocationCorrection(location, fit, hours, odLevel, epochIso) {
   const secondary = location.discoveryStation ? loadSecondaryOffset(location.discoveryStation.id) : null;
   if (secondary) {
     const result = applySecondaryOffset(fit, hours, odLevel, location.station, secondary);
     if (result) return { hours: result.hours, level: result.levelCD, isCD: true };
+  }
+  // Not checked against Admiralty, but near a place with Admiralty's
+  // published time differences from this gauge (Little Haven, Solva,
+  // Ramsey Sound… see tide.js): that place's times, the gauge's heights.
+  const timeDiff = typeof nearestTimeDifference === "function" ? nearestTimeDifference(location.lat, location.lon, location.station.id) : null;
+  if (timeDiff && epochIso && typeof location.station.cdOffsetOD === "number") {
+    const moved = timeDifferenceHoursAt(fit, Date.parse(epochIso), hours, timeDiff);
+    if (moved !== null) return { hours: moved, level: odLevel - location.station.cdOffsetOD, isCD: true, timeDiff };
   }
   if (typeof location.station.cdOffsetOD === "number") {
     // No location-specific Admiralty correction yet, but the nearest
@@ -187,7 +195,7 @@ async function renderTideRow() {
   const corrected = rawEvents
     .map(e => {
       const odLevel = applyTideFudge(e.level, fudge);
-      const result = applyLocationCorrection(location, built.fit, e.hours, odLevel);
+      const result = applyLocationCorrection(location, built.fit, e.hours, odLevel, built.epochIso);
       return { type: e.type, hours: result.hours, level: result.level, isCD: result.isCD };
     })
     .sort((a, b) => a.hours - b.hours)
@@ -408,8 +416,11 @@ async function openTideSheet() {
   appendCoastMapLink(location);
 
   const secondary = location.discoveryStation && loadSecondaryOffset(location.discoveryStation.id);
+  const timeDiff = !secondary && typeof nearestTimeDifference === "function" ? nearestTimeDifference(location.lat, location.lon, location.station.id) : null;
   if (secondary) {
     sheetFootnote.textContent = `Corrected for ${location.label} specifically, using its own learned Admiralty offset — this is no longer just ${location.station.label}'s own curve.`;
+  } else if (timeDiff && typeof location.station.cdOffsetOD === "number") {
+    sheetFootnote.textContent = `Times for ${timeDiff.name}, from Admiralty's published differences from ${location.station.label}; heights are ${location.station.label}'s. Checking this place against Admiralty (Settings) would correct the heights too.`;
   } else if (typeof location.station.cdOffsetOD !== "number") {
     sheetFootnote.textContent = `${location.station.label} doesn't have a confirmed Chart Datum reference yet, so heights above are shown as measured by the gauge (Ordnance Datum) rather than Chart Datum.`;
   } else {
@@ -466,7 +477,7 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, l
   // (tens of minutes at most), so warping every sampled point by it
   // doesn't introduce any visible distortion — it just makes the whole
   // curve genuinely about the selected location, not its nearest gauge.
-  const toDisplay = (h, odLevel) => applyLocationCorrection(location, fit, h, odLevel);
+  const toDisplay = (h, odLevel) => applyLocationCorrection(location, fit, h, odLevel, epochIso);
 
   // Half-hour steps (was 200 steps across the whole fortnight, about
   // every 1.7 hours, which cut the corners off highs and lows so the

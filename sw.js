@@ -594,7 +594,15 @@
 // instead of blending the two corrections (which drew false lows); the
 // tide graph's readout shows the time tapped; the curve is drawn every
 // half hour; the tide card looks 3 hours back for its next event.
-const SHELL_CACHE_NAME = "cloude-shell-v146";
+// Bumped to v147: tide predictions fitted to about a year of each
+// gauge's hourly readings (data/tide-gauges, kept by the new daily
+// collect-tide-gauges job from the EA archive) with more constituents,
+// instead of the live API's four weeks — Milford Haven's neap timing
+// error drops from up to 38 to about 10 minutes. St Brides Bay uses
+// Admiralty's published time differences from Milford Haven (Little
+// Haven, Martin's Haven, Skomer, Dale, Solva, Ramsey Sound) on the coast
+// map, the Callout tide box and unchecked tide places nearby.
+const SHELL_CACHE_NAME = "cloude-shell-v147";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

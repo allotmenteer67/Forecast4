@@ -27,9 +27,11 @@
 //                 its learned correction is used, so the map's tide
 //                 matches the tide card
 //   tide.zones    Open-Meteo model points for adjusting the gauge's tide
-//                 (first = the reference, near the gauge; see coast.js
+//                 (first = the model's reference point; see coast.js
 //                 "Tide zones"); used where the view's middle is north
-//                 of tide.zonesNorthOf. needsAdjust: the gauge alone is
+//                 of tide.zonesNorthOf. A zone's timeDifference names
+//                 Admiralty's published time differences for it (tide.js
+//                 TIDE_TIME_DIFFERENCES). needsAdjust: the gauge alone is
 //                 wrong here, so say so until adjusted; scaleChartDatum:
 //                 scale the datum with the range (see coast.js)
 //   unsurveyedDryOD
@@ -51,12 +53,18 @@ const COAST_AREAS = [
     tide: {
       point: { lat: 51.75, lon: -5.15 },                 // Milford Haven
       useSavedLocation: false,
+      // Times from Admiralty's published differences from Milford Haven
+      // (timeDifference names an entry in tide.js); range from the tide
+      // model. The first zone is also the model's reference point.
       zones: [
-        { id: "bay", label: "", lat: 51.770, lon: -5.200 },          // reference: the gauge as is
-        { id: "solva", label: "Solva", lat: 51.855, lon: -5.200 },   // just off Solva
-        { id: "ramsey", label: "Ramsey Sound", lat: 51.845, lon: -5.335 } // south end of the Sound
+        { id: "bay", label: "Little Haven", lat: 51.770, lon: -5.200, timeDifference: "Little Haven" },      // mid-bay
+        { id: "martins", label: "Martin's Haven", lat: 51.737, lon: -5.250, timeDifference: "Martin's Haven" },
+        { id: "skomer", label: "Skomer", lat: 51.735, lon: -5.305, timeDifference: "Skomer Island" },
+        { id: "dale", label: "Dale", lat: 51.700, lon: -5.165, timeDifference: "Dale Roads" },
+        { id: "solva", label: "Solva", lat: 51.855, lon: -5.200, timeDifference: "Solva" },                    // just off Solva
+        { id: "ramsey", label: "Ramsey Sound", lat: 51.845, lon: -5.335, timeDifference: "Ramsey Sound" }     // south end of the Sound
       ],
-      zonesNorthOf: 51.815,
+      zonesNorthOf: -90,     // the nearest zone, anywhere on the map
       needsAdjust: false,
       scaleChartDatum: false,
       note: "Milford Haven gauge"
@@ -80,7 +88,7 @@ const COAST_AREAS = [
       { name: "Newgale", lat: 51.8530, lon: -5.1220 }
     ],
     viewKey: "cloude-coast:view",
-    zonesKey: "cloude-coast:tideZones"
+    zonesKey: "cloude-coast:tideZones:stbrides" // was cloude-coast:tideZones; new name so the new zones are worked out
   },
   {
     id: "charmouth",

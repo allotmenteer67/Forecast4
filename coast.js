@@ -261,23 +261,25 @@ function viewBounds() {
   return { north: a.lat, west: a.lon, south: b.lat, east: b.lon };
 }
 
-// ---- Tide zones (the north end) ----
-// The map's tide comes from the Milford Haven gauge, which is right for
-// St Brides Bay. Round Solva and Ramsey Sound the tide comes a little
-// earlier or later and rises a little more or less. How much is taken
-// from Open-Meteo's tide model (DWD; too coarse to trust on its own
-// inshore, but fine for the DIFFERENCE between nearby places): the model
-// tide at each zone's point is compared with the model at the bay's
-// point, as a time lag and a range ratio of the main (M2) tide, and
-// applied to the gauge prediction. Worked out on the phone, kept for
+// ---- Tide zones ----
+// The map's tide comes from a gauge (Milford Haven for St Brides Bay,
+// Plymouth for Lyme Bay). Round the area the tide comes a little
+// earlier or later and rises a little more or less. At St Brides Bay
+// the times come from Admiralty's published time differences (tide.js
+// TIDE_TIME_DIFFERENCES: Little Haven for the bay itself, Martin's
+// Haven, Skomer, Dale, Solva, Ramsey Sound); where a zone has no
+// published difference (Lyme Bay) the time comes from Open-Meteo's tide
+// model. The range always comes from the model (DWD; too coarse to trust
+// on its own inshore, but fine for the DIFFERENCE between nearby
+// places): the model tide at each zone's point is compared with the
+// model at the first zone's point, as a time lag and a range ratio of
+// the main (M2) tide. Worked out on the phone, kept for
 // TIDE_ZONE_MAX_AGE_DAYS, and the old figures are used with no signal.
 // The map uses the zone whose point is nearest the middle of the view,
-// but only north of TIDE_ZONE_NORTH_OF (the bay itself is the gauge's).
-// Each area has its own zones (coast-areas.js); the first is the
-// reference, near the gauge. At Lyme Bay the gauge is Weymouth, and the
-// one zone (just off Lyme Regis) covers the whole area — unless the main
-// app's tide location there has been checked against Admiralty, which is
-// used instead (see loadTide).
+// but only north of TIDE_ZONE_NORTH_OF. Each area has its own zones
+// (coast-areas.js). The main app's tide location there, if it has been
+// checked against Admiralty, is used instead where the area allows it
+// (see loadTide).
 const TIDE_ZONES = COAST_AREA.tide.zones;
 const TIDE_ZONE_NORTH_OF = COAST_AREA.tide.zonesNorthOf;
 const TIDE_ZONES_KEY = COAST_AREA.zonesKey;
@@ -338,7 +340,7 @@ function zoneCorrections(series) {
 // own speed x lag, so predictions, highs and lows all follow.
 function shiftedFit(fit, lagH, ratio) {
   const c = fit.coeffs.slice();
-  TIDE_CONSTITUENTS.forEach((k, i) => {
+  fitConstituents(fit).forEach((k, i) => {
     const a = fit.coeffs[1 + i * 2], b = fit.coeffs[2 + i * 2];
     const r = k.speed * lagH * Math.PI / 180;
     c[1 + i * 2] = ratio * (a * Math.cos(r) - b * Math.sin(r));
@@ -388,6 +390,13 @@ function currentTideZone() {
 // Switch the tide to the view's zone if it has changed (or force).
 // Not used when the tide comes from an Admiralty-checked location
 // (t.fixed): that is already for the place itself.
+//
+// A zone with a timeDifference (St Brides Bay) uses Admiralty's
+// published high and low water time differences from Milford Haven
+// (tide.js TIDE_TIME_DIFFERENCES) — the bay itself is Little Haven's,
+// 10 minutes after Milford at high water and 15-25 after at low water —
+// with the range scaled by the tide model's ratio where there is one.
+// Other zones (Lyme Bay) use the tide model's lag and ratio as before.
 function applyTideZone(force) {
   const t = coast.tide;
   if (!t || !t.baseFit || t.fixed) return;
@@ -395,11 +404,20 @@ function applyTideZone(force) {
   const z = currentTideZone();
   const saved = readJson(TIDE_ZONES_KEY, null);
   const corr = z.id !== refId && saved && saved.zones ? saved.zones[z.id] : null;
-  const id = corr ? z.id : refId;
-  if (!force && id === t.zoneId) return;
+  const entry = z.timeDifference && typeof timeDifferenceByName === "function" ? timeDifferenceByName(z.timeDifference) : null;
+  const ratio = corr ? corr.ratio : 1;
+  const id = corr || entry ? z.id : refId;
+  const stamp = `${id}|${entry ? ratio : ""}`;
+  if (!force && stamp === t.zoneStamp) return;
   t.zoneId = id;
-  t.zoneLabel = corr ? z.label : (COAST_AREA.tide.needsAdjust ? `${t.label} (not adjusted yet)` : "");
-  t.fit = corr ? shiftedFit(t.baseFit, corr.lagH, corr.ratio) : t.baseFit;
+  t.zoneStamp = stamp;
+  let placeFit = null;
+  if (entry) {
+    const made = timeDifferenceFit({ fit: t.baseFit, epochIso: t.epochIso }, entry, ratio);
+    placeFit = made ? made.fit : null;
+  }
+  t.zoneLabel = placeFit ? entry.name : corr ? z.label : (COAST_AREA.tide.needsAdjust ? `${t.label} (not adjusted yet)` : "");
+  t.fit = placeFit || (corr ? shiftedFit(t.baseFit, corr.lagH, corr.ratio) : t.baseFit);
   // Chart Datum (roughly the lowest tide) is about as far below mean sea
   // level as the tide's range allows, so where the range is scaled the
   // datum is scaled with it (Lyme Bay from Plymouth). St Brides keeps
@@ -410,9 +428,12 @@ function applyTideZone(force) {
   } else {
     t.cdOffset = t.baseCdOffset;
   }
-  t.sourceText = corr
-    ? `Tide for ${z.label}: ${t.label} gauge, adjusted with Open-Meteo's tide model`
-    : (COAST_AREA.tide.needsAdjust ? `Tide from ${t.label}, not yet adjusted for here (needs a signal once)` : `Tide from ${t.label}`);
+  t.sourceText = placeFit
+    ? `Tide for ${entry.name}: ${t.label} gauge with Admiralty's published time differences` +
+      (corr && Math.abs(corr.ratio - 1) >= 0.02 ? ", range adjusted with Open-Meteo's tide model" : "")
+    : corr
+      ? `Tide for ${z.label}: ${t.label} gauge, adjusted with Open-Meteo's tide model`
+      : (COAST_AREA.tide.needsAdjust ? `Tide from ${t.label}, not yet adjusted for here (needs a signal once)` : `Tide from ${t.label}`);
   buildSeries();
   invalidateTiles();
   coast.cutoffKey = null;
@@ -462,7 +483,7 @@ function admiraltyLocalFit(built, fudge, station, offset) {
   if (pts.length < 2000) return null;
   const cdOffset = sumOD / pts.length - sumCD / pts.length;
   const readings = pts.map(r => ({ hours: r.hours, level: r.levelCD + cdOffset }));
-  const fit = fitTideHarmonics(readings);
+  const fit = fitTideHarmonics(readings, typeof TIDE_CONSTITUENTS_PLACE !== "undefined" ? TIDE_CONSTITUENTS_PLACE : undefined);
   if (!fit) return null;
   let sq = 0;
   for (const r of readings) sq += (predictTideLevel(fit, r.hours) - r.level) ** 2;
@@ -679,6 +700,7 @@ async function loadTide() {
         zoneId: null,
         zoneLabel: "",
         epochMs,
+        epochIso: built.epochIso,
         fudge,
         cdOffset, baseCdOffset: cdOffset,
         label: station.label,

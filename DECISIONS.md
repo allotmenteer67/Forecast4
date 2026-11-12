@@ -71,6 +71,19 @@ down on purpose: don't bring it back without asking.
 
 ## Tide and fishing
 
+- Tide predictions are fitted to about a year of each gauge's hourly
+  readings (data/tide-gauges, kept by the daily collect-tide-gauges job from
+  the EA's daily archive files), plus the live last four weeks; the live API
+  alone keeps only ~4 weeks, which drifted up to 38 min at neaps at Milford
+  Haven. With a year, more constituents (TIDE_CONSTITUENTS_LONG). All ~43
+  gauges are kept (one archive download covers them all). (Nov 2026)
+- St Brides Bay times use Admiralty's published time differences from
+  Milford Haven (port's tide tables): Little Haven for the bay, Martin's
+  Haven, Skomer, Dale, Solva, Ramsey Sound; the tide model only for range.
+  Applied on the coast map, the Callout tide box, and tide places within
+  6 km not checked against Admiralty. No published height differences, so
+  heights stay Milford's. Porthgain/Fishguard are not used: places there are
+  on the Fishguard gauge. (Nov 2026)
 - Weymouth and Bournemouth gauges are only used within 25 km of them; further
   off, Plymouth (west of Weymouth) or Portsmouth (east) instead, as Admiralty
   does for Lyme Regis. Replacement gauges are named, not "next nearest":

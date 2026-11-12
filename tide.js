@@ -23,10 +23,46 @@ const TIDE_CONSTITUENTS = [
   { name: "MS4", speed: 58.9841042 }
 ];
 
-function fitTideHarmonics(readings) {
+// Extra constituents, used only when a gauge has about a year of
+// readings (data/tide-gauges, see scripts/collect-tide-gauges.py). Four
+// weeks can't tell K2 from S2 or P1 from K1, or fit these smaller ones,
+// which is why a four-week fit drifts at neaps; a year can. Speeds in
+// degrees per hour (standard values).
+const TIDE_CONSTITUENTS_LONG = TIDE_CONSTITUENTS.concat([
+  { name: "2N2", speed: 27.8953548 },
+  { name: "MU2", speed: 27.9682084 },
+  { name: "NU2", speed: 28.5125831 },
+  { name: "LAM2", speed: 29.4556253 },
+  { name: "L2", speed: 29.5284789 },
+  { name: "J1", speed: 15.5854433 },
+  { name: "OO1", speed: 16.1391017 },
+  { name: "M3", speed: 43.4761563 },
+  { name: "MN4", speed: 57.4238337 },
+  { name: "MK4", speed: 59.0662415 },
+  { name: "S4", speed: 60.0000000 },
+  { name: "M6", speed: 86.9523127 },
+  { name: "2MS6", speed: 87.9682084 },
+  { name: "2MN6", speed: 86.4079380 },
+  { name: "M8", speed: 115.9364166 },
+  { name: "MSF", speed: 1.0158958 },
+  { name: "MM", speed: 0.5443747 },
+  { name: "SSA", speed: 0.0821373 }
+]);
+const TIDE_CONSTITUENT_BY_NAME = new Map(TIDE_CONSTITUENTS_LONG.map(c => [c.name, c]));
+
+// The constituents a fit was made with: its own list if it carries one
+// (every fit made since the long records), else the original ten (fits
+// saved on a phone before then).
+function fitConstituents(fit) {
+  if (fit && Array.isArray(fit.names)) return fit.names.map(n => TIDE_CONSTITUENT_BY_NAME.get(n)).filter(Boolean);
+  return TIDE_CONSTITUENTS;
+}
+
+function fitTideHarmonics(readings, constituents) {
   if (!readings || readings.length < MIN_FIT_READINGS) return null;
+  const list = constituents || TIDE_CONSTITUENTS;
   const n = readings.length;
-  const cols = 1 + TIDE_CONSTITUENTS.length * 2; // mean level + (cos,sin) per constituent
+  const cols = 1 + list.length * 2; // mean level + (cos,sin) per constituent
   // Build the normal equations (X^T X) and (X^T y) directly rather than
   // holding the full design matrix in memory — thousands of readings is
   // fine either way, but this is the standard approach and avoids a
@@ -39,7 +75,7 @@ function fitTideHarmonics(readings) {
     const t = readings[i].hours;
     const y = readings[i].level;
     row[0] = 1;
-    TIDE_CONSTITUENTS.forEach((c, k) => {
+    list.forEach((c, k) => {
       const theta = ((c.speed * t) % 360) * (Math.PI / 180);
       row[1 + k * 2] = Math.cos(theta);
       row[2 + k * 2] = Math.sin(theta);
@@ -57,8 +93,9 @@ function fitTideHarmonics(readings) {
 
   const coeffs = solveLinearSystem(XtX, Xty);
   if (!coeffs) return null;
-  return { coeffs };
+  return { coeffs, names: list.map(c => c.name) };
 }
+
 
 // Plain Gaussian elimination with partial pivoting — the matrix here is
 // at most 21x21 (1 + 10 constituents * 2), so nothing fancier is needed.
@@ -114,15 +151,16 @@ const TIDE_CYCLE_LABELS = [
 // the actual physical mechanism, not an approximation of it.
 function tideCyclePhase(fit, hours) {
   if (!fit) return null;
-  const m2 = TIDE_CONSTITUENTS.findIndex(c => c.name === "M2");
-  const s2 = TIDE_CONSTITUENTS.findIndex(c => c.name === "S2");
+  const list = fitConstituents(fit);
+  const m2 = list.findIndex(c => c.name === "M2");
+  const s2 = list.findIndex(c => c.name === "S2");
   if (m2 < 0 || s2 < 0) return null;
   const { coeffs } = fit;
   const cosM2 = coeffs[1 + m2 * 2], sinM2 = coeffs[2 + m2 * 2];
   const cosS2 = coeffs[1 + s2 * 2], sinS2 = coeffs[2 + s2 * 2];
   const phaseM2 = Math.atan2(sinM2, cosM2) * (180 / Math.PI);
   const phaseS2 = Math.atan2(sinS2, cosS2) * (180 / Math.PI);
-  const speedM2 = TIDE_CONSTITUENTS[m2].speed, speedS2 = TIDE_CONSTITUENTS[s2].speed;
+  const speedM2 = list[m2].speed, speedS2 = list[s2].speed;
 
   // psi = 0 at the moment M2 and S2 add constructively (spring), 180 at
   // their most destructive (neap). Moves at a constant rate forever
@@ -146,7 +184,7 @@ function predictTideLevel(fit, hours) {
   if (!fit) return null;
   const { coeffs } = fit;
   let level = coeffs[0];
-  TIDE_CONSTITUENTS.forEach((c, k) => {
+  fitConstituents(fit).forEach((c, k) => {
     const theta = ((c.speed * hours) % 360) * (Math.PI / 180);
     level += coeffs[1 + k * 2] * Math.cos(theta) + coeffs[2 + k * 2] * Math.sin(theta);
   });
@@ -510,6 +548,7 @@ function savePersistedTideFit(stationId, result) {
     localStorage.setItem(tideFitStorageKey(stationId), JSON.stringify({
       fit: result.fit,
       epochIso: result.epochIso,
+      longRecordDays: result.longRecordDays || 0,
       builtAt: Date.now()
     }));
   } catch {
@@ -518,24 +557,92 @@ function savePersistedTideFit(stationId, result) {
   }
 }
 
-// Does the actual live fetch + fit — the one genuinely slow path,
-// now only ever hit for a station that's never been fitted before, or
-// during a quiet background refresh of a week-old one.
-async function buildAndCacheTideFit(station) {
-  const backfill = await backfillTideStation(station);
-  // TEMPORARY diagnostic — these two now throw a specific reason instead
-  // of silently returning null, purely so the actual cause reaches the
-  // "Not available right now" message on screen (see tide-ui.js/
-  // fishing-ui.js) rather than being swallowed. Every existing caller
-  // already handles a rejected promise here (getOrBuildTideFit's own
-  // try/catch, refreshTideFitInBackground's .catch()), so this is safe
-  // to revert to a plain `return null` once the cause is found.
-  if (!backfill || backfill.readings.length < MIN_FIT_READINGS) {
-    throw new Error(`Only ${backfill ? backfill.readings.length : 0} readings available (need ${MIN_FIT_READINGS})`);
+// ---- Long gauge records ----
+// About a year of each gauge's hourly readings, kept in the repo by
+// scripts/collect-tide-gauges.py (run daily on GitHub) from the
+// Environment Agency's daily archive files, because the live API only
+// keeps about four weeks. A tide fitted to four weeks drifts at neaps —
+// up to ~35 minutes and 0.3 m at Milford Haven against the official
+// table (Nov 2026). With a year, more constituents can be fitted
+// (TIDE_CONSTITUENTS_LONG). The live four weeks are still added on the
+// end, so the newest readings are always in.
+const LONG_RECORD_MIN_DAYS = 300;
+const LONG_RECORD_RETRY_MS = 12 * 3600000; // a fit made without a long record is redone after this, in case one has appeared
+
+async function loadLongTideRecord(station) {
+  try {
+    const res = await fetchWithTimeout(`data/tide-gauges/${encodeURIComponent(station.id)}.json`, {}, 20000);
+    if (!res.ok) return null;
+    const rec = await res.json();
+    const t0 = Date.parse(rec.start);
+    const step = (rec.stepMinutes || 60) * 60000;
+    if (!Array.isArray(rec.cm) || Number.isNaN(t0)) return null;
+    const out = [];
+    rec.cm.forEach((cm, i) => {
+      if (typeof cm === "number") out.push({ time: t0 + i * step, level: cm / 100 });
+    });
+    return out.length ? out : null;
+  } catch {
+    return null;
   }
-  const fit = fitTideHarmonics(backfill.readings);
-  if (!fit) throw new Error("Harmonic fit failed on otherwise-sufficient readings");
-  const result = { fit, epochIso: backfill.epochIso };
+}
+
+// Fits, drops readings far off the fit (a broken gauge reading, or a
+// big storm surge, would otherwise pull every prediction a little),
+// and fits again.
+function fitTideHarmonicsRobust(readings, constituents) {
+  const first = fitTideHarmonics(readings, constituents);
+  if (!first) return null;
+  const residuals = readings.map(r => r.level - predictTideLevel(first, r.hours));
+  const rms = Math.sqrt(residuals.reduce((a, x) => a + x * x, 0) / residuals.length);
+  const limit = Math.max(1.0, 4 * rms);
+  const kept = readings.filter((r, i) => Math.abs(residuals[i]) <= limit);
+  if (kept.length === readings.length || kept.length < MIN_FIT_READINGS) return first;
+  return fitTideHarmonics(kept, constituents) || first;
+}
+
+// Does the actual fetch + fit — the one genuinely slow path, only ever
+// hit for a station that's never been fitted before, or during a quiet
+// background refresh.
+async function buildAndCacheTideFit(station) {
+  const [liveResult, longResult] = await Promise.allSettled([backfillTideStation(station), loadLongTideRecord(station)]);
+  const backfill = liveResult.status === "fulfilled" ? liveResult.value : null;
+  const long = longResult.status === "fulfilled" ? longResult.value : null;
+  const longDays = long ? (long[long.length - 1].time - long[0].time) / 86400000 : 0;
+
+  let result;
+  if (long && longDays >= LONG_RECORD_MIN_DAYS) {
+    const live = backfill && backfill.readings.length ? backfill : null;
+    const epochMs = live ? Date.parse(live.epochIso) : long[0].time;
+    const lastLong = long[long.length - 1].time;
+    const readings = long.map(r => ({ hours: (r.time - epochMs) / 3600000, level: r.level }));
+    if (live) {
+      // Hourly, like the long record, so the last four weeks don't
+      // count four times as much as the rest of the year.
+      live.readings.forEach(r => {
+        const t = Math.round(epochMs + r.hours * 3600000);
+        if (t > lastLong && t % 3600000 === 0) readings.push(r);
+      });
+    }
+    const fit = fitTideHarmonicsRobust(readings, TIDE_CONSTITUENTS_LONG);
+    if (!fit) throw new Error("Harmonic fit failed on the long gauge record");
+    result = { fit, epochIso: new Date(epochMs).toISOString(), longRecordDays: Math.round(longDays) };
+  } else {
+    if (!backfill) throw (liveResult.reason || new Error("Tide gauge fetch failed"));
+    // TEMPORARY diagnostic — these two now throw a specific reason instead
+    // of silently returning null, purely so the actual cause reaches the
+    // "Not available right now" message on screen (see tide-ui.js/
+    // fishing-ui.js) rather than being swallowed. Every existing caller
+    // already handles a rejected promise here (getOrBuildTideFit's own
+    // try/catch, refreshTideFitInBackground's .catch()), so this is safe
+    // to revert to a plain `return null` once the cause is found.
+    if (backfill.readings.length < MIN_FIT_READINGS) {
+      throw new Error(`Only ${backfill.readings.length} readings available (need ${MIN_FIT_READINGS})`);
+    }
+    const fit = fitTideHarmonics(backfill.readings);
+    if (!fit) throw new Error("Harmonic fit failed on otherwise-sufficient readings");
+    result = { fit, epochIso: backfill.epochIso, longRecordDays: 0 };
+  }
   tideFitCache.set(station.id, result);
   savePersistedTideFit(station.id, result);
   return result;
@@ -557,9 +664,12 @@ async function getOrBuildTideFit(station) {
 
   const persisted = loadPersistedTideFit(station.id);
   if (persisted && persisted.fit && persisted.epochIso) {
-    const result = { fit: persisted.fit, epochIso: persisted.epochIso };
+    const result = { fit: persisted.fit, epochIso: persisted.epochIso, longRecordDays: persisted.longRecordDays || 0 };
     tideFitCache.set(station.id, result);
-    if (!persisted.builtAt || Date.now() - persisted.builtAt > TIDE_FIT_MAX_AGE_MS) {
+    // A fit made without a year's record is redone twice a day, so a
+    // phone picks the long record up within hours of it appearing.
+    const maxAge = persisted.longRecordDays ? TIDE_FIT_MAX_AGE_MS : LONG_RECORD_RETRY_MS;
+    if (!persisted.builtAt || Date.now() - persisted.builtAt > maxAge) {
       refreshTideFitInBackground(station); // don't await — use what's cached now, improve it quietly for next time
     }
     return result;
@@ -1168,6 +1278,133 @@ function applySecondaryOffset(fit, hours, odLevel, eaStation, offset) {
     : Math.max(0, Math.min(1, (before.level - gaugeNow) / gaugeChange));
   const levelCD = beforeCD + (afterCD - beforeCD) * through;
   return { hours: hours + timeMin / 60, levelCD };
+}
+
+// ---- Published time differences (secondary ports) ----
+// Admiralty's high and low water time differences for places round St
+// Brides Bay, from Milford Haven, as printed in the Port of Milford
+// Haven's own tide tables (Crown copyright, reproduced there from
+// Admiralty Tide Tables). The gauge's tide is right for the Haven; these
+// make it right for the place. Minutes later (+) or earlier (-):
+//   hw: [when Milford's high water is at 0100 or 1300, at 0800 or 2000]
+//   lw: [when Milford's low water is at 0100 or 1300, at 0700 or 1900]
+// all GMT, with times in between interpolated, as the tables say.
+// Times only: the tables give no height differences for these places,
+// so heights stay Milford Haven's (on its Chart Datum).
+// Used for a tide place within TIME_DIFFERENCE_MAX_KM of one of these
+// that hasn't been checked against Admiralty, for the Callout tide box,
+// and for the coast map (coast-areas.js zones).
+const TIDE_TIME_DIFFERENCES = [
+  { name: "Little Haven", stationId: "E73039", lat: 51.7735, lon: -5.1090, hw: [10, 10], lw: [25, 15] },
+  { name: "Martin's Haven", stationId: "E73039", lat: 51.7367, lon: -5.2460, hw: [10, 10], lw: [15, 15] },
+  { name: "Skomer Island", stationId: "E73039", lat: 51.7360, lon: -5.2960, hw: [-5, -5], lw: [5, 5] },
+  { name: "Dale Roads", stationId: "E73039", lat: 51.7030, lon: -5.1580, hw: [-5, -5], lw: [-8, -8] },
+  { name: "Solva", stationId: "E73039", lat: 51.8700, lon: -5.1970, hw: [15, 10], lw: [35, 15] },
+  { name: "Ramsey Sound", stationId: "E73039", lat: 51.8650, lon: -5.3350, hw: [30, 30], lw: [30, 30] }
+];
+const TIME_DIFFERENCE_MAX_KM = 6;
+
+function nearestTimeDifference(lat, lon, stationId, maxKm = TIME_DIFFERENCE_MAX_KM) {
+  if (typeof lat !== "number" || typeof lon !== "number") return null;
+  let best = null, bestKm = maxKm;
+  TIDE_TIME_DIFFERENCES.forEach(entry => {
+    if (stationId && entry.stationId !== stationId) return;
+    const km = haversineKm(lat, lon, entry.lat, entry.lon);
+    if (km <= bestKm) { bestKm = km; best = entry; }
+  });
+  return best;
+}
+
+function timeDifferenceByName(name) {
+  return TIDE_TIME_DIFFERENCES.find(entry => entry.name === name) || null;
+}
+
+// Minutes to add to a gauge high or low at eventMs, interpolated between
+// the table's two columns by the gauge event's time of day (GMT, which
+// repeats every 12 hours: column A at 01:00, B at 08:00 for high water
+// or 07:00 for low water).
+function tableTimeDifferenceMin(entry, type, eventMs) {
+  const [a, b] = type === "high" ? entry.hw : entry.lw;
+  const at = type === "high" ? 8 : 7;
+  let h = ((eventMs / 3600000) % 12 + 12) % 12; // hours past 00:00 or 12:00
+  if (h < 1) h += 12;                            // 00:00-01:00 belongs between B and the next A (13:00)
+  if (h <= at) return a + (b - a) * (h - 1) / (at - 1);
+  return b + (a - b) * (h - at) / (13 - at);
+}
+
+// The gauge's moment `hours` moved to the place's time, blending the
+// differences of the gauge's high or low either side. events: the
+// gauge's significant highs and lows, if already worked out (faster).
+function timeDifferenceHoursAt(fit, epochMs, hours, entry, events) {
+  const list = events || significantTideExtremes(findTideExtremes(fit, hours - 8, hours + 8));
+  let lo = 0, hi = list.length - 1;
+  if (hi < 1 || list[0].hours > hours || list[hi].hours <= hours) return null;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid].hours <= hours) lo = mid; else hi = mid;
+  }
+  const before = list[lo], after = list[hi];
+  const span = after.hours - before.hours;
+  const frac = span > 0 ? (hours - before.hours) / span : 0;
+  const dBefore = tableTimeDifferenceMin(entry, before.type, epochMs + before.hours * 3600000);
+  const dAfter = tableTimeDifferenceMin(entry, after.type, epochMs + after.hours * 3600000);
+  return hours + (dBefore + (dAfter - dBefore) * frac) / 60;
+}
+
+// Constituents for a tide fitted to a place's moved curve (below): the
+// main ones plus shallow-water ones that can carry the place's highs
+// and lows being moved by different amounts. All tell apart over the
+// two months it's fitted to.
+const TIDE_CONSTITUENTS_PLACE = TIDE_CONSTITUENTS.concat(
+  ["MU2", "L2", "M3", "MN4", "MK4", "S4", "M6", "2MS6"].map(n => TIDE_CONSTITUENT_BY_NAME.get(n))
+);
+
+// A tide fit for a place with published time differences: the gauge's
+// prediction every 15 minutes for 20 days either side of now, each moved
+// to the place's time, fitted again — so everything that uses a fit
+// (heights at any time, highs and lows) is the place's own. Heights are
+// the gauge's, scaled about mean level by `ratio` if given (the coast
+// map's tide-model range ratio). Without fudge: callers add the gauge's
+// fudge as usual. Returns { fit, rmsM } or null.
+//
+// Takes about a second on a phone, so it's kept on the phone and reused
+// for PLACE_FIT_MAX_AGE_MS while the gauge's fit is the same.
+const PLACE_FIT_MAX_AGE_MS = 5 * 24 * 3600000;
+
+function timeDifferenceFit(built, entry, ratio = 1) {
+  const sig = [built.epochIso, built.fit.coeffs.slice(0, 5).map(x => x.toFixed(5)).join(","), entry.name, ratio.toFixed(3)].join("|");
+  const key = `cloude-tide:placefit:${entry.name}`;
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || "null");
+    if (saved && saved.sig === sig && Date.now() - saved.madeAt < PLACE_FIT_MAX_AGE_MS && saved.fit) {
+      return { fit: saved.fit, rmsM: saved.rmsM };
+    }
+  } catch { /* nothing kept */ }
+  const made = makeTimeDifferenceFit(built, entry, ratio);
+  if (made) {
+    try { localStorage.setItem(key, JSON.stringify({ sig, madeAt: Date.now(), fit: made.fit, rmsM: made.rmsM })); } catch { /* not kept */ }
+  }
+  return made;
+}
+
+function makeTimeDifferenceFit(built, entry, ratio) {
+  const epochMs = Date.parse(built.epochIso);
+  const nowH = (Date.now() - epochMs) / 3600000;
+  const from = nowH - 20 * 24, to = nowH + 20 * 24;
+  const events = significantTideExtremes(findTideExtremes(built.fit, from - 12, to + 12));
+  const mean = built.fit.coeffs[0];
+  const readings = [];
+  for (let h = from; h <= to; h += 0.25) {
+    const moved = timeDifferenceHoursAt(built.fit, epochMs, h, entry, events);
+    if (moved === null) continue;
+    readings.push({ hours: moved, level: mean + (predictTideLevel(built.fit, h) - mean) * ratio });
+  }
+  if (readings.length < 1500) return null;
+  const fit = fitTideHarmonics(readings, TIDE_CONSTITUENTS_PLACE);
+  if (!fit) return null;
+  let sq = 0;
+  for (const r of readings) sq += (predictTideLevel(fit, r.hours) - r.level) ** 2;
+  return { fit, rmsM: Math.sqrt(sq / readings.length) };
 }
 
 // ---- Coastal suitability check, for the "are you sure?" warning when
