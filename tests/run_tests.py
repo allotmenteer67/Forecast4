@@ -70,6 +70,59 @@ def no_tokens_in_repo():
         if re.search(r"github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{30,}", t): hits.append(str(f.relative_to(ROOT)))
     expect(not hits, f"possible GitHub token in: {hits}")
 
+TIDE_NODE = r"""
+const fs = require('fs'), vm = require('vm');
+const store = {};
+const ctx = { console, Date, Math, JSON,
+  localStorage: { getItem: k => store[k] ?? null, setItem: (k, v) => store[k] = String(v), removeItem: k => delete store[k] } };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1] + '/tide.js', 'utf8'), ctx);
+const T = n => vm.runInContext(n, ctx);
+const out = {};
+// Gauge choice: Charmouth goes to Plymouth (as Admiralty does), Weymouth itself keeps Weymouth.
+out.charmouth = T('nearestTideStation')(50.7376, -2.9015).label;
+out.weymouth = T('nearestTideStation')(50.61, -2.45).label;
+out.lulworth = T('nearestTideStation')(50.62, -2.25).label;
+// A place saved on Weymouth moves to Plymouth, and its old Weymouth-learned correction goes.
+store['cloude-tide:locations'] = JSON.stringify([{ id: 'a', label: 'Charmouth, Dorset', lat: 50.7376, lon: -2.9015,
+  station: { id: 'E72039', label: 'Weymouth', cdOffsetOD: -0.93 }, discoveryStation: { id: '0024' } }]);
+store['cloude-tide:secondary:0024'] = '{}';
+out.moved = T('loadTideLocations')()[0].station.label;
+out.offsetCleared = !('cloude-tide:secondary:0024' in store);
+// A pretend gauge with a stand at low water (M2 plus a strong M4), and a
+// correction whose high and low parts differ a lot (like Lyme Regis vs
+// Plymouth). The place's curve must have exactly the gauge's real highs
+// and lows, no extra ones.
+const k = 1 + 2 * 8; const coeffs = new Array(1 + 2 * 10).fill(0);
+coeffs[1] = 2.0; coeffs[k] = 0.55;
+const fit = { coeffs }; const st = { cdOffsetOD: -3.22 };
+const off = { highTimeMin: 68, highHeightSlope: 1.48, highHeightIntercept: -3.7,
+              lowTimeMin: 23, lowHeightSlope: 0.82, lowHeightIntercept: -0.4 };
+const gaugeEvents = T('significantTideExtremes')(T('findTideExtremes')(fit, 12, 60));
+const pts = [];
+for (let h = 13; h <= 59; h += 1 / 12) { const r = T('applySecondaryOffset')(fit, h, T('predictTideLevel')(fit, h), st, off); if (r) pts.push(r); }
+let turns = 0, backwards = 0;
+for (let i = 1; i < pts.length - 1; i++) {
+  const a = pts[i - 1].levelCD, b = pts[i].levelCD, c = pts[i + 1].levelCD;
+  if ((b > a && b >= c) || (b < a && b <= c)) turns++;
+  if (pts[i].hours < pts[i - 1].hours) backwards++;
+}
+out.gaugeEvents = gaugeEvents.filter(e => e.hours > 13 && e.hours < 59).length;
+out.placeTurns = turns; out.backwards = backwards;
+console.log(JSON.stringify(out));
+"""
+
+@check
+def tide_place_curve_has_no_false_highs_or_lows():
+    r = subprocess.run(["node", "-e", TIDE_NODE, str(ROOT)], capture_output=True, text=True)
+    expect(r.returncode == 0, r.stderr.strip()[-300:])
+    o = json.loads(r.stdout)
+    expect(o["charmouth"] == "Plymouth", f"Charmouth's gauge is {o['charmouth']}, should be Plymouth")
+    expect(o["weymouth"] == "Weymouth" and o["lulworth"] == "Weymouth", f"places by Weymouth should keep it: {o}")
+    expect(o["moved"] == "Plymouth" and o["offsetCleared"], f"saved Charmouth not moved off Weymouth: {o}")
+    expect(o["placeTurns"] == o["gaugeEvents"], f"place curve has {o['placeTurns']} highs/lows, gauge has {o['gaugeEvents']}")
+    expect(o["backwards"] == 0, "place curve's times run backwards somewhere")
+
 # ---------- browser checks ----------
 
 def new_page(browser, night=False):
