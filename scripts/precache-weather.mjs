@@ -151,7 +151,7 @@ function buildSourceUrl(sourceId, model, lat, lon) {
     // rain/wind/temperature, rather than relying on metoffice alone.
     // uv_index stays metoffice-only: nothing downstream blends UV across
     // sources, so there's no reason to pay for it on every request.
-    hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m,cloud_cover_low,cloud_cover_mid,cloud_cover_high" + (sourceId === "metoffice" ? ",uv_index" : ""),
+    hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m,cloud_cover_low,cloud_cover_mid,cloud_cover_high,direct_normal_irradiance" + (sourceId === "metoffice" ? ",uv_index" : ""),
     models: model,
     wind_speed_unit: "mph",
     forecast_days: 3,
@@ -239,7 +239,11 @@ async function fetchWeatherLocation(location, topForecasters) {
       // other real condition.
       cloudLow: field("cloud_cover_low", "cloud low"),
       cloudMid: field("cloud_cover_mid", "cloud mid"),
-      cloudHigh: field("cloud_cover_high", "cloud high")
+      cloudHigh: field("cloud_cover_high", "cloud high"),
+      // Per-source sunshine (Nov 2026): the front page's Sun hrs now
+      // counts hours over 120 W/m² from the latest runs (app.js
+      // liveSunshineHours) instead of yesterday's runs.
+      sunDni: field("direct_normal_irradiance", "sunshine")
     };
   });
 
