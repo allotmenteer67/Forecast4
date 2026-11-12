@@ -2138,6 +2138,17 @@ function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
   // scripts/precache-weather.mjs's own Open-Meteo request — a repo/
   // Action-side change, separate from this file.
   state.hourly.feelsLike = blend("feelsLike", "feelsLike");
+  // Cloud bands blended across sources from the latest runs, for the
+  // front page's Cloud cell (liveCloudMean). The hour slider and the
+  // sheet's strip still read Met Office's own cloudCoverLow/Mid/High.
+  state.hourly.cloudLowBlend = blend("cloudLow", "cloudLow");
+  state.hourly.cloudMidBlend = blend("cloudMid", "cloudMid");
+  state.hourly.cloudHighBlend = blend("cloudHigh", "cloudHigh");
+  // Kept per source, not blended hour by hour: sunshine is counted as
+  // hours per source first, then corrected and medianed (liveSunshineHours).
+  state.hourly.sunDniBySource = Object.fromEntries(
+    REAL_SOURCES.map(({ id }) => [id, perSource[id]?.sunDni ?? null])
+  );
   // Direction can't be medianed the way speed can (it's angular, not
   // linear) — first real source with a reading for that hour, same
   // convention as anyRealWindDirection() uses for the daily table.
@@ -2211,6 +2222,11 @@ async function tryPrecachedHourlyForecast(lat, lon) {
   return data.weather.find(w => haversineKm(lat, lon, w.lat, w.lon) <= PRECACHE_PROXIMITY_KM) || null;
 }
 
+function optionalHourly(data, key, from, length) {
+  const arr = data.hourly?.[key];
+  return arr ? arr.slice(from, from + length || undefined) : new Array(length).fill(null);
+}
+
 async function fetchHourlyForecast(lat, lon, force = false) {
   state.hourly.status = "loading";
   state.hourly.error = null;
@@ -2252,7 +2268,12 @@ async function fetchHourlyForecast(lat, lon, force = false) {
       const params = new URLSearchParams({
         latitude: lat,
         longitude: lon,
-        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m,apparent_temperature" + (id === "metoffice" ? ",uv_index,cloud_cover_low,cloud_cover_mid,cloud_cover_high" : ""),
+        // Sunshine (direct_normal_irradiance) and cloud now come from
+        // EVERY source's latest run, not just Met Office's — the front
+        // page's Sun hrs and Cloud cells used to read yesterday's runs
+        // all day long (Nov 2026: stuck on 2 hrs of sun and a grey cloud
+        // under a clear sky), see liveSunshineHours/liveCloudMean.
+        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m,apparent_temperature,direct_normal_irradiance,cloud_cover_low,cloud_cover_mid,cloud_cover_high" + (id === "metoffice" ? ",uv_index" : ""),
         models: model,
         wind_speed_unit: "mph",
         forecast_days: 3,
@@ -2291,7 +2312,13 @@ async function fetchHourlyForecast(lat, lon, force = false) {
         pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined),
         soilTemperature: data.hourly.soil_temperature_0cm.slice(from, from + sharedTimes.length || undefined),
         dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined),
-        feelsLike: data.hourly.apparent_temperature.slice(from, from + sharedTimes.length || undefined)
+        feelsLike: data.hourly.apparent_temperature.slice(from, from + sharedTimes.length || undefined),
+        // A model can lack a field on this endpoint — a missing one
+        // becomes "no data from this source" rather than a crash.
+        sunDni: optionalHourly(data, "direct_normal_irradiance", from, sharedTimes.length),
+        cloudLow: optionalHourly(data, "cloud_cover_low", from, sharedTimes.length),
+        cloudMid: optionalHourly(data, "cloud_cover_mid", from, sharedTimes.length),
+        cloudHigh: optionalHourly(data, "cloud_cover_high", from, sharedTimes.length)
       };
     });
 
@@ -4021,8 +4048,105 @@ function displayWindowHourCount() {
   return Math.min(loadHourRange(), state.hourly.times.length);
 }
 
-// Returns null for anything without a live path (currently Sunshine —
-// there's no hourly sunshine feed to build one from) so the caller can
+// ---- Sun hrs and Cloud from the latest runs (Nov 2026) ----
+// Both cells used to show the daily figure built from yesterday's and
+// the day before's runs, so they never changed during the day: Sun hrs
+// sat on 2 and Cloud on a grey cloud all through a cloudless day while
+// the sheet's strip (latest Met Office run) showed sun. Now both follow
+// the same 24/48h window as the strip, from every source's latest run.
+
+// Whether the hour ENDING at this time (Open-Meteo's convention for
+// radiation) overlaps daylight. null when sunrise/sunset isn't known.
+function hourIsDaylight(t) {
+  const date = t.slice(0, 10);
+  const rise = state.hourly.sunriseByDate?.[date];
+  const set = state.hourly.sunsetByDate?.[date];
+  if (!rise || !set) return null;
+  const end = new Date(t).getTime();
+  const start = end - 60 * 60 * 1000;
+  return end > new Date(rise).getTime() && start < new Date(set).getTime();
+}
+
+const LIVE_SUNSHINE_DNI_THRESHOLD_WM2 = 120; // same WMO rule as sunshineHoursByDay
+
+function sunshineSourcesWithLiveData() {
+  const hasData = id => (state.hourly.sunDniBySource?.[id] || []).some(v => v !== null && v !== undefined);
+  const chosen = eligibleOrFallbackSources("sunshine").filter(s => hasData(s.id));
+  if (chosen.length) return chosen;
+  return REAL_SOURCES
+    .filter(({ id }) => hasData(id))
+    .map(({ id }) => CONFIG.forecasters.find(s => s.id === id))
+    .filter(Boolean);
+}
+
+// Sun hours over the given hour indices: counted per source, corrected
+// by that source's own learned Sunshine ratio, capped at the daylight
+// hours in the span (the ratio can otherwise push a clear day past
+// sunset), then a weighted median across sources.
+function blendedSunHours(indices, day) {
+  const times = state.hourly.times;
+  const daylightHours = indices.filter(i => hourIsDaylight(times[i]) !== false).length;
+  const entries = sunshineSourcesWithLiveData().map(source => {
+    const dni = state.hourly.sunDniBySource[source.id];
+    let seen = false;
+    let lit = 0;
+    indices.forEach(i => {
+      const v = dni[i];
+      if (v === null || v === undefined) return;
+      seen = true;
+      if (v > LIVE_SUNSHINE_DNI_THRESHOLD_WM2) lit += 1;
+    });
+    if (!seen) return { value: null, weight: 0 };
+    const ffv = ffvFor(source, "sunshine", day);
+    const corrected = ffv !== null ? applyCorrection(lit, ffv, "sunshine") : lit;
+    return { value: Math.min(corrected, daylightHours), weight: sourceWeight(source, "sunshine") };
+  });
+  return weightedMedian(entries) ?? weightedMedian(entries.map(e => ({ ...e, weight: 1 })));
+}
+
+// 24h setting: one figure, the next 24 hours. 48h setting: the rest of
+// today and all of tomorrow ("3/8"), matching "Today and Tomorrow".
+function liveSunshineHours() {
+  if (state.hourly.status !== "ready" || !state.hourly.sunDniBySource) return null;
+  const times = state.hourly.times || [];
+  if (!times.length) return null;
+  if (loadHourRange() === 48) {
+    const todayKey = times[0].slice(0, 10);
+    const tomorrowKey = times.find(t => t.slice(0, 10) !== todayKey)?.slice(0, 10);
+    const todayIdx = [];
+    const tomorrowIdx = [];
+    times.forEach((t, i) => {
+      const key = t.slice(0, 10);
+      if (key === todayKey) todayIdx.push(i);
+      else if (key === tomorrowKey) tomorrowIdx.push(i);
+    });
+    const today = blendedSunHours(todayIdx, 1);
+    const tomorrow = tomorrowIdx.length ? blendedSunHours(tomorrowIdx, 2) : null;
+    if (today === null || tomorrow === null) return null;
+    return { today, tomorrow };
+  }
+  const indices = Array.from({ length: displayWindowHourCount() }, (_, i) => i);
+  const total = blendedSunHours(indices, 1);
+  return total === null ? null : { total };
+}
+
+// Mean of one cloud band over the daylight hours in the 24/48h window
+// (night cloud doesn't change the day's look; with no daylight known,
+// every hour counts).
+function liveCloudMean(band) {
+  const values = state.hourly[`${band}Blend`];
+  if (!values) return null;
+  const times = state.hourly.times || [];
+  const count = displayWindowHourCount();
+  let indices = Array.from({ length: count }, (_, i) => i);
+  const daylight = indices.filter(i => hourIsDaylight(times[i]) === true);
+  if (daylight.length) indices = daylight;
+  const vals = indices.map(i => values[i]).filter(v => v !== null && v !== undefined);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+}
+
+// Returns null for anything without a live path (Sunshine has its own,
+// liveSunshineHours, because it can be a pair) so the caller can
 // fall back to the usual snapshot. Temperature and Wind aren't handled
 // here — they have their own dedicated range/pair functions below,
 // reached first in renderHeadline.
@@ -4048,6 +4172,10 @@ function liveTodayValueFor(conditionName) {
       return state.hourly.dewPoint[0] ?? null;
     case "feelsLike":
       return state.hourly.feelsLike[0] ?? null;
+    case "cloudLow":
+    case "cloudMid":
+    case "cloudHigh":
+      return liveCloudMean(conditionName);
     default:
       return null;
   }
@@ -4582,8 +4710,16 @@ function renderHeadline() {
         valueEl.textContent = "Collecting data";
         valueEl.classList.add("headline-value-collecting");
       } else {
-        const value = headlineDisplayValueFor(conditionName);
-        valueEl.textContent = formatValue(value, conditionName);
+        const live = state.rollback === 0 ? liveSunshineHours() : null;
+        if (live && live.total !== undefined) {
+          valueEl.textContent = formatValue(live.total, "sunshine");
+        } else if (live) {
+          // No spaces round the slash, same as Wind's speed/gust.
+          valueEl.textContent = `${formatValue(live.today, "sunshine")}/${formatValue(live.tomorrow, "sunshine")}`;
+        } else {
+          const value = headlineDisplayValueFor(conditionName);
+          valueEl.textContent = formatValue(value, conditionName);
+        }
       }
     } else if (conditionName === "cloud") {
       // A sky icon rather than a number — three bands don't reduce to

@@ -48,6 +48,11 @@ down on purpose: don't bring it back without asking.
   irritating).
 - Ground-frost threshold is 4 °C, not 2 °C.
 - No notification-style nagging; passive visual cues only.
+- Sun hrs and Cloud (today) come from the latest model runs over the same
+  24/48h window as the sheet, not yesterday's daily figure (that sat on
+  "2 hrs" and a grey cloud all through a clear day, Nov 2026). Sun hrs on
+  48h shows rest of today / tomorrow ("3/8"); on 24h, one figure for the
+  next 24 h. Capped at daylight hours. Cloud averages daylight hours only.
 
 ## Forecasts and accuracy
 

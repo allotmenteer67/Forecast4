@@ -602,7 +602,10 @@
 // Admiralty's published time differences from Milford Haven (Little
 // Haven, Martin's Haven, Skomer, Dale, Solva, Ramsey Sound) on the coast
 // map, the Callout tide box and unchecked tide places nearby.
-const SHELL_CACHE_NAME = "cloude-shell-v147";
+// Bumped to v148: front-page Sun hrs and Cloud follow the latest runs
+// over the 24/48h window (Sun hrs as "rest of today/tomorrow" on 48h)
+// instead of sitting on yesterday's daily figure all day.
+const SHELL_CACHE_NAME = "cloude-shell-v148";
 const SHELL_FILES = [
   "index.html",
   "solar.html",
