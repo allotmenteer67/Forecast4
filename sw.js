@@ -586,7 +586,15 @@
 // surge (from the gauge) plus wave run-up (from the marine forecast and
 // the beach's slope) — for its colours, cut-offs, dry ground and ways
 // off; estimated beach now counts as dry ground (marked on the card).
-const SHELL_CACHE_NAME = "cloude-shell-v145";
+// Bumped to v146: tide — Charmouth (and anywhere else more than 25 km
+// from Weymouth or Bournemouth that was using them) now works from
+// Plymouth, or Portsmouth to the east, as Admiralty does; a saved place
+// is moved over and needs "Check against Admiralty" again. A place's
+// curve now follows the gauge between its own corrected high and low
+// instead of blending the two corrections (which drew false lows); the
+// tide graph's readout shows the time tapped; the curve is drawn every
+// half hour; the tide card looks 3 hours back for its next event.
+const SHELL_CACHE_NAME = "cloude-shell-v146";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

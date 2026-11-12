@@ -71,6 +71,15 @@ down on purpose: don't bring it back without asking.
 
 ## Tide and fishing
 
+- Weymouth and Bournemouth gauges are only used within 25 km of them; further
+  off, Plymouth (west of Weymouth) or Portsmouth (east) instead, as Admiralty
+  does for Lyme Regis. Replacement gauges are named, not "next nearest":
+  the next nearest to Charmouth is Hinkley Point, on the wrong sea. (Nov 2026,
+  after Charmouth showed a false low ~3 h after high water.)
+- A place's Admiralty-corrected tide follows the gauge's curve between the
+  place's own corrected high and low; where the gauge has a stand (double
+  low/high), a smooth half cosine. **Rejected:** blending the high- and
+  low-water corrections across the half-cycle — it makes false highs/lows.
 - Tide and fishing share one location list.
 - Heights can be shown on Chart Datum using NTSLF's per-station offsets.
 - The "are you sure?" warning for a tide/fishing location uses height above

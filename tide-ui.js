@@ -178,7 +178,12 @@ async function renderTideRow() {
 
   const fudge = loadTideFudge(location.station.id);
   const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
-  const rawEvents = findTideExtremes(built.fit, nowHours - 1, nowHours + 30);
+  // Starts 3 hours back, not 1: a place's own high or low can come over
+  // an hour after the gauge's (Charmouth is about 70 minutes after
+  // Plymouth at high water), so a gauge event just over an hour ago can
+  // still be the place's next one. significantTideExtremes drops stands
+  // at the gauge that aren't real highs or lows (see tide.js).
+  const rawEvents = significantTideExtremes(findTideExtremes(built.fit, nowHours - 3, nowHours + 30));
   const corrected = rawEvents
     .map(e => {
       const odLevel = applyTideFudge(e.level, fudge);
@@ -463,7 +468,10 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, l
   // curve genuinely about the selected location, not its nearest gauge.
   const toDisplay = (h, odLevel) => applyLocationCorrection(location, fit, h, odLevel);
 
-  const stepHours = totalHours / 200;
+  // Half-hour steps (was 200 steps across the whole fortnight, about
+  // every 1.7 hours, which cut the corners off highs and lows so the
+  // marked dots sat off the line).
+  const stepHours = Math.min(totalHours / 200, 0.5);
   const rawPts = [];
   for (let h = startHours; h <= endHours; h += stepHours) {
     const r = toDisplay(h, predictTideLevel(fit, h));
@@ -529,7 +537,7 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, l
   const correctedPath = "M" + correctedPts.map(p => `${xFor(p.hours)},${yFor(p.level)}`).join(" L");
   svg.appendChild(sheetSvgEl("path", { d: correctedPath, fill: "none", stroke: "#2b7a78", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
 
-  const events = findTideExtremes(fit, startHours, endHours);
+  const events = significantTideExtremes(findTideExtremes(fit, startHours, endHours));
   events.forEach(e => {
     const odLevel = applyTideFudge(e.level, fudge);
     const result = toDisplay(e.hours, odLevel);
@@ -565,9 +573,27 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, l
   svg.appendChild(crosshair);
   svg.appendChild(dot);
 
+  // The place's curve is the gauge's moved in time (by up to an hour or
+  // so), so the gauge moment that lands on a given clock time isn't that
+  // same clock time. Finds it (by halving — the shift changes smoothly,
+  // so later gauge moments always land later), so the readout shows the
+  // time actually tapped, and "now" opens on now. It used to show the
+  // gauge's own moment moved, which could read 22:18 at 00:28.
+  const displayAtClock = targetHours => {
+    const at = h => toDisplay(h, applyTideFudge(predictTideLevel(fit, h), fudge));
+    let lo = targetHours - 4, hi = targetHours + 4;
+    if (!(at(lo).hours <= targetHours && at(hi).hours >= targetHours)) return at(targetHours);
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      if (at(mid).hours < targetHours) lo = mid; else hi = mid;
+    }
+    const result = at((lo + hi) / 2);
+    return { ...result, hours: targetHours, gaugeHours: (lo + hi) / 2 };
+  };
+
   function showReadoutAt(hours) {
     const clamped = Math.max(startHours, Math.min(endHours, hours));
-    const result = toDisplay(clamped, applyTideFudge(predictTideLevel(fit, clamped), fudge));
+    const result = displayAtClock(clamped);
     const x = xFor(result.hours);
     const y = yFor(result.level);
     crosshair.setAttribute("x1", x);
@@ -577,7 +603,7 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, l
     const when = new Date(Date.parse(epochIso) + result.hours * 3600000);
     readoutTime.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
     readoutValue.textContent = `${result.level.toFixed(2)}m`;
-    const cyclePhase = tideCyclePhase(fit, clamped);
+    const cyclePhase = tideCyclePhase(fit, typeof result.gaugeHours === "number" ? result.gaugeHours : clamped);
     if (cyclePhase) {
       readoutCycle.textContent = cyclePhase;
       readoutCycle.hidden = false;

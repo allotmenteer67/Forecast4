@@ -211,9 +211,9 @@ const EA_TIDE_STATIONS = [
   { id: "E70039", measureId: "E70039-level-tidal_level-Mean-15_min-mAOD", label: "Lowestoft", lat: 52.473075, lon: 1.750085, cdOffsetOD: -1.50 },
   { id: "E72639", measureId: "E72639-level-tidal_level-Mean-15_min-mAOD", label: "Avonmouth Portbury", lat: 51.49999, lon: -2.728468, cdOffsetOD: -6.50 }, // NTSLF publishes "Avonmouth" — likely the same tidal regime as this Portbury gauge, not individually confirmed as the identical physical station
   { id: "E71539", measureId: "E71539-level-tidal_level-Mean-15_min-mAOD", label: "Sheerness", lat: 51.445627, lon: 0.743415, cdOffsetOD: -2.90 },
-  { id: "E71939", measureId: "E71939-level-tidal_level-Mean-15_min-mAOD", label: "Bournemouth", lat: 50.714331, lon: -1.874873, cdOffsetOD: -1.40 },
+  { id: "E71939", measureId: "E71939-level-tidal_level-Mean-15_min-mAOD", label: "Bournemouth", lat: 50.714331, lon: -1.874873, cdOffsetOD: -1.40, oddShape: true, insteadEast: "E71839" }, // double high water and a small range — see ODD_GAUGE_MAX_KM
   { id: "E71239", measureId: "E71239-level-tidal_level-Mean-15_min-mAOD", label: "Cromer", lat: 52.934316, lon: 1.301623, cdOffsetOD: -2.75 },
-  { id: "E72039", measureId: "E72039-level-tidal_level-Mean-15_min-mAOD", label: "Weymouth", lat: 50.608501, lon: -2.447945, cdOffsetOD: -0.93 },
+  { id: "E72039", measureId: "E72039-level-tidal_level-Mean-15_min-mAOD", label: "Weymouth", lat: 50.608501, lon: -2.447945, cdOffsetOD: -0.93, oddShape: true, insteadWest: "E72139", insteadEast: "E71839" }, // double low water and a small range — see ODD_GAUGE_MAX_KM
   { id: "E71639", measureId: "E71639-level-tidal_level-Mean-15_min-mAOD", label: "Dover", lat: 51.114372, lon: 1.322641, cdOffsetOD: -3.67 },
   { id: "E73439-anglian", measureId: "E73439-anglian-level-tidal_level-Mean-15_min-mAOD", label: "Heysham", lat: 54.031798, lon: -2.920253, cdOffsetOD: -4.90 },
   { id: "E72439", measureId: "E72439-level-tidal_level-Mean-15_min-mAOD", label: "Ilfracombe", lat: 51.211131, lon: -4.112362, cdOffsetOD: -4.80 },
@@ -270,16 +270,57 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// Weymouth and Bournemouth sit near the Portland/Solent amphidromic
+// region: small ranges and odd shapes (a double low at Weymouth, a
+// double high at Bournemouth). Right for places close to them, but a
+// poor pattern for anywhere further off — Admiralty's own tables work
+// Lyme Regis, Bridport and the Exe out from Plymouth, not Weymouth, and
+// using Weymouth for Charmouth gave a tide graph with a false low about
+// three hours after high water (Nov 2026). So an odd-shaped gauge is
+// only picked within ODD_GAUGE_MAX_KM; further off, the gauge named for
+// that side of it along the coast (insteadWest / insteadEast — Plymouth
+// to the west of Weymouth, Portsmouth to the east) is used instead.
+// Named, not the next nearest by distance, because the next nearest to
+// Charmouth as the crow flies is Hinkley Point, on the wrong sea.
+const ODD_GAUGE_MAX_KM = 25;
+
 function nearestTideStation(lat, lon) {
-  let best = null, bestDist = Infinity;
+  const withDistance = station => ({ ...station, distanceKm: haversineKm(lat, lon, station.lat, station.lon) });
+  let nearest = null;
   EA_TIDE_STATIONS.forEach(station => {
-    const dist = haversineKm(lat, lon, station.lat, station.lon);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = station;
-    }
+    const candidate = withDistance(station);
+    if (!nearest || candidate.distanceKm < nearest.distanceKm) nearest = candidate;
   });
-  return best ? { ...best, distanceKm: bestDist } : null;
+  if (!nearest || !nearest.oddShape || nearest.distanceKm <= ODD_GAUGE_MAX_KM) return nearest;
+  const insteadId = lon < nearest.lon ? nearest.insteadWest : nearest.insteadEast;
+  const instead = insteadId && EA_TIDE_STATIONS.find(station => station.id === insteadId);
+  return instead ? withDistance(instead) : nearest;
+}
+
+// Tiny wiggles in a gauge's fitted curve (a stand at low or high water,
+// like Weymouth's double low) come out of findTideExtremes as a
+// high/low pair only a few centimetres apart. Treated as real highs and
+// lows they get the full high- or low-water correction and throw the
+// place's curve about, so any neighbouring pair closer than this is
+// dropped, leaving the real highs and lows.
+const MIN_TIDE_EVENT_RISE_M = 0.3;
+
+function significantTideExtremes(events) {
+  const list = events.slice();
+  let removed = true;
+  while (removed && list.length > 1) {
+    removed = false;
+    let smallest = -1, smallestRise = MIN_TIDE_EVENT_RISE_M;
+    for (let i = 0; i < list.length - 1; i++) {
+      const rise = Math.abs(list[i + 1].level - list[i].level);
+      if (rise < smallestRise) { smallestRise = rise; smallest = i; }
+    }
+    if (smallest >= 0) {
+      list.splice(smallest, 2);
+      removed = true;
+    }
+  }
+  return list;
 }
 
 // Fetches this station's own recent history live and fits it on the
@@ -339,11 +380,39 @@ const CURRENT_TIDE_LOCATION_KEY = "cloude-tide:current";
 function loadTideLocations() {
   try {
     const raw = localStorage.getItem(TIDE_LOCATIONS_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const locations = JSON.parse(raw);
+      if (Array.isArray(locations) && moveOffOddGauges(locations)) saveTideLocations(locations);
+      return locations;
+    }
   } catch {
     // fall through to default
   }
   return [];
+}
+
+// Places saved before the odd-gauge rule (see ODD_GAUGE_MAX_KM) keep
+// the gauge they were given then — Charmouth was on Weymouth. Moves
+// each one to the gauge it would get now. Its Admiralty correction was
+// learned against the old gauge and means nothing against the new one,
+// so that's cleared: Settings then shows "not checked yet" and one tap
+// of "Check against Admiralty" learns it again. Returns true if
+// anything changed.
+function moveOffOddGauges(locations) {
+  let changed = false;
+  locations.forEach(loc => {
+    if (!loc || !loc.station || typeof loc.lat !== "number" || typeof loc.lon !== "number") return;
+    const known = EA_TIDE_STATIONS.find(s => s.id === loc.station.id);
+    if (!known || !known.oddShape) return;
+    const better = nearestTideStation(loc.lat, loc.lon);
+    if (!better || better.id === loc.station.id) return;
+    if (loc.discoveryStation) {
+      try { localStorage.removeItem(secondaryOffsetKey(loc.discoveryStation.id)); } catch { /* nothing stored */ }
+    }
+    loc.station = better;
+    changed = true;
+  });
+  return changed;
 }
 
 function saveTideLocations(locations) {
@@ -799,7 +868,7 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, discoverySt
   const fudge = loadTideFudge(eaStation.id);
   const windowStartHours = (discoveryEvents[0].time - Date.parse(epochIso)) / 3600000 - 12;
   const windowEndHours = (discoveryEvents[discoveryEvents.length - 1].time - Date.parse(epochIso)) / 3600000 + 12;
-  const modelEvents = findTideExtremes(fit, windowStartHours, windowEndHours).map(e => ({
+  const modelEvents = significantTideExtremes(findTideExtremes(fit, windowStartHours, windowEndHours)).map(e => ({
     type: e.type,
     time: Date.parse(epochIso) + e.hours * 3600000,
     // OD (mAOD-consistent, since the model was fit to EA's own mAOD
@@ -1026,12 +1095,13 @@ function assessSecondaryOffsetReliability(eaStation, offset) {
 }
 
 // Applies a learned secondary-port offset to a single hours/OD-level
-// pair, returning a Chart-Datum-referenced result. Blends between the
-// high-tide offset and the low-tide offset by how far through the
-// current half-cycle the given hour sits, rather than snapping straight
-// from one to the other at each event — real secondary-port tide tables
-// interpolate between reference points the same way, so a smooth blend
-// is the standard approach here, not a simplification of it.
+// pair, returning a Chart-Datum-referenced result. The time shift
+// blends between the high-tide and low-tide offsets by how far through
+// the current half-cycle the given hour sits, rather than snapping
+// straight from one to the other at each event — real secondary-port
+// tide tables interpolate between reference points the same way. The
+// height follows the gauge's curve between the place's own corrected
+// high and low (see below).
 //
 // Returns null if there's no usable offset, or if eaStation has no
 // confirmed cdOffsetOD (the learned offset is itself CD-referenced,
@@ -1041,7 +1111,8 @@ function assessSecondaryOffsetReliability(eaStation, offset) {
 // avoid rather than reproduce).
 function applySecondaryOffset(fit, hours, odLevel, eaStation, offset) {
   if (!offset || typeof eaStation.cdOffsetOD !== "number") return null;
-  const nearbyEvents = findTideExtremes(fit, hours - 8, hours + 8);
+  const allNearbyEvents = findTideExtremes(fit, hours - 8, hours + 8);
+  const nearbyEvents = significantTideExtremes(allNearbyEvents);
   if (nearbyEvents.length < 2) return null;
 
   let before = null, after = null;
@@ -1065,17 +1136,37 @@ function applySecondaryOffset(fit, hours, odLevel, eaStation, offset) {
   const span = after.hours - before.hours;
   const frac = span > 0 ? (hours - before.hours) / span : 0;
   const timeMin = beforeOffset.timeMin + (afterOffset.timeMin - beforeOffset.timeMin) * frac;
-  const slope = beforeOffset.slope + (afterOffset.slope - beforeOffset.slope) * frac;
-  const intercept = beforeOffset.intercept + (afterOffset.intercept - beforeOffset.intercept) * frac;
 
-  // A full linear correction (slope AND intercept), not a pure ratio —
-  // the slope stretches a suppressed-range station's curve toward a
-  // genuinely different-amplitude location (Lyme Regis vs Weymouth);
-  // the intercept absorbs a fixed, same-size-at-every-tide-height
-  // discrepancy that a pure ratio would otherwise distort — inflating
-  // it far more at low tide than high tide, which is exactly the bug
-  // a same-place self-check exposed (see learnSecondaryOffset).
-  const levelCD = (odLevel - eaStation.cdOffsetOD) * slope + intercept;
+  // Heights, the way Admiralty does a secondary port: work out the
+  // place's own high and low water either side (each with its own
+  // learned correction), then go between them following the gauge's
+  // curve — how far the gauge has risen or fallen between its own two
+  // events is how far the place has between its two. That can never
+  // make a high or low that isn't one at the gauge.
+  //
+  // (It used to blend the high-water and low-water corrections
+  // themselves across the half-cycle and apply the blend to the gauge's
+  // height. When the two corrections differ a lot — Lyme Regis against
+  // Weymouth or Plymouth — that blend dips and rises on its own, which
+  // drew false lows: Charmouth showed one about three hours after high
+  // water, Nov 2026.)
+  //
+  // odLevel can include the gauge's learned fudge; the same shift is
+  // added to the two events so all three heights are on one footing.
+  const gaugeNow = predictTideLevel(fit, hours);
+  const fudgeShift = odLevel - gaugeNow;
+  const placeHeight = (event, o) => (event.level + fudgeShift - eaStation.cdOffsetOD) * o.slope + o.intercept;
+  const beforeCD = placeHeight(before, beforeOffset);
+  const afterCD = placeHeight(after, afterOffset);
+  // Where the gauge has a stand or wiggle in this half-cycle (a double
+  // low, say), its shape isn't one the place shares, so a plain smooth
+  // rise or fall (a half cosine) is used for that half-cycle instead.
+  const gaugeChange = before.level - after.level;
+  const gaugeHasStand = allNearbyEvents.some(e => e.hours > before.hours && e.hours < after.hours);
+  const through = (gaugeHasStand || Math.abs(gaugeChange) <= 0.05)
+    ? (1 - Math.cos(Math.PI * frac)) / 2
+    : Math.max(0, Math.min(1, (before.level - gaugeNow) / gaugeChange));
+  const levelCD = beforeCD + (afterCD - beforeCD) * through;
   return { hours: hours + timeMin / 60, levelCD };
 }
 
