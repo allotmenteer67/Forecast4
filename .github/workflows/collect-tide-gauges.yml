@@ -1,0 +1,68 @@
+# Long tide-gauge records (scripts/collect-tide-gauges.py): about a year
+# of hourly readings for every tide gauge in tide.js, from the
+# Environment Agency's daily archive files, saved under
+# data/tide-gauges/. The app fits its tide predictions to them.
+#
+# Runs by itself once a day, and straight away when this file or the
+# script is uploaded. The first run reads the whole year (about half an
+# hour); after that each run reads just the new day. If a run stops part
+# way, what it read is still saved and the next run carries on.
+name: collect-tide-gauges
+
+on:
+  schedule:
+    # 10:20 UTC: the archive file for the day before is out by then.
+    - cron: "20 10 * * *"
+  push:
+    paths:
+      - "scripts/collect-tide-gauges.py"
+      - ".github/workflows/collect-tide-gauges.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect-tide-gauges
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read the gauge archive
+        env:
+          TIDE_MAX_MINUTES: "300"
+          TIDE_WORKERS: "6"
+        run: python3 scripts/collect-tide-gauges.py
+
+      - name: Commit the gauge records
+        # Also after a failed or stopped run, so what was read is kept.
+        if: ${{ !cancelled() }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/tide-gauges
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Tide gauge records"
+          # precache-weather pushes every 20 minutes, so retry on a clash.
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase && git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push attempt $attempt failed, retrying…"
+            sleep $((attempt * 10))
+          done
+          echo "Could not push after 5 attempts."
+          exit 1
