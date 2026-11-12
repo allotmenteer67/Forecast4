@@ -123,6 +123,78 @@ def tide_place_curve_has_no_false_highs_or_lows():
     expect(o["placeTurns"] == o["gaugeEvents"], f"place curve has {o['placeTurns']} highs/lows, gauge has {o['gaugeEvents']}")
     expect(o["backwards"] == 0, "place curve's times run backwards somewhere")
 
+TIDE_DIFF_NODE = r"""
+const fs = require('fs'), vm = require('vm');
+const store = {};
+const ctx = { console, Date, Math, JSON,
+  localStorage: { getItem: k => store[k] ?? null, setItem: (k, v) => store[k] = String(v), removeItem: k => delete store[k] } };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1] + '/tide.js', 'utf8'), ctx);
+const T = n => vm.runInContext(n, ctx);
+const out = {};
+// Table interpolation: Little Haven low water is +25 at 01:00/13:00 GMT, +15 at 07:00/19:00.
+const lh = T('timeDifferenceByName')('Little Haven');
+const at = (h, m) => Date.UTC(2026, 10, 12, h, m);
+out.lw0100 = T('tableTimeDifferenceMin')(lh, 'low', at(1, 0));
+out.lw0700 = T('tableTimeDifferenceMin')(lh, 'low', at(7, 0));
+out.lw0400 = T('tableTimeDifferenceMin')(lh, 'low', at(4, 0));
+out.lw2200 = T('tableTimeDifferenceMin')(lh, 'low', at(22, 0));
+// A pretend gauge (M2 + S2) moved to Ramsey Sound (+30 for all): each high and low 30 minutes later, same height.
+const coeffs = new Array(1 + 2 * 10).fill(0); coeffs[0] = 0.1; coeffs[1] = 2.5; coeffs[3] = 0.8;
+const epochIso = new Date(Date.now() - 10 * 86400000).toISOString();
+const built = { fit: { coeffs, names: T('TIDE_CONSTITUENTS').map(c => c.name) }, epochIso };
+const made = T('timeDifferenceFit')(built, T('timeDifferenceByName')('Ramsey Sound'));
+const nowH = 10 * 24;
+const g = T('significantTideExtremes')(T('findTideExtremes')(built.fit, nowH, nowH + 48));
+const p = T('significantTideExtremes')(T('findTideExtremes')(made.fit, nowH, nowH + 49));
+out.shifts = g.map(e => { const q = p.find(x => x.type === e.type && Math.abs(x.hours - e.hours) < 2); return q ? Math.round((q.hours - e.hours) * 60) : null; });
+out.heights = g.map(e => { const q = p.find(x => x.type === e.type && Math.abs(x.hours - e.hours) < 2); return q ? +(q.level - e.level).toFixed(2) : null; });
+out.rms = made.rmsM;
+out.nearLittleHaven = (T('nearestTimeDifference')(51.775, -5.11, 'E73039') || {}).name;
+out.nearFishguard = T('nearestTimeDifference')(52.01, -4.98, 'E73039');
+console.log(JSON.stringify(out));
+"""
+
+@check
+def tide_published_time_differences():
+    r = subprocess.run(["node", "-e", TIDE_DIFF_NODE, str(ROOT)], capture_output=True, text=True)
+    expect(r.returncode == 0, r.stderr.strip()[-300:])
+    o = json.loads(r.stdout)
+    expect(o["lw0100"] == 25 and o["lw0700"] == 15 and abs(o["lw0400"] - 20) < 0.01, f"table interpolation wrong: {o}")
+    expect(abs(o["lw2200"] - 20) < 0.01, f"22:00 low water should be halfway from 19:00 to 01:00: {o['lw2200']}")
+    expect(all(s is not None and abs(s - 30) <= 3 for s in o["shifts"]), f"Ramsey Sound highs/lows not 30 min after the gauge: {o['shifts']}")
+    expect(all(h is not None and abs(h) <= 0.05 for h in o["heights"]), f"heights changed: {o['heights']}")
+    expect(o["nearLittleHaven"] == "Little Haven" and o["nearFishguard"] is None, f"nearest table place wrong: {o}")
+
+LONG_RECORD_NODE = r"""
+const fs = require('fs'), vm = require('vm');
+const ctx = { console, Date, Math, JSON, localStorage: { getItem: () => null, setItem() {}, removeItem() {} } };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1] + '/tide.js', 'utf8'), ctx);
+const T = n => vm.runInContext(n, ctx);
+const rec = JSON.parse(fs.readFileSync(process.argv[1] + '/data/tide-gauges/E73039.json'));
+const all = []; rec.cm.forEach((v, i) => { if (v !== null) all.push({ hours: i, level: v / 100 }); });
+const end = all[all.length - 1].hours, cut = end - 21 * 24;
+const train = all.filter(r => r.hours < cut), test = all.filter(r => r.hours >= cut);
+const rms = fit => Math.sqrt(test.reduce((s, r) => s + (r.level - T('predictTideLevel')(fit, r.hours)) ** 2, 0) / test.length);
+const four = T('fitTideHarmonics')(train.filter(r => r.hours >= cut - 28 * 24));
+const year = T('fitTideHarmonicsRobust')(train, T('TIDE_CONSTITUENTS_LONG'));
+console.log(JSON.stringify({ days: all.length / 24, four: rms(four), year: rms(year) }));
+"""
+
+@check
+def tide_long_record_beats_four_weeks():
+    # Milford Haven: a year's fit should predict the next three weeks
+    # better than a four-week one (it was 0.28 m against 0.19 m, Nov 2026).
+    # Skipped until the GitHub job has saved the records.
+    if not (ROOT / "data" / "tide-gauges" / "E73039.json").exists():
+        print("        (no data/tide-gauges yet — skipped)"); return
+    r = subprocess.run(["node", "-e", LONG_RECORD_NODE, str(ROOT)], capture_output=True, text=True)
+    expect(r.returncode == 0, r.stderr.strip()[-300:])
+    o = json.loads(r.stdout)
+    expect(o["days"] > 300, f"only {o['days']:.0f} days in the Milford Haven record")
+    expect(o["year"] < o["four"] * 0.9, f"year fit {o['year']:.3f} m not better than four-week {o['four']:.3f} m")
+
 # ---------- browser checks ----------
 
 def new_page(browser, night=False):
@@ -256,6 +328,9 @@ def coast_weather_allowance(browser):
 @check
 def coast_dry_ground_on_land_and_without_tide(browser):
     pg = coast(browser, tide=False)
+    # No tide: outside sites are blocked, but the gauge records in
+    # data/tide-gauges are served locally and can give the map a tide.
+    pg.evaluate("coast.tide = null")
     r = pg.evaluate("(async()=>{const a=await nearestDryGround({lat:51.75936,lon:-5.13582}); const b=await nearestDryGround({lat:51.775,lon:-5.135}); return [a&&a.distM, b]})()")
     expect(r[0] == 0, f"field inland should be 'on dry ground', got {r[0]}")
     expect(r[1] is None, f"at sea with no tide there should be no answer, got {r[1]}")
@@ -280,6 +355,23 @@ def coast_charmouth_loads(browser):
     preview = enter(pg, "grid", text="SY 365 925")
     expect("50°43.75′N 2°54.02′W" in preview, preview)
     expect(not pg.errors, pg.errors)
+
+@check
+def coast_stbrides_uses_published_time_differences(browser):
+    # With a (pretend) Milford Haven tide, the bay's tide is Little Haven's
+    # from Admiralty's published differences, not the gauge's as is.
+    pg = coast(browser, tide=False)
+    pg.evaluate("""async () => {
+      const coeffs = new Array(21).fill(0); coeffs[0] = 0.1; coeffs[1] = 2.5; coeffs[3] = 0.8;
+      const fit = { coeffs, names: TIDE_CONSTITUENTS.map(c => c.name) };
+      getOrBuildTideFit = async () => ({ fit, epochIso: new Date(Date.now() - 5 * 86400000).toISOString() });
+      await loadTide();
+    }""")
+    pg.wait_for_timeout(1500)
+    t = pg.evaluate("coast.tide && { label: coast.tide.zoneLabel, source: coast.tide.sourceText, moved: coast.tide.fit !== coast.tide.baseFit }")
+    expect(t, "no tide on the map")
+    expect(t["label"] == "Little Haven" and "published time differences" in t["source"] and t["moved"], f"bay tide not Little Haven's: {t}")
+    expect(not pg.errors, f"page errors: {pg.errors}")
 
 @check
 def callout_loads(browser):
