@@ -390,6 +390,38 @@ def front_page_loads_and_visibility_label(browser):
         expect(nums == ["0.9 Very poor", "9 Moderate", "10 Good"], f"visibility number/word disagree: {nums}")
     expect(not pg.errors, pg.errors)
 
+@check
+def front_sun_and_cloud_follow_latest_runs(browser):
+    # Nov 2026 bug: Sun hrs sat on 2 and Cloud on a grey cloud all day,
+    # read from yesterday's runs. They now come from the latest hourly
+    # runs over the 24/48h window, Sun hrs capped at daylight.
+    pg = new_page(browser)
+    pg.goto(f"{BASE}/index.html"); pg.wait_for_timeout(2500)
+    res = pg.evaluate("""() => {
+      const times = [];
+      for (let d = 12; d <= 13; d++) for (let h = (d === 12 ? 14 : 0); h < 24; h++)
+        times.push(`2026-11-${d}T${String(h).padStart(2, '0')}:00`);
+      const dni = times.map(t => { const h = +t.slice(11, 13); return h >= 9 && h <= 17 ? 500 : 0; });
+      state.hourly.times = times;
+      state.hourly.sunriseByDate = { '2026-11-12': '2026-11-12T07:22', '2026-11-13': '2026-11-13T07:24' };
+      state.hourly.sunsetByDate = { '2026-11-12': '2026-11-12T16:28', '2026-11-13': '2026-11-13T16:27' };
+      state.hourly.sunDniBySource = Object.fromEntries(REAL_SOURCES.map(({ id }) => [id, dni]));
+      state.hourly.cloudLowBlend = times.map(t => +t.slice(11, 13) < 7 ? 100 : 0);
+      state.hourly.cloudMidBlend = times.map(() => 0);
+      state.hourly.cloudHighBlend = times.map(() => 0);
+      state.hourly.status = 'ready';
+      const out = {};
+      localStorage.setItem(HOUR_RANGE_KEY, '48'); out.pair = liveSunshineHours(); out.cloud = liveCloudMean('cloudLow');
+      localStorage.setItem(HOUR_RANGE_KEY, '24'); out.single = liveSunshineHours();
+      return out;
+    }""")
+    # Today: hours ending 14,15,16,17 are lit and in daylight (17:00 covers 16-17,
+    # overlapping 16:28 sunset) = 4. Tomorrow: 9..17 = 9 lit, daylight cap 10.
+    expect(res["pair"] == {"today": 4, "tomorrow": 9}, f"48h sun pair wrong: {res['pair']}")
+    expect(res["single"] == {"total": 9}, f"24h sun total wrong: {res['single']}")
+    expect(res["cloud"] == 0, f"night cloud leaked into the daytime cloud mean: {res['cloud']}")
+    expect(not pg.errors, pg.errors)
+
 # ---------- runner ----------
 
 def main():
