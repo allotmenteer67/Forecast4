@@ -1319,6 +1319,18 @@ input[type="range"]:active::-moz-range-thumb {
   transform: scale(1.15);
 }
 
+/* The 44px-tall input keeps its full touch target, but about 9px of it
+   is empty space under the thumb, and as an inline element it also left
+   a few px of text-descender gap below itself. Together with the card's
+   own bottom padding that made a noticeably deep empty band under the
+   hour slider. display:block removes the descender gap; the negative
+   margin lets the empty part of the input overlap the card's padding
+   instead of adding to it. Nothing visible or tappable gets smaller. */
+.hour-slider input[type="range"] {
+  display: block;
+  margin-bottom: -8px;
+}
+
 .hour-slider input[type="range"]::-webkit-slider-runnable-track {
   background: linear-gradient(to right, var(--accent-muted) 0%, var(--accent-muted) var(--fill, 0%), #d3ddd6 var(--fill, 0%), #d3ddd6 100%);
 }
