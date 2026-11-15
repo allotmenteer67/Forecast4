@@ -179,6 +179,24 @@
 
     <section class="controls">
       <fieldset>
+        <legend>Met Office Spot (optional)</legend>
+        <p class="note">Adds the Met Office's own forecast for your place as an extra forecaster — the one behind their app, not the raw model the "Met Office" forecaster already uses. It needs your own free key: register at datahub.metoffice.gov.uk, then subscribe to the free "Site Specific – Global Spot" plan (360 lookups a day, far more than Cloude uses). The key stays on this device only.</p>
+        <p class="note">The Met Office doesn't publish past forecasts, so Cloude keeps its own record of what this forecast said, from the day the key is added. Like any new forecaster it shows "Collecting data" for 14 days before it joins the blend — and its record only grows on days you open the app for that place.</p>
+        <label>
+          API key
+          <div class="location-row">
+            <input id="moSpotKeyInput" type="text" placeholder="Paste your Met Office key" autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+        </label>
+        <div class="location-actions">
+          <button id="saveMoSpotKeyButton" type="button">Save</button>
+        </div>
+        <p id="moSpotKeyStatus" class="actual-status"></p>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
         <legend>Admiralty accuracy (optional)</legend>
         <p class="note">A saved tide location often sits some real distance from its nearest gauge above — Teignmouth, for example, is matched to Plymouth, over 50km away, and can genuinely run 35-40 minutes and the best part of a metre different at high tide. A free Admiralty Discovery API key lets each location learn its own real correction against Admiralty's own data for that exact spot, rather than relying on the nearest gauge unmodified. Get a free key at admiraltyapi.portal.azure-api.net (Products → UK Tidal API → Discovery tier).</p>
         <p class="note">Admiralty's API can't be called directly from a browser (their own docs confirm this — no CORS support on their side), so this also needs a small relay in between. See admiralty-proxy-worker.js in the project files — it deploys free on Cloudflare Workers in a few minutes and doesn't store or need to know anyone's key.</p>

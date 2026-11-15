@@ -488,7 +488,7 @@ def no_placeholder_forecasters(browser):
     pg.on("pageerror", lambda e: pg.errors.append(str(e)))
     pg.goto(f"{BASE}/settings.html"); pg.wait_for_timeout(800)
     ids = pg.evaluate("CONFIG.forecasters.map(f => f.id)")
-    expect(ids == pg.evaluate("REAL_SOURCES.map(s => s.id)"), f"non-real forecaster listed: {ids}")
+    expect(ids == pg.evaluate("[...REAL_SOURCES.map(s => s.id), MO_SPOT_ID]"), f"non-real forecaster listed: {ids}")
     expect(pg.evaluate("typeof demoValue") == "undefined", "demo formula still present")
     boxes = pg.evaluate("document.querySelectorAll('#forecasters input').length")
     expect(boxes == len(ids), f"Settings shows {boxes} forecasters, expected {len(ids)}")
@@ -498,6 +498,61 @@ def no_placeholder_forecasters(browser):
     expect("bbc" not in ffv["rain"] and "metoffice" in ffv["rain"], f"FFV not tidied correctly: {ffv}")
     el = pg.evaluate("JSON.parse(localStorage.getItem('forecast-compare:eligibility:TA7'))")
     expect(list(el["rain"].keys()) == ["ecmwf"], f"eligibility not tidied correctly: {el}")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
+def met_office_spot_record_and_blend(browser):
+    # Met Office Spot keeps its own record of past forecasts (the Met
+    # Office publishes none). The record must turn into lead-day figures
+    # the rest of the app understands, stay out of the blend until 14
+    # days are recorded, then join it.
+    ctx = browser.new_context(viewport=PHONE)
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    ctx.add_init_script("localStorage.setItem('forecast-compare:moSpotKey','test-key');")
+    pg = ctx.new_page(); pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/settings.html"); pg.wait_for_timeout(800)
+    res = pg.evaluate("""(() => {
+      const today = isoDate(new Date());
+      const tomorrow = addDaysIso(today, 1), in3 = addDaysIso(today, 3);
+      const archive = { issued: {
+        [today]: { [tomorrow]: { p: 4, tx: 10, tn: 6, w: 20, g: 30, d: 200, pr: 1000, fl: 5 } },
+        [addDaysIso(today, 1 - 3)]: { [tomorrow]: { p: 9, tx: 12, tn: 8, w: 25, g: 35, d: 210, pr: 995, fl: 7 } }
+      }, scored: {} };
+      const slot = moSpotSlotFromArchive(archive);
+      const i = slot.dates.indexOf(tomorrow);
+      state.realSources.mospot = slot;
+      state.selected = new Set(['metoffice', 'mospot']);
+      const src = CONFIG.forecasters.find(s => s.id === 'mospot');
+      const out = { lead1: slot.byLeadDay[1].precip[i], lead3: slot.byLeadDay[3].precip[i],
+        t1: slot.byLeadDay[1].tempAvg[i], cloud: forecastValueFor(1, src, 'cloudLow', -1),
+        viaApp: forecastValueFor(1, src, 'rain', -1) };
+      // hourly blend: Open-Meteo sources say 0 and 10, Spot says 6
+      const t0 = new Date(); t0.setMinutes(0, 0, 0);
+      const times = [0, 1].map(h => { const d = new Date(t0.getTime() + h * 3600e3); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + 'T' + String(d.getHours()).padStart(2,'0') + ':00'; });
+      state.moSpot = { status: 'ready', hourly: [0, 1].map(h => ({ t: new Date(times[h]).getTime(), p: 6, T: 10, w: 10, g: 15, d: 180, pr: 1000, fl: 8, dp: 5 })) };
+      const per = { metoffice: { precipitation: [0, 0] }, ecmwf: { precipitation: [10, 10] } };
+      applyHourlyBlend(per, times, {});
+      out.before = state.hourly.precipitation[0];
+      const elig = {}; elig.rain = { mospot: {} };
+      for (let k = 1; k <= 14; k++) elig.rain.mospot[addDaysIso(today, -k)] = true;
+      state.areaCode = 'TEST'; saveEligibilityStore('TEST', elig);
+      applyHourlyBlend(per, times, {});
+      out.after = state.hourly.precipitation[0];
+      out.joins = moSpotJoinsBlend('rain');
+      return out;
+    })()""")
+    expect(res["lead1"] == 4 and res["lead3"] == 9, f"record -> lead days wrong: {res}")
+    expect(res["t1"] == 8, f"temperature mean wrong: {res}")
+    expect(res["cloud"] is None, "Spot invented a cloud figure")
+    expect(res["viaApp"] == 4, f"Compare would show {res['viaApp']} not 4")
+    expect(res["before"] == 5, f"Spot joined the blend before 14 days (median of 0,10 is 5): {res}")
+    expect(res["joins"] and res["after"] == 6, f"after 14 days the median of 0,10,6 should be 6: {res}")
+    boxes = pg.evaluate("[...document.querySelectorAll('#forecasters input')].map(i => i.disabled)")
+    expect(len(boxes) == 10 and not boxes[-1], f"Spot box should be enabled with a key: {boxes}")
+    pg.evaluate("localStorage.removeItem('forecast-compare:moSpotKey'); refreshSpotCheckbox()")
+    expect(pg.evaluate("document.querySelectorAll('#forecasters input')[9].disabled"), "Spot box should be greyed out without a key")
     expect(not pg.errors, pg.errors)
     ctx.close()
 

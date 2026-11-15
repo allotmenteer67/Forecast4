@@ -220,7 +220,10 @@ const CONFIG = {
     { id: "meteofrance", name: "Météo-France", enabled: true },
     { id: "jma", name: "JMA (Japan)", enabled: true },
     { id: "bom", name: "BOM (Australia)", enabled: true },
-    { id: "cma", name: "CMA (China)", enabled: true }
+    { id: "cma", name: "CMA (China)", enabled: true },
+    // The Met Office's own site forecast via Weather DataHub (needs a free
+    // key in Settings) — see the Met Office Spot section.
+    { id: "mospot", name: "Met Office Spot", enabled: true }
   ],
   conditions: {
     rain: { name: "Rain", unit: "mm" },
@@ -873,6 +876,18 @@ const REAL_SOURCES = [
   { id: "bom", model: "bom_access_global" },   // Australian Bureau of Meteorology
   { id: "cma", model: "cma_grapes_global" }    // China Meteorological Administration
 ];
+// Met Office Spot constants — see the "Met Office Spot" section below.
+const MO_SPOT_ID = "mospot";
+const MO_SPOT_KEY_STORAGE = "forecast-compare:moSpotKey";
+const MO_SPOT_URL = "https://data.hub.api.metoffice.gov.uk/sitespecific/v0/point";
+const MO_SPOT_CACHE_KEY = "forecast-compare:moSpotCache";
+const MO_SPOT_CACHE_MS = 60 * 60 * 1000;
+const MO_SPOT_ARCHIVE_DAYS = MAX_ROLLBACK + 10; // issue dates kept: enough for every lead of every past date on Compare
+// What this source genuinely provides. No cloud, soil temperature,
+// sunshine or (beyond 48h) dew point — those stay blank for it.
+const MO_SPOT_CONDITIONS = new Set(["rain", "wind", "temperature", "pressure", "feelsLike"]);
+const MS_TO_MPH = 2.236936;
+
 function realSourceIds() {
   return REAL_SOURCES.map(s => s.id);
 }
@@ -951,11 +966,18 @@ function savePlaces(places) {
 function loadSelectedForecasters() {
   try {
     const raw = localStorage.getItem(SELECTED_FORECASTERS_KEY);
-    if (raw) return new Set(JSON.parse(raw));
+    if (raw) return withoutKeylessSpot(new Set(JSON.parse(raw)));
   } catch {
     // fall through to default
   }
-  return new Set(CONFIG.forecasters.filter(f => f.enabled).map(f => f.id));
+  return withoutKeylessSpot(new Set(CONFIG.forecasters.filter(f => f.enabled).map(f => f.id)));
+}
+
+// Met Office Spot can't contribute anything without a key, so without
+// one it's simply not selected (no empty "Collecting data" column).
+function withoutKeylessSpot(selected) {
+  if (!loadMoSpotKey()) selected.delete(MO_SPOT_ID);
+  return selected;
 }
 
 // ---- One-off tidy-up: the eleven placeholder forecasters (Nov 2026) ----
@@ -1019,6 +1041,7 @@ function emptyRealSourcesState() {
       byLeadDay: emptyLeadDayData()
     };
   });
+  bySource.mospot = { status: "idle", error: null, dates: [], byLeadDay: emptyLeadDayData() };
   return bySource;
 }
 
@@ -1956,6 +1979,259 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
   renderTable();
 }
 
+// ---- Met Office Spot: the Met Office's own site forecast (Nov 2026) ----
+// Weather DataHub's "Site Specific – Global Spot" service: the Met
+// Office's own post-processed forecast for the nearest of its forecast
+// sites, as opposed to the raw global model ("metoffice") that comes via
+// Open-Meteo. A genuinely separate opinion: it blends the Met Office's
+// models (UKV included) and applies their own corrections.
+//
+// Each person uses their own free key (Settings), 360 calls a day. Two
+// calls per refresh (hourly for 48h, three-hourly for 7 days), cached for
+// an hour per place, so ordinary use stays far inside that. Their API
+// allows direct browser calls, so no relay is needed.
+//
+// No past forecasts are available from the Met Office, so Cloude keeps
+// its own record (the "archive"): every refresh stores what this
+// forecast says for each of the next six days, per postcode area. That
+// record becomes the same lead-day shape the Open-Meteo sources have, so
+// Compare, fudge factors, accuracy and the 14-day wait all work on it
+// unchanged. The record only grows on days the app is opened for that
+// place.
+// (Constants for this section live next to REAL_SOURCES, so code that
+// runs while the page is still loading can use them.)
+
+function loadMoSpotKey() {
+  try { return (localStorage.getItem(MO_SPOT_KEY_STORAGE) || "").trim(); } catch { return ""; }
+}
+
+function saveMoSpotKey(key) {
+  try {
+    if (key) localStorage.setItem(MO_SPOT_KEY_STORAGE, key.trim());
+    else localStorage.removeItem(MO_SPOT_KEY_STORAGE);
+  } catch {}
+}
+
+function moSpotArchiveKey(areaCode) {
+  return `forecast-compare:moSpotArchive:${areaCode}`;
+}
+
+function loadMoSpotArchive(areaCode) {
+  try {
+    const raw = localStorage.getItem(moSpotArchiveKey(areaCode));
+    const a = raw ? JSON.parse(raw) : {};
+    return { issued: a.issued || {}, scored: a.scored || {} };
+  } catch {
+    return { issued: {}, scored: {} };
+  }
+}
+
+function saveMoSpotArchive(areaCode, archive) {
+  try { localStorage.setItem(moSpotArchiveKey(areaCode), JSON.stringify(archive)); } catch {}
+}
+
+function addDaysIso(isoDay, n) {
+  const d = new Date(`${isoDay}T12:00:00`);
+  d.setDate(d.getDate() + n);
+  return isoDate(d);
+}
+
+async function fetchMoSpotJson(kind, lat, lon, key) {
+  const params = new URLSearchParams({ latitude: lat.toFixed(4), longitude: lon.toFixed(4), dataSource: "BD1" });
+  const res = await fetchWithTimeout(`${MO_SPOT_URL}/${kind}?${params}`, {
+    headers: { apikey: key, accept: "application/json" }
+  }, 20000);
+  if (res.status === 401 || res.status === 403) throw new Error("Met Office key not accepted — check it in Settings");
+  if (res.status === 429) throw new Error("Met Office daily allowance used up — back tomorrow");
+  if (!res.ok) throw new Error(`Met Office lookup failed (${res.status})`);
+  const data = await res.json();
+  return data?.features?.[0]?.properties?.timeSeries || [];
+}
+
+// Hourly series kept small: epoch ms plus the fields the blend uses,
+// already in Cloude's units (mph, hPa).
+function compactMoSpotHourly(series) {
+  return series.map(h => ({
+    t: Date.parse(h.time),
+    p: h.totalPrecipAmount ?? null,
+    T: h.screenTemperature ?? null,
+    w: h.windSpeed10m != null ? h.windSpeed10m * MS_TO_MPH : null,
+    g: h.windGustSpeed10m != null ? h.windGustSpeed10m * MS_TO_MPH : null,
+    d: h.windDirectionFrom10m ?? null,
+    pr: h.mslp != null ? h.mslp / 100 : null,
+    fl: h.feelsLikeTemperature ?? null,
+    dp: h.screenDewPointTemperature ?? null
+  }));
+}
+
+// Daily summaries per local date from the three-hourly series, built the
+// same way the Open-Meteo sources' daily figures are: rain total, wind
+// peak, temperature max/min, pressure and feels-like means. A slot's time
+// marks the END of its three hours, so it's bucketed by the period's
+// middle. Only complete days (all eight periods) are kept.
+function moSpotDailyFromThreeHourly(series) {
+  const byDay = {};
+  series.forEach(s => {
+    const mid = new Date(Date.parse(s.time) - 90 * 60 * 1000);
+    const day = isoDate(mid);
+    (byDay[day] ??= []).push(s);
+  });
+  const out = {};
+  Object.entries(byDay).forEach(([day, slots]) => {
+    if (slots.length < 8) return;
+    const nums = f => slots.map(f).filter(v => v !== null && v !== undefined && !Number.isNaN(v));
+    const sum = a => a.reduce((x, y) => x + y, 0);
+    const winds = slots.map(s => s.windSpeed10m);
+    const peakIdx = winds.reduce((best, w, i) => (w != null && (best < 0 || w > winds[best]) ? i : best), -1);
+    const tMax = nums(s => s.maxScreenAirTemp), tMin = nums(s => s.minScreenAirTemp);
+    const precip = nums(s => s.totalPrecipAmount), pr = nums(s => s.mslp), fl = nums(s => s.feelsLikeTemp);
+    const w = nums(s => s.windSpeed10m), g = nums(s => s.windGustSpeed10m ?? s.max10mWindGust);
+    out[day] = {
+      p: precip.length ? Math.round(sum(precip) * 100) / 100 : null,
+      tx: tMax.length ? Math.max(...tMax) : null,
+      tn: tMin.length ? Math.min(...tMin) : null,
+      w: w.length ? Math.max(...w) * MS_TO_MPH : null,
+      g: g.length ? Math.max(...g) * MS_TO_MPH : null,
+      d: peakIdx >= 0 ? slots[peakIdx].windDirectionFrom10m ?? null : null,
+      pr: pr.length ? sum(pr) / pr.length / 100 : null,
+      fl: fl.length ? sum(fl) / fl.length : null
+    };
+  });
+  return out;
+}
+
+// Turns the archive into the same slot shape fetchRealSourceLive builds:
+// 15 dates (7 back, today, 7 ahead), and for each lead day d the figure
+// this forecast gave for that date when issued d days earlier.
+function moSpotSlotFromArchive(archive) {
+  const today = isoDate(new Date());
+  const dates = Array.from({ length: MAX_ROLLBACK + MAX_FUTURE + 1 }, (_, i) => addDaysIso(today, i - MAX_ROLLBACK));
+  const byLeadDay = emptyLeadDayData();
+  for (let d = 1; d <= 7; d++) {
+    const b = byLeadDay[d];
+    dates.forEach(target => {
+      const e = archive.issued[addDaysIso(target, -d)]?.[target] || null;
+      const tx = e?.tx ?? null, tn = e?.tn ?? null;
+      b.tempMax.push(tx);
+      b.tempMin.push(tn);
+      b.tempAvg.push(tx !== null && tn !== null ? (tx + tn) / 2 : null);
+      b.precip.push(e?.p ?? null);
+      b.wind.push(e?.w ?? null);
+      b.windGust.push(e?.g ?? null);
+      b.windDirection.push(e?.d ?? null);
+      b.pressure.push(e?.pr ?? null);
+      b.feelsLike.push(e?.fl ?? null);
+      b.cloudLow.push(null); b.cloudMid.push(null); b.cloudHigh.push(null);
+      b.soilTemp.push(null); b.dewPoint.push(null); b.sunshine.push(null);
+    });
+  }
+  return { status: "ready", error: null, dates, byLeadDay };
+}
+
+async function fetchMoSpot(lat, lon) {
+  const key = loadMoSpotKey();
+  const areaCode = state.areaCode;
+  if (!key) {
+    state.moSpot = { status: "off", hourly: null };
+    state.realSources[MO_SPOT_ID] = { status: "off", error: null, dates: [], byLeadDay: emptyLeadDayData() };
+    return;
+  }
+  state.moSpot = { status: "loading", hourly: null };
+  try {
+    const where = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(MO_SPOT_CACHE_KEY) || "null"); } catch {}
+    let hourly, daily;
+    if (cached && cached.where === where && Date.now() - cached.at < MO_SPOT_CACHE_MS) {
+      ({ hourly, daily } = cached);
+    } else {
+      const [h, t] = await Promise.all([
+        fetchMoSpotJson("hourly", lat, lon, key),
+        fetchMoSpotJson("three-hourly", lat, lon, key)
+      ]);
+      hourly = compactMoSpotHourly(h);
+      daily = moSpotDailyFromThreeHourly(t);
+      try { localStorage.setItem(MO_SPOT_CACHE_KEY, JSON.stringify({ where, at: Date.now(), hourly, daily })); } catch {}
+    }
+
+    // Record today's forecast for the days ahead (latest refresh of the
+    // day wins), and trim issue dates too old to matter.
+    const today = isoDate(new Date());
+    const archive = areaCode ? loadMoSpotArchive(areaCode) : { issued: {}, scored: {} };
+    const ahead = {};
+    Object.entries(daily).forEach(([day, v]) => { if (day > today) ahead[day] = v; });
+    if (Object.keys(ahead).length) archive.issued[today] = ahead;
+    const oldest = addDaysIso(today, -MO_SPOT_ARCHIVE_DAYS);
+    Object.keys(archive.issued).forEach(day => { if (day < oldest) delete archive.issued[day]; });
+    Object.keys(archive.scored).forEach(day => { if (day < oldest) delete archive.scored[day]; });
+    if (areaCode) saveMoSpotArchive(areaCode, archive);
+
+    state.realSources[MO_SPOT_ID] = moSpotSlotFromArchive(archive);
+    state.moSpot = { status: "ready", hourly };
+  } catch (err) {
+    state.moSpot = { status: "error", error: err.message, hourly: null };
+    state.realSources[MO_SPOT_ID] = { status: "error", error: err.message, dates: [], byLeadDay: emptyLeadDayData() };
+  }
+  // Fold it into the hourly figures if they're already showing.
+  if (state.hourly?.lastInputs && state.hourly.status === "ready") {
+    const { perSource, sharedTimes, extras } = state.hourly.lastInputs;
+    applyHourlyBlend(perSource, sharedTimes, extras);
+    if (typeof renderHeadline === "function" && headlineGrid) renderHeadline();
+  }
+}
+
+// Hourly arrays for the blend, lined up with the front page's own hours.
+function moSpotPerSource(sharedTimes) {
+  const hourly = state.moSpot?.hourly;
+  if (!hourly?.length) return null;
+  const byTime = new Map(hourly.map(h => [h.t, h]));
+  const pick = f => sharedTimes.map(t => {
+    const h = byTime.get(new Date(t).getTime());
+    return h ? (h[f] ?? null) : null;
+  });
+  return {
+    temperature: pick("T"), precipitation: pick("p"), windSpeed: pick("w"), windGust: pick("g"),
+    windDirection: pick("d"), pressure: pick("pr"), feelsLike: pick("fl"), dewPoint: pick("dp")
+  };
+}
+
+// Whether the Met Office Spot figure may join the live blend for this
+// condition: ticked, providing it, and past its 14 days of record.
+function moSpotJoinsBlend(conditionName) {
+  if (!state.selected?.has(MO_SPOT_ID)) return false;
+  if (!MO_SPOT_CONDITIONS.has(conditionName)) return false;
+  const source = CONFIG.forecasters.find(s => s.id === MO_SPOT_ID);
+  return !!source && isForecasterEligible(source, conditionName);
+}
+
+// Learns this source's fudge factors from its own record — once per past
+// date, never twice (the Open-Meteo sources get theirs from history
+// replays instead). Runs from updateFFVHistory.
+function recordMoSpotSamples(store, eligStore) {
+  if (!state.areaCode || state.realSources[MO_SPOT_ID]?.status !== "ready") return;
+  const archive = loadMoSpotArchive(state.areaCode);
+  const source = CONFIG.forecasters.find(s => s.id === MO_SPOT_ID);
+  if (!source) return;
+  let changed = false;
+  for (let rollbackDays = 1; rollbackDays <= MAX_ROLLBACK; rollbackDays++) {
+    const dateKey = isoDate(targetDateForRollback(rollbackDays));
+    if (archive.scored[dateKey]) continue;
+    let any = false;
+    MO_SPOT_CONDITIONS.forEach(conditionName => {
+      const actual = actualValueFor(conditionName, rollbackDays);
+      if (actual === null || actual === undefined) return;
+      for (let day = 1; day <= 7; day++) {
+        const mean = threeDayMean(day, source, conditionName, rollbackDays);
+        if (!mean) continue;
+        recordFFVSample(store, conditionName, MO_SPOT_ID, day, mean, actual, eligStore, dateKey);
+        any = true;
+      }
+    });
+    if (any) { archive.scored[dateKey] = true; changed = true; }
+  }
+  if (changed) saveMoSpotArchive(state.areaCode, archive);
+}
+
 // The daily GitHub Action commits data/history.json — no location info in
 // it, just dates and numbers. This is Met Office's authoritative FFV
 // source: every load, its store entries are rebuilt from scratch by
@@ -2057,6 +2333,10 @@ function hourlyUVPercent(idx) {
 // config always include (see the precache config's own metoffice
 // constraint).
 function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
+  // Kept so a late-arriving Met Office Spot result can re-blend without
+  // refetching everything (see fetchMoSpot).
+  state.hourly.lastInputs = { perSource, sharedTimes, extras: metofficeExtras };
+  const spotSeries = moSpotPerSource(sharedTimes);
   state.hourly.times = sharedTimes;
   state.hourly.uvIndex = metofficeExtras.uvIndex;
   state.hourly.cloudCoverLow = metofficeExtras.cloudCoverLow;
@@ -2081,8 +2361,10 @@ function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
   function blend(field, conditionName) {
     return Array.from({ length: count }, (_, i) => {
       const day = i < 24 ? 1 : 2;
-      const values = REAL_SOURCES.map(({ id }) => {
-        const raw = perSource[id]?.[field]?.[i];
+      const ids = REAL_SOURCES.map(({ id }) => id);
+      if (spotSeries && moSpotJoinsBlend(conditionName)) ids.push(MO_SPOT_ID);
+      const values = ids.map(id => {
+        const raw = (id === MO_SPOT_ID ? spotSeries : perSource[id])?.[field]?.[i];
         if (raw === null || raw === undefined) return null;
         const source = CONFIG.forecasters.find(s => s.id === id);
         const ffv = ffvFor(source, conditionName, day);
@@ -2879,6 +3161,7 @@ async function runLoadLocationData(force = false) {
     await Promise.all([
       fetchActualWeather(lat, lon),
       ...REAL_SOURCES.map(({ id, model }) => fetchRealSourceLive(id, model, lat, lon)),
+      fetchMoSpot(lat, lon),
       loadCommittedHistory(),
       fetchHourlyForecast(lat, lon, force)
     ]);
@@ -3096,6 +3379,7 @@ function realSourceWindDirectionFor(sourceId, day, rollbackDays) {
 // headline (which filters to real sources only, so demo noise can't
 // dilute it).
 function isRealSource(source, conditionName) {
+  if (source.id === MO_SPOT_ID) return MO_SPOT_CONDITIONS.has(conditionName);
   return realSourceIds().includes(source.id) && REAL_DATA_CONDITIONS.has(conditionName);
 }
 
@@ -3649,7 +3933,7 @@ function updateFFVHistory() {
       }
 
       CONFIG.forecasters
-        .filter(source => !realIds.includes(source.id))
+        .filter(source => !realIds.includes(source.id) && source.id !== MO_SPOT_ID)
         .forEach(source => {
           for (let day = 1; day <= 7; day++) {
             const mean = threeDayMean(day, source, conditionName, rollbackDays);
@@ -3659,6 +3943,8 @@ function updateFFVHistory() {
         });
     });
   }
+
+  recordMoSpotSamples(store, eligStore);
 
   saveFFVStore(state.areaCode, store);
   saveEligibilityStore(state.areaCode, eligStore);

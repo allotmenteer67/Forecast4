@@ -3370,3 +3370,7 @@ footer {
   background: white;
   box-shadow: 0 1px 2px rgba(31, 42, 36, .12);
 }
+
+/* Settings: a forecaster that can't be ticked yet (Met Office Spot with no key) */
+.check.is-disabled { opacity: 0.55; }
+.check .check-hint { font-size: 0.85em; margin: 0; display: inline; }

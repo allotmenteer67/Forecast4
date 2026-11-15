@@ -57,6 +57,15 @@ down on purpose: don't bring it back without asking.
 ## Forecasts and accuracy
 
 - Merge as many user-selected forecasters' FFV-corrected data as possible.
+- Met Office Spot (Nov 2026, v151): the Met Office's own site forecast via
+  Weather DataHub ("Site Specific – Global Spot", free, 360 calls/day), as a
+  tenth forecaster separate from the raw "metoffice" model. Each person uses
+  their own key, saved in Settings on their device only — never in the repo.
+  Their API allows direct browser calls, so no relay. The Met Office keeps no
+  past forecasts, so Cloude records its own (per area, from each refresh)
+  and learns fudge factors from that, once per past date; it joins the
+  blend after the usual 14 days. Provides rain, wind, temperature, pressure
+  and feels-like only. Not on the map (single points, not a grid).
 - Only real forecasters, ever (Nov 2026, v150). Eleven placeholder names
   with made-up numbers (BBC, Meteoblue, YR, AccuWeather, Netweather,
   XCWeather, Weather Underground, WeatherAPI, Windy, OpenWeatherMap,

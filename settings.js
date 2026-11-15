@@ -10,7 +10,8 @@ const FORECASTERS = [
   { id: "meteofrance", name: "Météo-France", enabled: true },
   { id: "jma", name: "JMA (Japan)", enabled: true },
   { id: "bom", name: "BOM (Australia)", enabled: true },
-  { id: "cma", name: "CMA (China)", enabled: true }
+  { id: "cma", name: "CMA (China)", enabled: true },
+  { id: "mospot", name: "Met Office Spot", enabled: true }
 ];
 
 // HOUR_RANGE_KEY, SELECTED_FORECASTERS_KEY, CONDITION_UNIT_TOGGLES,
@@ -369,6 +370,20 @@ function saveSelected(selected) {
 
 const selected = loadSelected();
 const forecasters = document.getElementById("forecasters");
+const forecasterInputs = {};
+
+// Met Office Spot needs a key (see the Met Office section below); without
+// one its box is greyed out rather than ticked-but-empty.
+function refreshSpotCheckbox() {
+  const input = forecasterInputs.mospot;
+  if (!input) return;
+  const hasKey = !!loadMoSpotKey();
+  input.disabled = !hasKey;
+  input.checked = hasKey && selected.has("mospot");
+  input.closest("label")?.classList.toggle("is-disabled", !hasKey);
+  const hint = input.closest("label")?.querySelector(".check-hint");
+  if (hint) hint.textContent = hasKey ? "" : " — needs a key, below";
+}
 
 FORECASTERS.forEach(source => {
   const label = document.createElement("label");
@@ -377,6 +392,7 @@ FORECASTERS.forEach(source => {
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = selected.has(source.id);
+  forecasterInputs[source.id] = input;
 
   input.addEventListener("change", () => {
     if (input.checked) {
@@ -389,10 +405,53 @@ FORECASTERS.forEach(source => {
 
   const text = document.createElement("span");
   text.textContent = source.name;
+  const hint = document.createElement("span");
+  hint.className = "check-hint note";
+  text.appendChild(hint);
 
   label.append(input, text);
   forecasters.appendChild(label);
 });
+refreshSpotCheckbox();
+
+// ---- Met Office Spot key ----
+const moSpotKeyInput = document.getElementById("moSpotKeyInput");
+const saveMoSpotKeyButton = document.getElementById("saveMoSpotKeyButton");
+const moSpotKeyStatus = document.getElementById("moSpotKeyStatus");
+
+function setMoSpotKeyStatus(message, isError) {
+  if (!moSpotKeyStatus) return;
+  moSpotKeyStatus.textContent = message || "";
+  moSpotKeyStatus.classList.toggle("is-error", !!isError);
+}
+
+if (moSpotKeyInput && loadMoSpotKey()) moSpotKeyInput.value = loadMoSpotKey();
+
+if (saveMoSpotKeyButton) {
+  saveMoSpotKeyButton.addEventListener("click", async () => {
+    const key = (moSpotKeyInput?.value || "").replace(/\s+/g, "");
+    const hadKey = !!loadMoSpotKey();
+    saveMoSpotKey(key);
+    try { localStorage.removeItem(MO_SPOT_CACHE_KEY); } catch {}
+    if (!key) {
+      selected.delete("mospot");
+      saveSelected(selected);
+      refreshSpotCheckbox();
+      setMoSpotKeyStatus("Removed. Met Office Spot is switched off.", false);
+      return;
+    }
+    if (!hadKey) { selected.add("mospot"); saveSelected(selected); }
+    refreshSpotCheckbox();
+    setMoSpotKeyStatus("Checking with the Met Office…", false);
+    try {
+      // One call to prove the key works (London, any point will do).
+      await fetchMoSpotJson("hourly", 51.5, -0.12, key);
+      setMoSpotKeyStatus("Saved and working. Met Office Spot starts its 14-day record from your next forecast load.", false);
+    } catch (err) {
+      setMoSpotKeyStatus(`Saved, but: ${err.message}`, true);
+    }
+  });
+}
 
 // ---- App version ----
 // Shown at the bottom of Settings. The number comes from sw.js's
