@@ -556,6 +556,48 @@ def met_office_spot_record_and_blend(browser):
     expect(not pg.errors, pg.errors)
     ctx.close()
 
+@check
+def met_office_spot_gaps_filled_from_github_record(browser):
+    # The daily GitHub job's record fills issue dates this device missed;
+    # the device's own record always wins.
+    import datetime as dt
+    today = dt.datetime.now(dt.timezone.utc).date()
+    iso = lambda n: (today + dt.timedelta(days=n)).isoformat()
+    shared = {"places": {"TA7": {"issued": {
+        iso(-2): {iso(-1): {"p": 7, "tx": 9, "tn": 3, "w": 10, "g": 20, "d": 180, "pr": 1000, "fl": 5}},
+        iso(-1): {iso(0): {"p": 99, "tx": 9, "tn": 3, "w": 10, "g": 20, "d": 180, "pr": 1000, "fl": 5}}}}}}
+    own = {"issued": {iso(-1): {iso(0): {"p": 2, "tx": 9, "tn": 3, "w": 10, "g": 20, "d": 180, "pr": 1000, "fl": 5}}}, "scored": {}}
+    slots = []
+    t0 = dt.datetime.now(dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    for k in range(1, 57):
+        slots.append({"time": (t0 + dt.timedelta(hours=3 * k)).strftime("%Y-%m-%dT%H:%MZ"), "totalPrecipAmount": 0.5,
+                      "maxScreenAirTemp": 10, "minScreenAirTemp": 5, "windSpeed10m": 4, "windGustSpeed10m": 8,
+                      "windDirectionFrom10m": 200, "mslp": 100000, "feelsLikeTemp": 6})
+    mo = json.dumps({"features": [{"properties": {"timeSeries": slots}}]})
+    ctx = browser.new_context(viewport=PHONE)
+    ctx.route(lambda u: not u.startswith(BASE) and "metoffice" not in u, lambda r: r.abort())
+    ctx.route("https://data.hub.api.metoffice.gov.uk/**", lambda r: r.fulfill(status=200, content_type="application/json", body=mo))
+    ctx.route(f"{BASE}/data/mo-spot-record.json", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(shared)))
+    ctx.add_init_script("localStorage.setItem('forecast-compare:moSpotKey','test-key');"
+                        f"localStorage.setItem('forecast-compare:moSpotArchive:TA7', {json.dumps(json.dumps(own))});")
+    pg = ctx.new_page(); pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/settings.html"); pg.wait_for_timeout(600)
+    res = pg.evaluate("""(async () => {
+      state.areaCode = 'TA7';
+      await fetchMoSpot(51.13, -2.91);
+      const a = loadMoSpotArchive('TA7'), today = isoDate(new Date());
+      const s = state.realSources.mospot, i = s.dates.indexOf(addDaysIso(today, -1)), j = s.dates.indexOf(today);
+      return { status: s.status, filled: s.byLeadDay[1].precip[i], own: s.byLeadDay[1].precip[j],
+               todayRecorded: !!a.issued[today], tomorrow: a.issued[today]?.[addDaysIso(today, 1)]?.p };
+    })()""")
+    expect(res["status"] == "ready", f"Spot didn't load: {res}")
+    expect(res["filled"] == 7, f"gap not filled from the GitHub record: {res}")
+    expect(res["own"] == 2, f"GitHub record overrode this device's own: {res}")
+    expect(res["todayRecorded"] and res["tomorrow"] == 4, f"today's forecast not recorded (8 x 0.5mm): {res}")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
 # ---------- runner ----------
 
 def main():

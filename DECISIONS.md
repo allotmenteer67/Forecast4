@@ -68,6 +68,12 @@ down on purpose: don't bring it back without asking.
   and learns fudge factors from that, once per past date; it joins the
   blend after the usual 14 days. Provides rain, wind, temperature, pressure
   and feels-like only. Not on the map (single points, not a grid).
+- Met Office Spot gap-filling (Nov 2026, v152): a daily GitHub job
+  (collect-mo-spot.yml, 20:41 UTC) records the forecast for the shared
+  places into data/mo-spot-record.json, using the owner's key as the repo
+  secret MO_SPOT_KEY. Places are keyed like the app's areas (outward code
+  or one-decimal coordinates); nothing about the Met Office site is stored.
+  A device's own record always wins; the shared one only fills missed days.
 - Only real forecasters, ever (Nov 2026, v150). Eleven placeholder names
   with made-up numbers (BBC, Meteoblue, YR, AccuWeather, Netweather,
   XCWeather, Weather Underground, WeatherAPI, Windy, OpenWeatherMap,

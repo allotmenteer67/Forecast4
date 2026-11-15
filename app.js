@@ -2161,6 +2161,13 @@ async function fetchMoSpot(lat, lon) {
     const ahead = {};
     Object.entries(daily).forEach(([day, v]) => { if (day > today) ahead[day] = v; });
     if (Object.keys(ahead).length) archive.issued[today] = ahead;
+    // Fill days this device missed from the daily GitHub record (shared
+    // places only — see scripts/collect-mo-spot.mjs). This device's own
+    // record always wins where it has one.
+    const shared = areaCode ? await loadMoSpotSharedRecord(areaCode) : null;
+    Object.entries(shared || {}).forEach(([issueDay, targets]) => {
+      if (!archive.issued[issueDay] && issueDay <= today) archive.issued[issueDay] = targets;
+    });
     const oldest = addDaysIso(today, -MO_SPOT_ARCHIVE_DAYS);
     Object.keys(archive.issued).forEach(day => { if (day < oldest) delete archive.issued[day]; });
     Object.keys(archive.scored).forEach(day => { if (day < oldest) delete archive.scored[day]; });
@@ -2177,6 +2184,21 @@ async function fetchMoSpot(lat, lon) {
     const { perSource, sharedTimes, extras } = state.hourly.lastInputs;
     applyHourlyBlend(perSource, sharedTimes, extras);
     if (typeof renderHeadline === "function" && headlineGrid) renderHeadline();
+  }
+}
+
+// The GitHub job's record for this area (data/mo-spot-record.json),
+// keyed the same way the app keys areas: outward code for a postcode
+// place ("TA7"), one-decimal coordinates otherwise. Missing file or
+// place: null, and the device's own record is used alone.
+async function loadMoSpotSharedRecord(areaCode) {
+  try {
+    const res = await fetchWithTimeout("data/mo-spot-record.json", {}, 10000);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.places?.[areaCode]?.issued || null;
+  } catch {
+    return null;
   }
 }
 

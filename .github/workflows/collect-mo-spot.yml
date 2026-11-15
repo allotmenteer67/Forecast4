@@ -1,0 +1,55 @@
+name: Record Met Office Spot
+
+# Once a day, records what the Met Office's own site forecast says for the
+# shared places' next six days (scripts/collect-mo-spot.mjs), so Met
+# Office Spot's record in the app has no gaps on days the app isn't
+# opened. Evening, so it captures one of the day's later forecast runs.
+#
+# Needs the repo secret MO_SPOT_KEY (Settings -> Secrets and variables ->
+# Actions). Without it the script does nothing.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 20 * * *"
+
+concurrency:
+  group: collect-mo-spot
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Record Met Office Spot forecasts
+        env:
+          MO_SPOT_KEY: ${{ secrets.MO_SPOT_KEY }}
+        run: node scripts/collect-mo-spot.mjs
+
+      - name: Commit record
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -f data/mo-spot-record.json ] || exit 0
+          git add data/mo-spot-record.json
+          if git diff --staged --quiet; then
+            echo "No change to commit."
+            exit 0
+          fi
+          git commit -m "Record Met Office Spot $(date -u +%Y-%m-%d)"
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase --autostash origin main && git push && exit 0
+            echo "Push attempt $attempt failed, retrying shortly..."
+            sleep $((attempt * 5))
+          done
+          exit 1
