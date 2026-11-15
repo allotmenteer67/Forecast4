@@ -10,14 +10,16 @@ down on purpose: don't bring it back without asking.
 ## How changes are made
 
 - The owner works on an iPad and iPhone only: no computer, no command line,
-  no code editing. Changes arrive as **complete replacement files** to upload
-  to GitHub, never snippets or hand-edit instructions.
+  no code editing. Since Nov 2026 Claude commits changes straight to `main`
+  itself (GitHub Pages deploys from there) and, at the end of each session,
+  lists the files that changed so the owner can download copies from GitHub.
+  Never send snippets or hand-edit instructions.
 - The repo is public. Claude can fetch the latest code from GitHub itself, so
   files don't need sending to it.
 - Discuss first when there's a real design trade-off; build straight away when
   the request is concrete. State caveats and limitations plainly.
 - Every release bumps `SHELL_CACHE_NAME` in `sw.js`; the number is the version
-  shown in Settings. Say which files to upload and the new version number.
+  shown in Settings. Say the new version number.
 - Test with `tests/run_tests.py` (see the top of that file) and add a check for
   every bug fixed.
 - Mockups go in the chat as plain pictures, not on a design canvas.
