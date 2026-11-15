@@ -422,6 +422,85 @@ def front_sun_and_cloud_follow_latest_runs(browser):
     expect(res["cloud"] == 0, f"night cloud leaked into the daytime cloud mean: {res['cloud']}")
     expect(not pg.errors, pg.errors)
 
+def om_body(url):
+    from urllib.parse import urlparse, parse_qs
+    from datetime import datetime, timedelta, timezone
+    q = parse_qs(urlparse(url).query)
+    n = len(q["latitude"][0].split(","))
+    vars_ = q["hourly"][0].split(",")
+    models = [m for m in q.get("models", [""])[0].split(",") if m]
+    start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+    time = [(start + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M") for i in range(72)]
+    def val(v, k): return k + 1 if v == "precipitation" else (90 * k if v == "wind_direction_10m" else 10 + k)
+    def one():
+        h = {"time": time}
+        if not models:
+            for v in vars_: h[v] = [9 if v == "precipitation" else 5] * 72
+        for k, m in enumerate(models):
+            for v in vars_: h[f"{v}_{m}"] = [val(v, k)] * 72
+        return {"timezone": "UTC", "hourly": h}
+    return json.dumps(one() if n == 1 else [one() for _ in range(n)])
+
+@check
+def map_is_the_blend_not_best_match(browser):
+    # Nov 2026: the map and the front-page strip asked Open-Meteo for its
+    # default "best match" (= Met Office UKV alone in the UK) and so
+    # disagreed with the rain graph. Every map request must name the
+    # models, and the map's value must be the median across them.
+    ctx = browser.new_context(viewport=PHONE, device_scale_factor=2, is_mobile=True, has_touch=True)
+    ctx.route(lambda u: not u.startswith(BASE) and "api.open-meteo.com" not in u, lambda r: r.abort())
+    seen = []
+    def handle(route):
+        seen.append(route.request.url)
+        route.fulfill(status=200, content_type="application/json", body=om_body(route.request.url))
+    ctx.route("https://api.open-meteo.com/**", handle)
+    ctx.add_init_script("localStorage.setItem('forecast-compare:currentPostcode','51.131,-2.911');"
+                        "localStorage.setItem('forecast-compare:map:centre', JSON.stringify({lat:51.131,lon:-2.911}));")
+    pg = ctx.new_page(); pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/map.html"); pg.wait_for_function("typeof mapGrid !== 'undefined' && mapGrid && mapGrid.rain", timeout=20000)
+    grid_reqs = [u for u in seen if "latitude=" in u and "%2C" in u.split("latitude=")[1].split("&")[0]]
+    expect(grid_reqs, "map made no grid request")
+    expect(all("models=" in u for u in grid_reqs), "a map grid request didn't name its models (would get UKV best-match)")
+    rain = pg.evaluate("sampleGrid(mapGrid,'rain',3,51.131,-2.911)")
+    # four sources giving 1,2,3,4 -> median 2.5; best-match would have been 9
+    expect(rain is not None and abs(rain - 2.5) < 1e-6, f"map rain at pin {rain}, expected blend median 2.5")
+    expect(pg.evaluate("mapGrid.sources.join(',')") == "metoffice,ecmwf,gfs,icon", "map isn't using the top forecasters")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
+def no_placeholder_forecasters(browser):
+    # Nov 2026: eleven placeholder forecasters fed made-up numbers into the
+    # daily blend once they'd "qualified". Only real sources may exist, a
+    # missing real figure is blank (never invented), and old saved data for
+    # the placeholders is tidied away.
+    ctx = browser.new_context(viewport=PHONE)
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    ctx.add_init_script("""
+      if (!sessionStorage.getItem('seeded')) {
+        sessionStorage.setItem('seeded', '1');
+        localStorage.setItem('forecast-compare:selectedForecasters', JSON.stringify(['metoffice','bbc','yr']));
+        localStorage.setItem('forecast-compare:ffv:TA7', JSON.stringify({rain:{metoffice:{1:{count:9}}, bbc:{1:{count:9}}}}));
+        localStorage.setItem('forecast-compare:eligibility:TA7', JSON.stringify({rain:{bbc:{'2026-11-01':true}, ecmwf:{'2026-11-01':true}}}));
+      }""")
+    pg = ctx.new_page(); pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/settings.html"); pg.wait_for_timeout(800)
+    ids = pg.evaluate("CONFIG.forecasters.map(f => f.id)")
+    expect(ids == pg.evaluate("REAL_SOURCES.map(s => s.id)"), f"non-real forecaster listed: {ids}")
+    expect(pg.evaluate("typeof demoValue") == "undefined", "demo formula still present")
+    boxes = pg.evaluate("document.querySelectorAll('#forecasters input').length")
+    expect(boxes == len(ids), f"Settings shows {boxes} forecasters, expected {len(ids)}")
+    expect(pg.evaluate("forecastValueFor(1, CONFIG.forecasters[0], 'uv', 1)") is None, "UV invented a figure")
+    expect(pg.evaluate("JSON.parse(localStorage.getItem('forecast-compare:selectedForecasters'))") == ["metoffice"], "selection not tidied")
+    ffv = pg.evaluate("JSON.parse(localStorage.getItem('forecast-compare:ffv:TA7'))")
+    expect("bbc" not in ffv["rain"] and "metoffice" in ffv["rain"], f"FFV not tidied correctly: {ffv}")
+    el = pg.evaluate("JSON.parse(localStorage.getItem('forecast-compare:eligibility:TA7'))")
+    expect(list(el["rain"].keys()) == ["ecmwf"], f"eligibility not tidied correctly: {el}")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
 # ---------- runner ----------
 
 def main():
