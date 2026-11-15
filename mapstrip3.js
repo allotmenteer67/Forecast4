@@ -558,7 +558,9 @@ async function renderMapStripInner(centre, grid) {
 }
 
 const MAP_STRIP_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
-const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapstrip:grid";
+// "blend1": strips cached before Nov 2026 were single-model (UKV).
+const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapstrip:grid:blend1";
+try { localStorage.removeItem("forecast-compare:mapstrip:grid"); } catch {}
 const MAP_STRIP_GRID_CACHE_MS = 15 * 60 * 1000;
 
 function mapStripGridCacheKey(centre) {
@@ -611,32 +613,28 @@ async function fetchMapStripGrid(centre) {
     }
   }
 
-  const params = new URLSearchParams({
-    latitude: lats.join(","),
-    longitude: lons.join(","),
-    hourly: "precipitation",
-    forecast_days: String(MAP_STRIP_FORECAST_DAYS),
-    timezone: "auto"
-  });
-  const res = await fetchOpenMeteo(`${MAP_STRIP_WEATHER_URL}?${params.toString()}`, {}, 20000);
-  if (!res.ok) throw new Error(`Map strip fetch failed: ${res.status}`);
-  const data = await res.json();
-  const points = Array.isArray(data) ? data : [data];
-  if (points.length !== rows * rows) throw new Error("Map strip fetch returned an unexpected number of points");
+  // Cloude's own blend (fetchBlendedGrid in app.js) — same sources and
+  // FFV as the front page's rain graph, not Open-Meteo's default "best
+  // match" (which for the UK is the Met Office UKV model on its own, and
+  // is what this strip used to show until Nov 2026). One variable x four
+  // sources stays under Open-Meteo's 10-variables-per-call weighting, so
+  // this costs the same as before.
+  const { times, points } = await fetchBlendedGrid(
+    lats, lons, [{ key: "precipitation", condition: "rain" }], MAP_STRIP_FORECAST_DAYS, 20000
+  );
 
   const now = new Date();
-  const startIdx = points[0].hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
+  const startIdx = times.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
 
   const rainByHour = [];
   for (let r = 0; r < rows; r++) {
     const row = [];
     for (let c = 0; c < rows; c++) {
-      const series = points[r * rows + c].hourly.precipitation;
-      row.push(series.map(v => (v === null || v === undefined ? 0 : v)));
+      const series = points[r * rows + c].precipitation;
+      row.push(series.map(v => (v === null || v === undefined ? 0 : Math.max(0, v))));
     }
     rainByHour.push(row);
   }
-  const times = points[0].hourly.time;
 
   const grid = { lat0, lon0, dLat, dLon, rows, cols: rows, rainByHour, times, startIdx: Math.max(0, startIdx) };
   saveMapStripGridCache(centre, grid);

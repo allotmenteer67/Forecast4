@@ -10,18 +10,7 @@ const FORECASTERS = [
   { id: "meteofrance", name: "Météo-France", enabled: true },
   { id: "jma", name: "JMA (Japan)", enabled: true },
   { id: "bom", name: "BOM (Australia)", enabled: true },
-  { id: "cma", name: "CMA (China)", enabled: true },
-  { id: "bbc", name: "BBC", enabled: true },
-  { id: "meteo", name: "Meteoblue", enabled: true },
-  { id: "yr", name: "YR", enabled: true },
-  { id: "accuweather", name: "AccuWeather", enabled: true },
-  { id: "netweather", name: "Netweather", enabled: false },
-  { id: "xcweather", name: "XCWeather", enabled: false },
-  { id: "wunderground", name: "Weather Underground", enabled: false },
-  { id: "weatherapi", name: "WeatherAPI", enabled: false },
-  { id: "windy", name: "Windy", enabled: false },
-  { id: "openweather", name: "OpenWeatherMap", enabled: false },
-  { id: "tomorrow", name: "Tomorrow.io", enabled: false }
+  { id: "cma", name: "CMA (China)", enabled: true }
 ];
 
 // HOUR_RANGE_KEY, SELECTED_FORECASTERS_KEY, CONDITION_UNIT_TOGGLES,

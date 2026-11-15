@@ -203,27 +203,24 @@
 })();
 
 const CONFIG = {
+  // Real forecasters only (Nov 2026). Eleven placeholder names (BBC,
+  // Meteoblue, YR, AccuWeather, Netweather, XCWeather, Weather
+  // Underground, WeatherAPI, Windy, OpenWeatherMap, Tomorrow.io) used to
+  // sit here with made-up numbers from a demo formula. After 14 days they
+  // qualified for the daily blend like any real source, so invented
+  // figures were feeding the Date slider, Compare's App column and the
+  // app's own accuracy score. Removed outright — see DECISIONS.md for
+  // which could ever come back with a real feed.
   forecasters: [
-    { id: "metoffice", name: "Met Office", enabled: true, offset: 0 },
-    { id: "ecmwf", name: "ECMWF", enabled: true, offset: 0.2 },
-    { id: "gfs", name: "GFS (US)", enabled: true, offset: 0.3 },
-    { id: "icon", name: "ICON (Germany)", enabled: true, offset: -0.2 },
-    { id: "gem", name: "GEM (Canada)", enabled: true, offset: 0.5 },
-    { id: "meteofrance", name: "Météo-France", enabled: true, offset: -0.4 },
-    { id: "jma", name: "JMA (Japan)", enabled: true, offset: 0.15 },
-    { id: "bom", name: "BOM (Australia)", enabled: true, offset: -0.3 },
-    { id: "cma", name: "CMA (China)", enabled: true, offset: 0.45 },
-    { id: "bbc", name: "BBC", enabled: true, offset: 0.6 },
-    { id: "meteo", name: "Meteoblue", enabled: true, offset: -0.5 },
-    { id: "yr", name: "YR", enabled: true, offset: 0.9 },
-    { id: "accuweather", name: "AccuWeather", enabled: true, offset: -0.8 },
-    { id: "netweather", name: "Netweather", enabled: false, offset: 0.4 },
-    { id: "xcweather", name: "XCWeather", enabled: false, offset: -1.1 },
-    { id: "wunderground", name: "Weather Underground", enabled: false, offset: 1.2 },
-    { id: "weatherapi", name: "WeatherAPI", enabled: false, offset: -0.3 },
-    { id: "windy", name: "Windy", enabled: false, offset: 0.7 },
-    { id: "openweather", name: "OpenWeatherMap", enabled: false, offset: -0.6 },
-    { id: "tomorrow", name: "Tomorrow.io", enabled: false, offset: 1.0 }
+    { id: "metoffice", name: "Met Office", enabled: true },
+    { id: "ecmwf", name: "ECMWF", enabled: true },
+    { id: "gfs", name: "GFS (US)", enabled: true },
+    { id: "icon", name: "ICON (Germany)", enabled: true },
+    { id: "gem", name: "GEM (Canada)", enabled: true },
+    { id: "meteofrance", name: "Météo-France", enabled: true },
+    { id: "jma", name: "JMA (Japan)", enabled: true },
+    { id: "bom", name: "BOM (Australia)", enabled: true },
+    { id: "cma", name: "CMA (China)", enabled: true }
   ],
   conditions: {
     rain: { name: "Rain", unit: "mm" },
@@ -961,6 +958,49 @@ function loadSelectedForecasters() {
   return new Set(CONFIG.forecasters.filter(f => f.enabled).map(f => f.id));
 }
 
+// ---- One-off tidy-up: the eleven placeholder forecasters (Nov 2026) ----
+// Removes their ids from the saved selection and their learned history
+// (FFV, 14-day eligibility, underperformance flags) from every area on
+// this device. Runs on every page load but only does anything when an
+// old id is actually found, so a restored backup gets tidied too.
+//
+// Deliberately left alone: the App's own accuracy record and its
+// "accuracy over time" graph. Those measured the old blend, which did
+// include placeholder figures — they stay as an honest record of what
+// the app said then, and will move as the real-only blend replaces it.
+const REMOVED_PLACEHOLDER_IDS = ["bbc", "meteo", "yr", "accuweather", "netweather", "xcweather", "wunderground", "weatherapi", "windy", "openweather", "tomorrow"];
+
+function removePlaceholderForecasterData() {
+  try {
+    const raw = localStorage.getItem(SELECTED_FORECASTERS_KEY);
+    if (raw) {
+      const list = JSON.parse(raw);
+      const kept = list.filter(id => !REMOVED_PLACEHOLDER_IDS.includes(id));
+      if (kept.length !== list.length) localStorage.setItem(SELECTED_FORECASTERS_KEY, JSON.stringify(kept));
+    }
+    const prefixes = ["forecast-compare:ffv:", "forecast-compare:eligibility:", "forecast-compare:underperform:"];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !prefixes.some(p => key.startsWith(p))) continue;
+      let store;
+      try { store = JSON.parse(localStorage.getItem(key)); } catch { continue; }
+      if (!store || typeof store !== "object") continue;
+      let changed = false;
+      Object.values(store).forEach(bySource => {
+        if (!bySource || typeof bySource !== "object") return;
+        REMOVED_PLACEHOLDER_IDS.forEach(id => {
+          if (id in bySource) { delete bySource[id]; changed = true; }
+        });
+      });
+      if (changed) localStorage.setItem(key, JSON.stringify(store));
+    }
+  } catch {
+    // Storage unavailable — nothing to tidy, and nothing reads these ids
+    // any more anyway, since they're gone from CONFIG.forecasters.
+  }
+}
+removePlaceholderForecasterData();
+
 function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
@@ -1178,72 +1218,6 @@ function loadHourRange() {
     // fall through to default
   }
   return 48;
-}
-
-function demoValue(day, source, conditionName) {
-  const sourceOffset = source.offset ?? 0;
-  // Lead-time trend: day 7 = furthest-out forecast for the target date,
-  // day 1 = forecast issued the day before the target date.
-  const leadTrend = (7 - day) * -0.12;
-
-  let value;
-
-  switch (conditionName) {
-    case "rain":
-      value = Math.max(0, 1.5 + day * 0.55 + sourceOffset + leadTrend);
-      break;
-    case "cloudLow":
-      value = Math.min(100, Math.max(0, 38 + day * 3.0 + sourceOffset * 5));
-      break;
-    case "cloudMid":
-      value = Math.min(100, Math.max(0, 42 + day * 3.0 + sourceOffset * 5));
-      break;
-    case "cloudHigh":
-      // Slightly higher baseline and steeper lead-time trend than
-      // low/mid — arbitrary, same as the rest of this demo formula
-      // (real sources don't use this at all), just distinct enough
-      // that a demo forecaster's three bands don't render identically.
-      value = Math.min(100, Math.max(0, 55 + day * 3.5 + sourceOffset * 5));
-      break;
-    case "wind":
-      value = Math.max(0, 7 + day * 0.75 + sourceOffset);
-      break;
-    case "temperature":
-      value = 17.5 - day * 0.3 + sourceOffset * 0.4;
-      break;
-    case "pressure":
-      value = 1013 - day * 0.3 + sourceOffset * 2;
-      break;
-    case "soilTemperature":
-      // Soil lags and smooths air temperature — less day-to-day swing,
-      // rarely near the same extremes.
-      value = 12 - day * 0.15 + sourceOffset * 0.25;
-      break;
-    case "dewPoint":
-      // Dew point is always at or below air temperature — this demo
-      // formula mirrors Temperature's shape with a fixed gap under it.
-      value = 17.5 - day * 0.3 + sourceOffset * 0.4 - 4;
-      break;
-    case "feelsLike":
-      // Real feels-like accounts for wind chill and humidity; this demo
-      // stand-in just mirrors Temperature's shape with a small fixed
-      // offset below it, same simplified approach as Dew Point's own
-      // case just above — not modelling wind/humidity, just giving a
-      // plausibly-shaped placeholder until FFV correction (and, for
-      // real sources, Open-Meteo's own apparent_temperature) takes over.
-      value = 17.5 - day * 0.3 + sourceOffset * 0.4 - 1;
-      break;
-    case "sunshine":
-      value = Math.max(0, 5.2 - day * 0.3 - sourceOffset * 0.2);
-      break;
-    case "uv":
-      value = Math.max(0, 4.0 - day * 0.18 + sourceOffset * 0.15);
-      break;
-    default:
-      value = 0;
-  }
-
-  return value;
 }
 
 function formatValue(rawValue, conditionName, isDelta = false) {
@@ -2222,6 +2196,154 @@ async function tryPrecachedHourlyForecast(lat, lon) {
   return data.weather.find(w => haversineKm(lat, lon, w.lat, w.lon) <= PRECACHE_PROXIMITY_KM) || null;
 }
 
+// ---- Blended map grids (map.html and the front page's map strip) ----
+// Nov 2026: both maps used to ask Open-Meteo for its default "best
+// match" forecast, which for the UK quietly resolves to the Met Office's
+// 2km UKV model — one raw, uncorrected source that isn't one of Cloude's
+// own. The map then disagreed with the rain graph whenever UKV disagreed
+// with everything else (15 Nov: a 14:00-16:00 rain band only UKV had).
+// That broke the app's core rule: everything shown is a blend of your
+// chosen forecasters, FFV-corrected.
+//
+// Now every map point is built exactly the way applyHourlyBlend builds
+// the front page: each source's value corrected with its own FFV (same
+// day-1/day-2 bucketing from "now"), then the median across sources.
+// Wind direction follows the front page too: first source with a value.
+//
+// Which sources: data/precache-config.json's topForecasters — the same
+// four the precached front page already blends. All nine would cost too
+// much across hundreds of map points against the 10,000/day limit.
+// One request still fetches every source at once (Open-Meteo accepts a
+// comma-separated models list), so there's no extra round-trip.
+//
+// FFV comes from the place the front page is showing (state.areaCode).
+// Further out on the map that's an approximation, but it's the same
+// correction the graph uses, so the pin and the graph agree.
+const MAP_BLEND_CONFIG_URL = "data/precache-config.json";
+const MAP_BLEND_FALLBACK_IDS = ["metoffice", "ecmwf", "gfs", "icon"];
+let mapBlendSourcesPromise = null;
+
+function loadMapBlendSources() {
+  if (!mapBlendSourcesPromise) {
+    mapBlendSourcesPromise = (async () => {
+      let ids = MAP_BLEND_FALLBACK_IDS;
+      try {
+        const res = await fetchWithTimeout(MAP_BLEND_CONFIG_URL, {}, 10000);
+        if (res.ok) {
+          const config = await res.json();
+          if (Array.isArray(config.topForecasters) && config.topForecasters.length) {
+            ids = config.topForecasters;
+          }
+        }
+      } catch {
+        // Offline or unreadable — the fallback list is the same four.
+      }
+      let sources = REAL_SOURCES.filter(s => ids.includes(s.id));
+      if (!sources.length) sources = REAL_SOURCES.filter(s => MAP_BLEND_FALLBACK_IDS.includes(s.id));
+      return sources;
+    })();
+  }
+  return mapBlendSourcesPromise;
+}
+
+// map.html never runs the front page's location load, so state.areaCode
+// is empty there. Resolve it from the current place so FFV can apply.
+// Only ever fills a blank — never overwrites an area the front page set.
+async function ensureFfvAreaCode() {
+  if (typeof state !== "object" || !state) return;
+  if (state.areaCode || !state.postcode) return;
+  const wanted = state.postcode;
+  try {
+    const resolved = await resolveLocation(wanted);
+    if (!state.areaCode && state.postcode === wanted && resolved?.areaCode) {
+      state.areaCode = resolved.areaCode;
+    }
+  } catch {
+    // Unresolvable — the map is then a blend without correction, which
+    // is what the graph shows for a place with no FFV history either.
+  }
+}
+
+// FFV looked up once per source/condition/day, not per point — a wide
+// map is hundreds of points x 72 hours, far too many localStorage reads.
+function buildMapFfvTable(sources, conditionNames) {
+  const table = {};
+  conditionNames.forEach(cond => {
+    table[cond] = {};
+    sources.forEach(({ id }) => {
+      const source = CONFIG.forecasters.find(s => s.id === id);
+      table[cond][id] = {
+        1: source ? ffvFor(source, cond, 1) : null,
+        2: source ? ffvFor(source, cond, 2) : null
+      };
+    });
+  });
+  return table;
+}
+
+// fields: [{ key: "precipitation", condition: "rain" }, ...]
+//   condition: FFV condition name, or null for no correction
+//   firstSource: true for angles (wind direction) — no median
+// Returns { times, points: [ { [key]: blended array over ALL times } ] }
+// so callers can slice from "now" themselves, as they did before.
+async function fetchBlendedGrid(lats, lons, fields, forecastDays, timeoutMs) {
+  const sources = await loadMapBlendSources();
+  await ensureFfvAreaCode();
+
+  const params = new URLSearchParams({
+    latitude: lats.join(","),
+    longitude: lons.join(","),
+    hourly: fields.map(f => f.key).join(","),
+    models: sources.map(s => s.model).join(","),
+    wind_speed_unit: "mph",
+    forecast_days: String(forecastDays),
+    timezone: "auto"
+  });
+  const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, timeoutMs);
+  if (!res.ok) throw new Error(`Map weather fetch failed: ${res.status}`);
+  const data = await res.json();
+  const raw = Array.isArray(data) ? data : [data];
+  if (raw.length !== lats.length) {
+    throw new Error("Map weather fetch returned an unexpected number of points");
+  }
+
+  const times = raw[0].hourly.time;
+  const now = Date.now();
+  let nowIdx = times.findIndex(t => new Date(t).getTime() >= now - 30 * 60 * 1000);
+  if (nowIdx < 0) nowIdx = 0;
+  const dayFor = i => (i - nowIdx < 24 ? 1 : 2);
+
+  const ffv = buildMapFfvTable(sources, fields.map(f => f.condition).filter(Boolean));
+
+  const points = raw.map(point => {
+    const out = {};
+    fields.forEach(({ key, condition, firstSource }) => {
+      const perSource = sources.map(s => point.hourly[`${key}_${s.model}`] || []);
+      out[key] = times.map((_, i) => {
+        if (firstSource) {
+          for (const series of perSource) {
+            const v = series[i];
+            if (v !== null && v !== undefined) return v;
+          }
+          return null;
+        }
+        const day = dayFor(i);
+        const values = [];
+        perSource.forEach((series, s) => {
+          const v = series[i];
+          if (v === null || v === undefined) return;
+          const f = condition ? ffv[condition][sources[s].id][day] : null;
+          values.push(f !== null && f !== undefined ? applyCorrection(v, f, condition) : v);
+        });
+        return values.length ? median(values) : null;
+      });
+    });
+    return out;
+  });
+
+  return { times, points, sourceIds: sources.map(s => s.id) };
+}
+
 function optionalHourly(data, key, from, length) {
   const arr = data.hourly?.[key];
   return arr ? arr.slice(from, from + length || undefined) : new Array(length).fill(null);
@@ -2991,7 +3113,9 @@ function forecastValueFor(day, source, conditionName, rollbackDays) {
     const real = realSourceValueFor(source.id, conditionName, day, rollbackDays);
     if (real !== null) return real;
   }
-  return demoValue(day, source, conditionName);
+  // No real figure (not issued yet, fetch failed, or a condition like UV
+  // that no source forecasts): show nothing rather than an invented one.
+  return null;
 }
 
 function renderRealSourceStatus() {
@@ -3005,7 +3129,7 @@ function renderRealSourceStatus() {
 
   if (errored.length > 0) {
     const names = errored.map(({ id }) => CONFIG.forecasters.find(f => f.id === id)?.name || id);
-    realSourceStatus.textContent = `${names.join(", ")} real data unavailable (falling back to demo)`;
+    realSourceStatus.textContent = `${names.join(", ")} real data unavailable — shown blank until it loads`;
     realSourceStatus.classList.add("is-error");
   } else if (errorOnly) {
     realSourceStatus.textContent = "";
@@ -3022,7 +3146,7 @@ function renderRealSourceStatus() {
     // including Cloud's own later split into three separate bands.
     const realConditionNames = [...REAL_DATA_CONDITIONS].map(c => CONFIG.conditions[c].name);
     realSourceStatus.textContent =
-      `Real data for ${realConditionNames.join(", ")} from: ${names.join(", ")}. UV remains demo (not available from these sources).`;
+      `Real data for ${realConditionNames.join(", ")} from: ${names.join(", ")}. No forecast UV from these sources.`;
   } else {
     realSourceStatus.textContent = "";
   }
@@ -4241,14 +4365,6 @@ function temperatureRangeFor(rollbackDays) {
         return;
       }
     }
-    // Demo sources have no real max/min concept — approximate a diurnal
-    // spread around the single demo figure rather than showing nothing.
-    const mean = demoValue(day, source, "temperature");
-    if (mean !== null && mean !== undefined) {
-      const corrected = ffv !== null ? applyCorrection(mean, ffv, "temperature") : mean;
-      highs.push({ value: corrected + 2.5, weight });
-      lows.push({ value: corrected - 2.5, weight });
-    }
   });
   if (!highs.length || !lows.length) return null;
   return { low: weightedMedian(lows), high: weightedMedian(highs) };
@@ -4330,8 +4446,7 @@ function windGustValueFor(day, source, rollbackDays) {
       }
     }
   }
-  const demoWind = demoValue(day, source, "wind");
-  return demoWind !== null && demoWind !== undefined ? demoWind * 1.4 : null; // ~1.4x sustained is a conventional gust-factor approximation
+  return null;
 }
 
 function windSpeedGustFor(rollbackDays) {

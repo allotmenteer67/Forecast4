@@ -57,6 +57,26 @@ down on purpose: don't bring it back without asking.
 ## Forecasts and accuracy
 
 - Merge as many user-selected forecasters' FFV-corrected data as possible.
+- Only real forecasters, ever (Nov 2026, v150). Eleven placeholder names
+  with made-up numbers (BBC, Meteoblue, YR, AccuWeather, Netweather,
+  XCWeather, Weather Underground, WeatherAPI, Windy, OpenWeatherMap,
+  Tomorrow.io) were removed along with the demo formula: after 14 days they
+  had been qualifying for the daily blend like real sources. Where no real
+  figure exists the app shows a blank, never an invented number. A name
+  comes back only with a real data feed, starting its own record and
+  joining the blend after the usual two weeks. Possible: YR (MET Norway's
+  free API, needs a relay), OpenWeatherMap / WeatherAPI / Tomorrow.io (free
+  keyed tiers, but mostly built from the same national models). Not
+  realistic: BBC, Netweather, XCWeather (no public feed), Weather
+  Underground (station owners only), AccuWeather, Meteoblue, Windy (paid).
+- UV is not offered on Compare: no source keeps past UV forecasts.
+- Everything shown is that blend — maps included. The map page and the
+  front-page map strip use the same top forecasters as the precached front
+  page (precache-config.json `topForecasters`), each FFV-corrected for the
+  current place, then the median (Nov 2026, v149). Before that both maps
+  asked Open-Meteo for its default "best match", which in the UK is the Met
+  Office UKV model alone, and disagreed with the rain graph. Any Open-Meteo
+  request whose numbers are shown as Cloude's forecast must name its models.
 - FFV is tracked per postcode area. Temperature correction is additive (not a
   ratio scale); other conditions multiplicative.
 - Units are chosen per condition, not one metric/imperial switch.

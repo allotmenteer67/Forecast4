@@ -7,27 +7,32 @@
 //
 // WHAT THIS MAP IS, AND ISN'T
 //
-// It is drawn from the same merged global models the headline figures
-// use, at roughly 10 km spacing. It is deliberately NOT built on UKMO's
-// 2 km UKV model, despite that being far higher resolution, for three
-// reasons worth recording because the temptation to "upgrade" it later
-// will be strong:
+// It is Cloude's own forecast: at every grid point, the same top
+// forecasters the front page blends (precache-config.json's
+// topForecasters), each FFV-corrected, then the median — built by
+// fetchBlendedGrid() in app.js. So the map at your pin should agree with
+// the front page's rain graph and headline.
+//
+// It is deliberately NOT built on UKMO's 2 km UKV model, despite that
+// being far higher resolution, for three reasons worth recording because
+// the temptation to "upgrade" it later will be strong:
 //
 //   1. UKMO open data carries an additional 4-hour delay on top of the
 //      normal run cycle (Open-Meteo say so themselves, and add that it
-//      makes the forecast less accurate as a result). Four hours is
-//      useless for "should I hang the washing out".
-//   2. UKV is not one of the app's six sources, so a UKV map could not
+//      makes the forecast less accurate as a result).
+//   2. UKV is not one of the app's sources, so a UKV map could not
 //      be FFV-corrected at all. It would be raw, uncorrected model
 //      output drawn immediately above bias-corrected headline numbers,
 //      and the two would visibly disagree.
-//   3. Sampling finer than the model's own grid adds no information.
-//      At 9-25 km native resolution, a 10 km grid is already at the
-//      limit of what the data actually contains.
+//   3. Sampling finer than the models' own grid adds no information.
+//
+// WATCH OUT: a request with no `models` parameter gets Open-Meteo's
+// "best match", which for the UK IS UKV. That is exactly how this map
+// ended up showing UKV alone until Nov 2026 despite this note. Always
+// name the models.
 //
 // So this map answers "where is the rain and which way is it moving",
-// not "will it rain here in twenty minutes". The hourly slider on the
-// front page remains the better answer to the second question.
+// not "will it rain here in twenty minutes".
 
 const MAP_CENTRE_KEY = "forecast-compare:map:centre";
 const MAP_ZOOM_KEY = "forecast-compare:map:zoom";
@@ -642,7 +647,10 @@ let mapGridCentre = null;
 // ensureGrid's existing staleness and movement logic governs it without
 // needing to know the cache exists at all. Nothing gets shown that
 // wouldn't already have been shown by staying on the page.
-const MAP_GRID_CACHE_KEY = "forecast-compare:mapGrid";
+// "blend1": grids cached before Nov 2026 were single-model (UKV) and
+// must not be shown again; the new key simply never finds them.
+const MAP_GRID_CACHE_KEY = "forecast-compare:mapGrid:blend1";
+try { localStorage.removeItem("forecast-compare:mapGrid"); } catch {}
 
 // Values are rounded on the way in. A full 150km grid is ~208,000
 // numbers, and stored at full float precision that runs to well over a
@@ -835,27 +843,34 @@ const MAP_FORECAST_HOURS = 48;
 // to be. Same convention as fetchHourlyForecast()'s real-source fetch.
 const MAP_FORECAST_DAYS = 3;
 
-// One request, comma-separated coordinate lists (Open-Meteo supports
-// multiple locations natively — up to 1000 per call — and returns an
-// array of one object per location, in the order requested, each
-// shaped exactly like a single-location response). Deliberately the
-// merged global models rather than ukmo_uk_deterministic_2km — see the
-// note at the top of this file for why. pressure_msl (sea-level,
-// height-corrected), not surface_pressure — the same choice
-// collect-weather.js already makes for the Compare page's Pressure
-// condition, since the map's area can span real elevation differences
-// that surface pressure alone would show as a fake gradient.
-// wind_speed_unit: mph to match every other real fetch in this app —
-// see the README note on the km/h-labelled-as-mph bug that convention
-// was introduced to fix.
+// Built from Cloude's own blend (fetchBlendedGrid in app.js): the same
+// top forecasters the front page blends, each FFV-corrected, then the
+// median — so the map at your pin agrees with the rain graph. Nov 2026:
+// this used to ask Open-Meteo for its default "best match", which in the
+// UK silently meant the Met Office's 2km UKV model on its own — exactly
+// what the note at the top of this file said the map must never be.
 //
-// Cost: four hourly variables instead of one, on the same one-request-
-// per-point shape as before — assume roughly 4x the "API call" cost per
-// point against the 10,000/day free-tier limit now that wind, pressure
-// and temperature ride along with rain. At 10 km spacing a 100 km-
-// radius view can reach several hundred points, so this is worth
-// watching if "Couldn't load map data" starts showing up on a well
-// zoomed-out view — more so than before this change.
+// pressure_msl (sea-level, height-corrected), not surface_pressure — the
+// map's area can span real elevation differences that surface pressure
+// alone would show as a fake gradient. Wind in mph to match every other
+// real fetch in this app.
+//
+// Cost: 8 variables x 4 sources = 32 per point, which Open-Meteo counts
+// as roughly 4 calls per point against the 10,000/day free tier: about
+// 324 for the closest zoom, about 1,450 for the widest. The 30-minute
+// grid cache (MAP_STALE_MS + the persistent cache above) keeps ordinary
+// use well inside that.
+const MAP_BLEND_FIELDS = [
+  { key: "precipitation", condition: "rain" },
+  { key: "temperature_2m", condition: "temperature" },
+  { key: "pressure_msl", condition: "pressure" },
+  { key: "wind_speed_10m", condition: "wind" },
+  { key: "wind_direction_10m", condition: null, firstSource: true },
+  { key: "cloud_cover_low", condition: "cloudLow" },
+  { key: "cloud_cover_mid", condition: "cloudMid" },
+  { key: "cloud_cover_high", condition: "cloudHigh" }
+];
+
 async function fetchWeatherGrid(centre, radiusKm) {
   const { lat0, lon0, dLat, dLon, rows, cols } = buildGridShape(centre, radiusKm);
   const lats = [];
@@ -867,40 +882,12 @@ async function fetchWeatherGrid(centre, radiusKm) {
     }
   }
 
-  const params = new URLSearchParams({
-    latitude: lats.join(","),
-    longitude: lons.join(","),
-    // cloud_cover_low/mid/high ride along here too now — one more
-    // request field, same one-request-per-point shape as before (see
-    // this function's own cost note above the definition).
-    hourly: "precipitation,temperature_2m,pressure_msl,wind_speed_10m,wind_direction_10m,cloud_cover_low,cloud_cover_mid,cloud_cover_high",
-    wind_speed_unit: "mph",
-    forecast_days: String(MAP_FORECAST_DAYS),
-    timezone: "auto"
-  });
+  const { times, points, sourceIds } = await fetchBlendedGrid(lats, lons, MAP_BLEND_FIELDS, MAP_FORECAST_DAYS, 30000);
 
-  const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, 30000);
-  if (!res.ok) throw new Error(`Map weather fetch failed: ${res.status}`);
-  const data = await res.json();
-
-  // A single point comes back as one object rather than an array — the
-  // grid always has more than one point in practice, but this keeps the
-  // indexing below from ever having to special-case it.
-  const points = Array.isArray(data) ? data : [data];
-  if (points.length !== rows * cols) {
-    throw new Error("Map weather fetch returned an unexpected number of points");
-  }
-
-  // Every point sits inside the same small area and shares one
-  // timezone, so "now" only needs working out once rather than per
-  // point. Same tolerant lookup as fetchHourlyForecast() uses for the
-  // real-source hourly view, for the same reason: matching by parsed
-  // time rather than string equality survives whatever exact minute
-  // Open-Meteo's hourly buckets land on.
+  // Same tolerant "now" lookup as fetchHourlyForecast() uses for the
+  // front page, so both start from the same hour.
   const now = new Date();
-  const nowIndex = points[0].hourly.time.findIndex(
-    t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000
-  );
+  const nowIndex = times.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
   const startIdx = nowIndex >= 0 ? nowIndex : 0;
 
   const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [], cloudLow = [], cloudMid = [], cloudHigh = [];
@@ -911,15 +898,15 @@ async function fetchWeatherGrid(centre, radiusKm) {
       for (let c = 0; c < cols; c++) {
         const point = points[r * cols + c];
         const i = startIdx + h;
-        const v = point.hourly.precipitation[i];
-        rainRow.push(v === null || v === undefined ? 0 : v);
-        tempRow.push(point.hourly.temperature_2m[i] ?? null);
-        pressureRow.push(point.hourly.pressure_msl[i] ?? null);
-        speedRow.push(point.hourly.wind_speed_10m[i] ?? null);
-        dirRow.push(point.hourly.wind_direction_10m[i] ?? null);
-        cloudLowRow.push(point.hourly.cloud_cover_low[i] ?? null);
-        cloudMidRow.push(point.hourly.cloud_cover_mid[i] ?? null);
-        cloudHighRow.push(point.hourly.cloud_cover_high[i] ?? null);
+        const v = point.precipitation[i];
+        rainRow.push(v === null || v === undefined ? 0 : Math.max(0, v));
+        tempRow.push(point.temperature_2m[i] ?? null);
+        pressureRow.push(point.pressure_msl[i] ?? null);
+        speedRow.push(point.wind_speed_10m[i] ?? null);
+        dirRow.push(point.wind_direction_10m[i] ?? null);
+        cloudLowRow.push(point.cloud_cover_low[i] ?? null);
+        cloudMidRow.push(point.cloud_cover_mid[i] ?? null);
+        cloudHighRow.push(point.cloud_cover_high[i] ?? null);
       }
       rainFrame.push(rainRow); tempFrame.push(tempRow); pressureFrame.push(pressureRow);
       speedFrame.push(speedRow); dirFrame.push(dirRow);
@@ -932,8 +919,9 @@ async function fetchWeatherGrid(centre, radiusKm) {
 
   return {
     lat0, lon0, dLat, dLon, rows, cols, hours: MAP_FORECAST_HOURS,
-    times: points[0].hourly.time.slice(startIdx, startIdx + MAP_FORECAST_HOURS),
-    rain, temp, pressure, windSpeed, windDir, cloudLow, cloudMid, cloudHigh, stub: false
+    times: times.slice(startIdx, startIdx + MAP_FORECAST_HOURS),
+    rain, temp, pressure, windSpeed, windDir, cloudLow, cloudMid, cloudHigh,
+    sources: sourceIds, stub: false
   };
 }
 

@@ -49,15 +49,14 @@ Both run entirely client-side; no server or key is needed for GitHub Pages
 hosting. Today's "Actual" figure is a running total and will read
 "still recording" until the day is over.
 
-Forecaster figures for BBC, Meteoblue, YR, AccuWeather etc. are still
-demo/placeholder data — those providers don't offer free public APIs for
-past forecast runs. **Real sources are different**: Rain, Cloud, Wind and
+Every forecaster is real (Nov 2026: the eleven placeholder names — BBC,
+Meteoblue, YR, AccuWeather and others — and the demo formula behind them
+were removed; see DECISIONS.md). Rain, Cloud, Wind and
 Temperature use real model data (via Open-Meteo's Previous Runs API) for
 sources listed in `REAL_SOURCES` in `app.js` — currently Met Office
 (`ukmo_global_deterministic_10km`) and ECMWF (`ecmwf_ifs025`) — both for
 the day-to-day table and for FFV. Sunshine and UV aren't in that dataset,
-so real sources fall back to the demo formula for those two conditions
-only. Adding another real source later is just another entry in
+so those show blank rather than invented figures. Adding another real source later is just another entry in
 `REAL_SOURCES` (plus a matching forecaster in `CONFIG.forecasters` and
 `settings.js`) — everything else (fetching, indexing, FFV, accuracy, the
 headline) already loops over the registry rather than naming a specific
@@ -90,9 +89,8 @@ The **freshest available real day** shifts with how far ahead you're
 looking — 3 days ahead, the freshest real data for any given real source
 is the lead-3 forecast (issued today), not lead-1 (which would need to be
 issued tomorrow and doesn't exist yet). Rows for lead times that haven't been
-issued yet just fall back to demo data, same convention already used
-everywhere else in the app when real data isn't available — not a new
-special case. FFV training itself only ever runs over past dates (it
+issued yet show blank — the app never invents a figure where no real
+forecast exists. FFV training itself only ever runs over past dates (it
 can't be otherwise — accuracy requires a known Actual), so looking into
 the future never pollutes or skews it.
 
