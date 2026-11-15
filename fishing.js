@@ -213,7 +213,11 @@ async function tryPrecachedFishingSpot(lat, lon, markType) {
     spot.markType === markType && haversineKm(lat, lon, spot.lat, spot.lon) <= FISHING_PRECACHE_PROXIMITY_KM
   );
   if (!match) return null;
-  return { weather: match.weather, marine: match.marine, fetchedAt };
+  // A spot whose fetch failed keeps older data under a fresh file-wide
+  // stamp — judge it by its own fetchedAt where it has one.
+  const spotFetchedAt = match.fetchedAt ? Date.parse(match.fetchedAt) : fetchedAt;
+  if (Date.now() - spotFetchedAt > FISHING_PRECACHE_MAX_AGE_MS) return null;
+  return { weather: match.weather, marine: match.marine, fetchedAt: spotFetchedAt };
 }
 
 // Finds the hourly index nearest a given epoch-ms timestamp — every

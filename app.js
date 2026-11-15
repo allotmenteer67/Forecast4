@@ -2509,6 +2509,10 @@ async function tryPrecachedHourlyForecast(lat, lon) {
   if (entry.fetchedAt && now - Date.parse(entry.fetchedAt) > PRECACHE_LOCATION_CACHE_MS) return null;
   const firstHour = entry.times?.[0] ? new Date(entry.times[0]).getTime() : NaN;
   if (!Number.isFinite(firstHour) || now - firstHour > 90 * 60 * 1000) return null;
+  // The front page is meant to blend all nine forecasters. On a bad run
+  // GitHub only got two for some places — too thin to stand in for the
+  // real blend, so fetch live instead. Seven allows the odd miss.
+  if (Object.keys(entry.sources || {}).length < Math.min(7, REAL_SOURCES.length)) return null;
   return entry;
 }
 

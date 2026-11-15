@@ -213,3 +213,4 @@ at night, sometimes with poor signal.
 - Open-Meteo was answering many GitHub precache requests with 429. A failed place kept last run's data, but the file's dataAsOf still moved on, so the app trusted it. TA7's rain graph started at 06:00 when it was 14:00.
 - The precache job now retries 429/5xx (waits 4s, 12s, 30s), fetches one place at a time, and stamps each place with its own fetchedAt.
 - The app rejects a precached place if its fetchedAt is over 30 min old, or its first hour is over 90 min in the past, and does a live fetch instead.
+- Follow-up the same day: the app also refuses a precached place holding fewer than seven of the nine forecasters (live fetch instead); fishing spots carry their own fetchedAt and are judged by it; the My Plot feed's "updated" is the TA7 place's own fetch time, not the file's.

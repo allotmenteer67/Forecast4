@@ -242,7 +242,9 @@ async function main() {
   }
 
   const output = {
-    updated: precache.dataAsOf,
+    // The place's own fetch time, not the file's — a failed fetch keeps
+    // older data while the file's dataAsOf still moves on.
+    updated: entry.fetchedAt || precache.dataAsOf,
     areaCode: AREA_CODE,
     corrected: anyCorrected,
     daily,

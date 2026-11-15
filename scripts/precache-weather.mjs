@@ -337,6 +337,9 @@ async function fetchFishingSpot(spot) {
     lat: spot.lat,
     lon: spot.lon,
     markType: spot.markType || "inland",
+    // This spot's own fetch time, same reason as the weather places:
+    // a failed spot keeps last run's data while fishingDataAsOf moves on.
+    fetchedAt: new Date().toISOString(),
     weather,
     marine: marine || null
   };
