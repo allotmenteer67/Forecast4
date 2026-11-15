@@ -2497,7 +2497,19 @@ async function tryPrecachedHourlyForecast(lat, lon) {
   const data = await loadPrecacheData();
   if (!data?.weather?.length) return null;
   if (Date.now() - Date.parse(data.dataAsOf) > PRECACHE_LOCATION_CACHE_MS) return null;
-  return data.weather.find(w => haversineKm(lat, lon, w.lat, w.lon) <= PRECACHE_PROXIMITY_KM) || null;
+  const entry = data.weather.find(w => haversineKm(lat, lon, w.lat, w.lon) <= PRECACHE_PROXIMITY_KM);
+  if (!entry) return null;
+  // The file's dataAsOf moves on every run, but a place whose fetch
+  // failed keeps its older data. 15 Nov: TA7's entry still started at
+  // 06:00 at 14:00, so the rain graph began eight hours in the past.
+  // Judge this place by its own fetchedAt, and whatever the stamp says,
+  // never accept data whose first hour is more than 90 minutes old —
+  // fall back to a live fetch instead.
+  const now = Date.now();
+  if (entry.fetchedAt && now - Date.parse(entry.fetchedAt) > PRECACHE_LOCATION_CACHE_MS) return null;
+  const firstHour = entry.times?.[0] ? new Date(entry.times[0]).getTime() : NaN;
+  if (!Number.isFinite(firstHour) || now - firstHour > 90 * 60 * 1000) return null;
+  return entry;
 }
 
 // ---- Blended map grids (map.html and the front page's map strip) ----

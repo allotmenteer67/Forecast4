@@ -74,12 +74,29 @@ const REAL_SOURCES_BY_ID = {
   cma: "cma_grapes_global"
 };
 
+// Retries on 429 (too many requests) and 5xx. Open-Meteo sees GitHub's
+// shared runner IPs, so a 429 here is usually other people's traffic,
+// not ours — on 15 Nov most of each run was being turned away and the
+// TA7 entry silently stayed on its 06:00 data all day. A short wait and
+// a second or third try gets through almost every time.
+const RETRY_WAITS_MS = [4000, 12000, 30000];
 async function fetchJson(url, label) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  if (!res.ok) {
-    throw new Error(`${label}: HTTP ${res.status}`);
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    } catch (err) {
+      if (attempt >= RETRY_WAITS_MS.length) throw new Error(`${label}: ${err.message}`);
+      await new Promise(r => setTimeout(r, RETRY_WAITS_MS[attempt]));
+      continue;
+    }
+    if (res.ok) return res.json();
+    const retryable = res.status === 429 || res.status >= 500;
+    if (!retryable || attempt >= RETRY_WAITS_MS.length) {
+      throw new Error(`${label}: HTTP ${res.status}`);
+    }
+    await new Promise(r => setTimeout(r, RETRY_WAITS_MS[attempt]));
   }
-  return res.json();
 }
 
 // Resolves a bare outward code (e.g. "TA6") to a centroid — same source
@@ -262,6 +279,10 @@ async function fetchWeatherLocation(location, topForecasters) {
     lat: location.lat,
     lon: location.lon,
     times: sharedTimes,
+    // This entry's own fetch time. The file-wide dataAsOf moves on every
+    // run even when this place failed and kept last run's data, so the
+    // app judges each place's freshness by this instead.
+    fetchedAt: new Date().toISOString(),
     uvIndex: metofficeData.hourly.uv_index.slice(from),
     cloudCoverLow: metofficeData.hourly.cloud_cover_low.slice(from),
     cloudCoverMid: metofficeData.hourly.cloud_cover_mid.slice(from),
@@ -357,7 +378,11 @@ async function main() {
 
   console.log(`Precache run starting ${nowIso} — ${weatherLocations.length} weather location(s) (${weatherFavouriteLocations.length} favourite), ${fishingSpots.length} fishing spot(s) (${fishingFavouriteSpots.length} favourite).`);
 
-  const weatherResults = await Promise.all(weatherLocations.map(async location => {
+  // One place at a time (each place's nine sources still go together),
+  // not every place at once — 54 simultaneous requests was the main
+  // trigger for Open-Meteo's 429s.
+  const weatherResults = [];
+  for (const location of weatherLocations) weatherResults.push(await (async () => {
     try {
       // All nine forecasters (Nov 2026), so the precached front page blends
       // exactly the same sources as the app's own live fetch. Before, this
@@ -379,7 +404,7 @@ async function main() {
       }
       return null;
     }
-  }));
+  })());
 
   // Fishing: only refresh spots whose bucket has actually moved on from
   // last run. Spots not due yet keep last run's data untouched (not
