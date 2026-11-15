@@ -80,6 +80,25 @@ const REAL_SOURCES_BY_ID = {
 // TA7 entry silently stayed on its 06:00 data all day. A short wait and
 // a second or third try gets through almost every time.
 const RETRY_WAITS_MS = [4000, 12000, 30000];
+
+// Overnight slowdown — see the weather loop in main(). The app (app.js
+// tryPrecachedHourlyForecast) accepts data up to 75 minutes old in the
+// same window, so keep the two in step if either changes.
+const QUIET_START_HOUR = 22; // UK time, inclusive
+const QUIET_END_HOUR = 3;    // UK time, exclusive
+// 55 rather than 60: runs land every 20 minutes, so a place fetched at
+// :07 is refreshed on the third run after (:07 next hour) rather than
+// slipping to the fourth.
+const QUIET_REFRESH_MS = 55 * 60 * 1000;
+// Must match AREA_CODE in build-forecast-feed.mjs.
+const MY_PLOT_FEED_AREA = "TA7";
+function ukHour(date) {
+  return Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Europe/London" }).format(date));
+}
+function isQuietHour(date) {
+  const h = ukHour(date);
+  return h >= QUIET_START_HOUR || h < QUIET_END_HOUR;
+}
 async function fetchJson(url, label) {
   for (let attempt = 0; ; attempt++) {
     let res;
@@ -385,7 +404,22 @@ async function main() {
   // not every place at once — 54 simultaneous requests was the main
   // trigger for Open-Meteo's 429s.
   const weatherResults = [];
+  const quiet = isQuietHour(now);
+  if (quiet) console.log("Quiet hours (22:00-03:00 UK): refreshing places hourly instead of every 20 minutes, except the My Plot feed's place.");
   for (const location of weatherLocations) weatherResults.push(await (async () => {
+    // Overnight slowdown (Nov 2026): between 22:00 and 03:00 UK time a
+    // place is only refetched once its data is about an hour old, saving
+    // around 500 requests a night. The My Plot feed's place is exempt,
+    // because My Plot's frost warning matters most overnight and it only
+    // trusts the feed for 40 minutes.
+    if (quiet && location.label !== MY_PLOT_FEED_AREA) {
+      const prev = previous?.weather?.find(w => w.id === location.id);
+      const age = prev?.fetchedAt ? now.getTime() - Date.parse(prev.fetchedAt) : Infinity;
+      if (age < QUIET_REFRESH_MS && Object.keys(prev.sources || {}).length >= 7) {
+        console.log(`  ${location.id}: kept (fetched ${Math.round(age / 60000)} min ago).`);
+        return prev;
+      }
+    }
     try {
       // All nine forecasters (Nov 2026), so the precached front page blends
       // exactly the same sources as the app's own live fetch. Before, this

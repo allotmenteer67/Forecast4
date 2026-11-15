@@ -214,3 +214,8 @@ at night, sometimes with poor signal.
 - The precache job now retries 429/5xx (waits 4s, 12s, 30s), fetches one place at a time, and stamps each place with its own fetchedAt.
 - The app rejects a precached place if its fetchedAt is over 30 min old, or its first hour is over 90 min in the past, and does a live fetch instead.
 - Follow-up the same day: the app also refuses a precached place holding fewer than seven of the nine forecasters (live fetch instead); fishing spots carry their own fetchedAt and are judged by it; the My Plot feed's "updated" is the TA7 place's own fetch time, not the file's.
+
+## Overnight precache slowdown (15 Nov 2026)
+- 22:00-03:00 UK time, GitHub refreshes each saved weather place hourly instead of every 20 min (about 500 fewer Open-Meteo requests a night). The My Plot feed's place (TA7) is exempt: My Plot's frost warning matters most overnight and it only trusts the feed for 40 min.
+- The app accepts a place's data up to 75 min old in that window (30 min otherwise), and always trims hours that have already passed, so graphs still start at the current hour.
+- Considered and rejected: fetching sunrise/sunset or soil temperature separately/less often. Open-Meteo counts each request as at least one call, so splitting items off adds calls rather than saving them. Same reason a GitHub-vs-phone split by item doesn't help.
