@@ -74,6 +74,14 @@ down on purpose: don't bring it back without asking.
   secret MO_SPOT_KEY. Places are keyed like the app's areas (outward code
   or one-decimal coordinates); nothing about the Met Office site is stored.
   A device's own record always wins; the shared one only fills missed days.
+- Sources by place (Nov 2026, v153): the front page always blends all nine
+  forecasters (the GitHub precache now fetches nine too, so it no longer
+  switches between four and nine). Rain everywhere, including the map and
+  the front-page strip, uses all nine. The map's other layers use the top
+  four (precache-config.json topForecasters) to keep its cost down. Callout
+  and Coast wind is the nine-forecaster median (wind-blend.js), not
+  corrected, with the plain single-model download kept as a fallback and
+  for visibility (most forecasters don't provide visibility).
 - Only real forecasters, ever (Nov 2026, v150). Eleven placeholder names
   with made-up numbers (BBC, Meteoblue, YR, AccuWeather, Netweather,
   XCWeather, Weather Underground, WeatherAPI, Windy, OpenWeatherMap,

@@ -359,7 +359,13 @@ async function main() {
 
   const weatherResults = await Promise.all(weatherLocations.map(async location => {
     try {
-      return await fetchWeatherLocation(location, config.topForecasters);
+      // All nine forecasters (Nov 2026), so the precached front page blends
+      // exactly the same sources as the app's own live fetch. Before, this
+      // used topForecasters (four), and the front page quietly switched
+      // between a four- and a nine-source blend depending on whether this
+      // file was fresh. topForecasters now only picks the map's non-rain
+      // layers.
+      return await fetchWeatherLocation(location, Object.keys(REAL_SOURCES_BY_ID));
     } catch (err) {
       console.error(`Weather location ${location.id} failed entirely: ${err.message}`);
       // Fall back to whatever was cached last run for this location,
@@ -433,6 +439,7 @@ async function main() {
     fishingDataAsOf,
     fishingBucket: currentBucket,
     topForecasters: config.topForecasters,
+    forecasters: Object.keys(REAL_SOURCES_BY_ID),
     weather: weatherResults.filter(Boolean),
     fishing: fishingResults.filter(Boolean)
   };

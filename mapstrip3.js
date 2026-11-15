@@ -559,8 +559,8 @@ async function renderMapStripInner(centre, grid) {
 
 const MAP_STRIP_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 // "blend1": strips cached before Nov 2026 were single-model (UKV).
-const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapstrip:grid:blend1";
-try { localStorage.removeItem("forecast-compare:mapstrip:grid"); } catch {}
+const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapstrip:grid:blend2";
+try { localStorage.removeItem("forecast-compare:mapstrip:grid"); localStorage.removeItem("forecast-compare:mapstrip:grid:blend1"); } catch {}
 const MAP_STRIP_GRID_CACHE_MS = 15 * 60 * 1000;
 
 function mapStripGridCacheKey(centre) {
@@ -616,11 +616,11 @@ async function fetchMapStripGrid(centre) {
   // Cloude's own blend (fetchBlendedGrid in app.js) — same sources and
   // FFV as the front page's rain graph, not Open-Meteo's default "best
   // match" (which for the UK is the Met Office UKV model on its own, and
-  // is what this strip used to show until Nov 2026). One variable x four
-  // sources stays under Open-Meteo's 10-variables-per-call weighting, so
-  // this costs the same as before.
+  // is what this strip used to show until Nov 2026). Rain from all nine
+  // forecasters: nine variables stays under Open-Meteo's
+  // 10-variables-per-call weighting, so this costs the same as before.
   const { times, points } = await fetchBlendedGrid(
-    lats, lons, [{ key: "precipitation", condition: "rain" }], MAP_STRIP_FORECAST_DAYS, 20000
+    lats, lons, [{ key: "precipitation", condition: "rain", allSources: true }], MAP_STRIP_FORECAST_DAYS, 20000
   );
 
   const now = new Date();

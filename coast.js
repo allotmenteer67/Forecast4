@@ -776,14 +776,21 @@ async function loadWind() {
   if (h && h.time[h.time.length - 1] >= lastNeeded && h.time[0] <= Date.now() / 1000) { renderWind(); return; }
   try {
     const spot = windSpot();
-    const url = "https://api.open-meteo.com/v1/forecast" +
-      `?latitude=${spot.lat}&longitude=${spot.lon}` +
-      "&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m" +
-      "&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC&forecast_days=2";
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.hourly && Array.isArray(data.hourly.time)) coast.windData = data.hourly;
+    // Nine-forecaster blend (wind-blend.js), same as the Callout screen;
+    // the plain single-model download is only a fallback.
+    try {
+      if (typeof fetchBlendedWindHourly !== "function") throw new Error("no blend");
+      coast.windData = await fetchBlendedWindHourly(spot.lat, spot.lon, 2);
+    } catch {
+      const url = "https://api.open-meteo.com/v1/forecast" +
+        `?latitude=${spot.lat}&longitude=${spot.lon}` +
+        "&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m" +
+        "&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC&forecast_days=2";
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.hourly && Array.isArray(data.hourly.time)) coast.windData = data.hourly;
+      }
     }
   } catch { /* no signal: whatever the Callout screen last had */ }
   renderWind();

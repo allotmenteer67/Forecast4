@@ -463,9 +463,13 @@ def map_is_the_blend_not_best_match(browser):
     expect(grid_reqs, "map made no grid request")
     expect(all("models=" in u for u in grid_reqs), "a map grid request didn't name its models (would get UKV best-match)")
     rain = pg.evaluate("sampleGrid(mapGrid,'rain',3,51.131,-2.911)")
-    # four sources giving 1,2,3,4 -> median 2.5; best-match would have been 9
-    expect(rain is not None and abs(rain - 2.5) < 1e-6, f"map rain at pin {rain}, expected blend median 2.5")
-    expect(pg.evaluate("mapGrid.sources.join(',')") == "metoffice,ecmwf,gfs,icon", "map isn't using the top forecasters")
+    # rain from all nine sources giving 1..9 -> median 5; best-match would have been 9
+    expect(rain is not None and abs(rain - 5) < 1e-6, f"map rain at pin {rain}, expected nine-source median 5")
+    temp = pg.evaluate("sampleGrid(mapGrid,'temp',3,51.131,-2.911)")
+    # other layers from the top four giving 10..13 -> median 11.5
+    expect(temp is not None and abs(temp - 11.5) < 1e-6, f"map temperature at pin {temp}, expected top-four median 11.5")
+    expect(pg.evaluate("mapGrid.sources.join(',')") == "metoffice,ecmwf,gfs,icon", "map's other layers aren't using the top forecasters")
+    expect(len(pg.evaluate("mapGrid.rainSources")) == 9, "map rain isn't using all nine forecasters")
     expect(not pg.errors, pg.errors)
     ctx.close()
 
@@ -597,6 +601,35 @@ def met_office_spot_gaps_filled_from_github_record(browser):
     expect(res["todayRecorded"] and res["tomorrow"] == 4, f"today's forecast not recorded (8 x 0.5mm): {res}")
     expect(not pg.errors, pg.errors)
     ctx.close()
+
+@check
+def callout_and_coast_wind_is_blended(browser):
+    # Nov 2026: Callout and Coast took wind from Open-Meteo's single
+    # default model. Wind is now the nine-forecaster median (direction from
+    # the first), visibility still comes from the plain download, and if
+    # the blend fails the plain wind is kept.
+    def run(fail_blend):
+        ctx = browser.new_context(viewport=PHONE)
+        ctx.route(lambda u: not u.startswith(BASE) and "api.open-meteo.com" not in u, lambda r: r.abort())
+        def handle(route):
+            if fail_blend and "models=" in route.request.url: return route.abort()
+            route.fulfill(status=200, content_type="application/json", body=om_body(route.request.url))
+        ctx.route("https://api.open-meteo.com/**", handle)
+        pg = ctx.new_page(); pg.errors = []
+        pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+        pg.goto(f"{BASE}/callout.html"); pg.wait_for_timeout(1200)
+        out = pg.evaluate("""(async () => { const d = await fetchForecast({ lat: 51.77, lon: -5.11 });
+          return { sp: d.hourly.wind_speed_10m[5], gu: d.hourly.wind_gusts_10m[5], dir: d.hourly.wind_direction_10m[5],
+                   vis: d.hourly.visibility[5], n: d.hourly.windBlendedFrom || 0 }; })()""")
+        errs = pg.errors; ctx.close()
+        return out, errs
+    out, errs = run(False)
+    # nine models give 10..18 -> median 14; direction from the first (0)
+    expect(out["sp"] == 14 and out["gu"] == 14 and out["dir"] == 0 and out["n"] == 9, f"wind not blended: {out}")
+    expect(out["vis"] == 5, f"visibility lost: {out}")
+    out, errs2 = run(True)
+    expect(out["sp"] == 5 and out["vis"] == 5 and out["n"] == 0, f"fallback to plain wind failed: {out}")
+    expect(not errs and not errs2, errs + errs2)
 
 # ---------- runner ----------
 

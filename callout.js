@@ -129,14 +129,32 @@ function hourIndexForNow(times) {
 }
 
 // ---- Downloads ----
+// Two downloads side by side: the plain one (for visibility, which most
+// forecasters don't provide) and the nine-forecaster wind blend
+// (wind-blend.js). If the blend fails — poor signal, say — the plain
+// download's own wind is still there, so the screen never loses wind.
 async function fetchForecast(spot) {
   const url = "https://api.open-meteo.com/v1/forecast" +
     `?latitude=${spot.lat}&longitude=${spot.lon}` +
     "&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m,visibility" +
     "&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC&forecast_days=2";
-  const res = await fetchWithTimeout(url, {}, 20000);
-  if (!res.ok) throw new Error(`Forecast download failed (${res.status})`);
-  return res.json();
+  const [plain, blended] = await Promise.allSettled([
+    (async () => {
+      const res = await fetchWithTimeout(url, {}, 20000);
+      if (!res.ok) throw new Error(`Forecast download failed (${res.status})`);
+      return res.json();
+    })(),
+    typeof fetchBlendedWindHourly === "function" ? fetchBlendedWindHourly(spot.lat, spot.lon, 2) : Promise.reject(new Error("no blend"))
+  ]);
+  if (plain.status === "fulfilled") {
+    const data = plain.value;
+    if (blended.status === "fulfilled" && data && data.hourly) mergeBlendedWind(data.hourly, blended.value);
+    return data;
+  }
+  // Plain download failed but the blend arrived: wind without visibility
+  // beats nothing.
+  if (blended.status === "fulfilled") return { hourly: { ...blended.value, visibility: blended.value.time.map(() => null) } };
+  throw plain.reason;
 }
 
 async function fetchMarine(spot) {

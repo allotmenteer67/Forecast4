@@ -649,8 +649,8 @@ let mapGridCentre = null;
 // wouldn't already have been shown by staying on the page.
 // "blend1": grids cached before Nov 2026 were single-model (UKV) and
 // must not be shown again; the new key simply never finds them.
-const MAP_GRID_CACHE_KEY = "forecast-compare:mapGrid:blend1";
-try { localStorage.removeItem("forecast-compare:mapGrid"); } catch {}
+const MAP_GRID_CACHE_KEY = "forecast-compare:mapGrid:blend2";
+try { localStorage.removeItem("forecast-compare:mapGrid"); localStorage.removeItem("forecast-compare:mapGrid:blend1"); } catch {}
 
 // Values are rounded on the way in. A full 150km grid is ~208,000
 // numbers, and stored at full float precision that runs to well over a
@@ -855,13 +855,15 @@ const MAP_FORECAST_DAYS = 3;
 // alone would show as a fake gradient. Wind in mph to match every other
 // real fetch in this app.
 //
-// Cost: 8 variables x 4 sources = 32 per point, which Open-Meteo counts
-// as roughly 4 calls per point against the 10,000/day free tier: about
-// 324 for the closest zoom, about 1,450 for the widest. The 30-minute
+// Sources: rain from all nine forecasters (same as the front page), the
+// other layers from the top four. Cost: 9 + 7x4 = 37 variables per
+// point, which Open-Meteo counts as roughly 4 calls per point against the
+// 10,000/day free tier: about 320 for the closest zoom, about 1,450 for
+// the widest. The 30-minute
 // grid cache (MAP_STALE_MS + the persistent cache above) keeps ordinary
 // use well inside that.
 const MAP_BLEND_FIELDS = [
-  { key: "precipitation", condition: "rain" },
+  { key: "precipitation", condition: "rain", allSources: true },
   { key: "temperature_2m", condition: "temperature" },
   { key: "pressure_msl", condition: "pressure" },
   { key: "wind_speed_10m", condition: "wind" },
@@ -882,7 +884,7 @@ async function fetchWeatherGrid(centre, radiusKm) {
     }
   }
 
-  const { times, points, sourceIds } = await fetchBlendedGrid(lats, lons, MAP_BLEND_FIELDS, MAP_FORECAST_DAYS, 30000);
+  const { times, points, sourceIds, rainSourceIds } = await fetchBlendedGrid(lats, lons, MAP_BLEND_FIELDS, MAP_FORECAST_DAYS, 30000);
 
   // Same tolerant "now" lookup as fetchHourlyForecast() uses for the
   // front page, so both start from the same hour.
@@ -921,7 +923,7 @@ async function fetchWeatherGrid(centre, radiusKm) {
     lat0, lon0, dLat, dLon, rows, cols, hours: MAP_FORECAST_HOURS,
     times: times.slice(startIdx, startIdx + MAP_FORECAST_HOURS),
     rain, temp, pressure, windSpeed, windDir, cloudLow, cloudMid, cloudHigh,
-    sources: sourceIds, stub: false
+    sources: sourceIds, rainSources: rainSourceIds, stub: false
   };
 }
 

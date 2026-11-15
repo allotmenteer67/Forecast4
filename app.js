@@ -2514,11 +2514,13 @@ async function tryPrecachedHourlyForecast(lat, lon) {
 // day-1/day-2 bucketing from "now"), then the median across sources.
 // Wind direction follows the front page too: first source with a value.
 //
-// Which sources: data/precache-config.json's topForecasters — the same
-// four the precached front page already blends. All nine would cost too
-// much across hundreds of map points against the 10,000/day limit.
-// One request still fetches every source at once (Open-Meteo accepts a
-// comma-separated models list), so there's no extra round-trip.
+// Which sources: rain from all nine forecasters, the same as the front
+// page. Every other layer from data/precache-config.json's
+// topForecasters (four) — all nine for every layer would cost about
+// eight times as much across hundreds of map points against the
+// 10,000/day limit, and rain is where forecasters disagree most.
+// Open-Meteo accepts a comma-separated models list, so that's two
+// requests per map load, not one per source.
 //
 // FFV comes from the place the front page is showing (state.areaCode).
 // Further out on the map that's an approximation, but it's the same
@@ -2590,62 +2592,84 @@ function buildMapFfvTable(sources, conditionNames) {
 //   firstSource: true for angles (wind direction) — no median
 // Returns { times, points: [ { [key]: blended array over ALL times } ] }
 // so callers can slice from "now" themselves, as they did before.
+// fields: [{ key: "precipitation", condition: "rain", allSources: true }, ...]
+//   condition: FFV condition name, or null for no correction
+//   firstSource: true for angles (wind direction) — no median
+//   allSources: blend all nine forecasters (rain), not just the top four
+// Fields are fetched in one request per source set, so rain-from-nine
+// plus everything-else-from-four costs two requests, not more.
+// Returns { times, points: [ { [key]: blended array over ALL times } ] }
+// so callers can slice from "now" themselves, as they did before.
 async function fetchBlendedGrid(lats, lons, fields, forecastDays, timeoutMs) {
-  const sources = await loadMapBlendSources();
+  const topSources = await loadMapBlendSources();
   await ensureFfvAreaCode();
 
-  const params = new URLSearchParams({
-    latitude: lats.join(","),
-    longitude: lons.join(","),
-    hourly: fields.map(f => f.key).join(","),
-    models: sources.map(s => s.model).join(","),
-    wind_speed_unit: "mph",
-    forecast_days: String(forecastDays),
-    timezone: "auto"
-  });
-  const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, timeoutMs);
-  if (!res.ok) throw new Error(`Map weather fetch failed: ${res.status}`);
-  const data = await res.json();
-  const raw = Array.isArray(data) ? data : [data];
-  if (raw.length !== lats.length) {
-    throw new Error("Map weather fetch returned an unexpected number of points");
-  }
+  const groups = [
+    { sources: REAL_SOURCES, fields: fields.filter(f => f.allSources) },
+    { sources: topSources, fields: fields.filter(f => !f.allSources) }
+  ].filter(g => g.fields.length);
 
-  const times = raw[0].hourly.time;
+  const responses = await Promise.all(groups.map(async group => {
+    const params = new URLSearchParams({
+      latitude: lats.join(","),
+      longitude: lons.join(","),
+      hourly: group.fields.map(f => f.key).join(","),
+      models: group.sources.map(s => s.model).join(","),
+      wind_speed_unit: "mph",
+      forecast_days: String(forecastDays),
+      timezone: "auto"
+    });
+    const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, timeoutMs);
+    if (!res.ok) throw new Error(`Map weather fetch failed: ${res.status}`);
+    const data = await res.json();
+    const raw = Array.isArray(data) ? data : [data];
+    if (raw.length !== lats.length) {
+      throw new Error("Map weather fetch returned an unexpected number of points");
+    }
+    return raw;
+  }));
+
+  const times = responses[0][0].hourly.time;
   const now = Date.now();
   let nowIdx = times.findIndex(t => new Date(t).getTime() >= now - 30 * 60 * 1000);
   if (nowIdx < 0) nowIdx = 0;
   const dayFor = i => (i - nowIdx < 24 ? 1 : 2);
 
-  const ffv = buildMapFfvTable(sources, fields.map(f => f.condition).filter(Boolean));
-
-  const points = raw.map(point => {
-    const out = {};
-    fields.forEach(({ key, condition, firstSource }) => {
-      const perSource = sources.map(s => point.hourly[`${key}_${s.model}`] || []);
-      out[key] = times.map((_, i) => {
-        if (firstSource) {
-          for (const series of perSource) {
-            const v = series[i];
-            if (v !== null && v !== undefined) return v;
+  const points = lats.map(() => ({}));
+  groups.forEach((group, g) => {
+    const { sources } = group;
+    const ffv = buildMapFfvTable(sources, group.fields.map(f => f.condition).filter(Boolean));
+    responses[g].forEach((point, p) => {
+      const out = points[p];
+      group.fields.forEach(({ key, condition, firstSource }) => {
+        const perSource = sources.map(s => point.hourly[`${key}_${s.model}`] || []);
+        out[key] = times.map((_, i) => {
+          if (firstSource) {
+            for (const series of perSource) {
+              const v = series[i];
+              if (v !== null && v !== undefined) return v;
+            }
+            return null;
           }
-          return null;
-        }
-        const day = dayFor(i);
-        const values = [];
-        perSource.forEach((series, s) => {
-          const v = series[i];
-          if (v === null || v === undefined) return;
-          const f = condition ? ffv[condition][sources[s].id][day] : null;
-          values.push(f !== null && f !== undefined ? applyCorrection(v, f, condition) : v);
+          const day = dayFor(i);
+          const values = [];
+          perSource.forEach((series, s) => {
+            const v = series[i];
+            if (v === null || v === undefined) return;
+            const f = condition ? ffv[condition][sources[s].id][day] : null;
+            values.push(f !== null && f !== undefined ? applyCorrection(v, f, condition) : v);
+          });
+          return values.length ? median(values) : null;
         });
-        return values.length ? median(values) : null;
       });
     });
-    return out;
   });
 
-  return { times, points, sourceIds: sources.map(s => s.id) };
+  return {
+    times, points,
+    sourceIds: topSources.map(s => s.id),
+    rainSourceIds: (fields.find(f => f.key === "precipitation")?.allSources ? REAL_SOURCES : topSources).map(s => s.id)
+  };
 }
 
 function optionalHourly(data, key, from, length) {
