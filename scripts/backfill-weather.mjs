@@ -3,9 +3,10 @@
 // weatherLocations + weatherFavourites), so tapping "Backfill 1 year of
 // real data" on Compare for one of THESE areas downloads one small file
 // instead of running the full live year-long fetch on the phone itself.
-// Run monthly — not daily, a year of history barely moves day to day —
-// by .github/workflows/backfill-weather.yml, or manually via
-// workflow_dispatch.
+// Runs nightly (Nov 2026; was monthly) via
+// .github/workflows/backfill-weather.yml: a full year for a new area,
+// otherwise a cheap 14-day top-up — see backfillArea. Its output also
+// feeds scripts/build-shared-ffv.mjs, the corrections every device shares.
 //
 // ---- Why this duplicates collect-weather.mjs's own fetch logic rather
 // than importing it ----
@@ -55,6 +56,9 @@ const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
 const PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast";
 const OUTCODE_GEOCODE_URL = "https://api.postcodes.io/outcodes/";
 const BACKFILL_DAYS = 365;
+// A full year costs roughly 2,000 Open-Meteo calls; one per run keeps a
+// burst of new favourites from eating the day's 10,000 allowance.
+const MAX_FULL_YEARS_PER_RUN = 1;
 
 // Kept in sync BY HAND with REAL_SOURCES in app.js — same duplication
 // collect-weather.mjs and precache-weather.mjs each already carry their
@@ -78,6 +82,25 @@ const MODELS = [
 const SUNSHINE_DNI_THRESHOLD_WM2 = 120;
 function sunshineHoursFromDni(dniValues) {
   return dniValues.filter(v => v !== null && v !== undefined && v > SUNSHINE_DNI_THRESHOLD_WM2).length;
+}
+
+// Retries on 429 (too many requests) and 5xx, same as
+// precache-weather.mjs: GitHub's shared runner addresses often hit
+// Open-Meteo's per-address limit through other people's traffic.
+const RETRY_WAITS_MS = [5000, 15000, 45000];
+async function fetchWithRetry(url, timeoutMs) {
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    } catch (err) {
+      if (attempt >= RETRY_WAITS_MS.length) throw err;
+      await new Promise(r => setTimeout(r, RETRY_WAITS_MS[attempt]));
+      continue;
+    }
+    if (res.ok || !(res.status === 429 || res.status >= 500) || attempt >= RETRY_WAITS_MS.length) return res;
+    await new Promise(r => setTimeout(r, RETRY_WAITS_MS[attempt]));
+  }
 }
 
 function isoDate(date) {
@@ -127,7 +150,7 @@ async function fetchActual(lat, lon, start, end) {
     wind_speed_unit: "mph",
     timezone: "auto"
   });
-  const res = await fetch(`${ARCHIVE_URL}?${params.toString()}`, { signal: AbortSignal.timeout(30000) });
+  const res = await fetchWithRetry(`${ARCHIVE_URL}?${params.toString()}`, 30000);
   if (!res.ok) throw new Error(`Actual weather fetch failed: ${res.status}`);
   const data = await res.json();
   const dayCount = data.daily.time.length;
@@ -196,7 +219,7 @@ async function fetchModel(lat, lon, model, start, end) {
     wind_speed_unit: "mph",
     timezone: "auto"
   });
-  const res = await fetch(`${PREVIOUS_RUNS_URL}?${params.toString()}`, { signal: AbortSignal.timeout(60000) });
+  const res = await fetchWithRetry(`${PREVIOUS_RUNS_URL}?${params.toString()}`, 60000);
   if (!res.ok) throw new Error(`Model fetch failed for ${model}: ${res.status}`);
   const data = await res.json();
   const hourlyTimes = data.hourly.time;
@@ -306,11 +329,33 @@ async function resolveAreas(config) {
   });
 }
 
-async function backfillArea(area) {
+// Two modes (Nov 2026):
+// - Full: a whole year, for an area with no file yet. Around 2,000
+//   Open-Meteo calls, so main() does at most one of these per run.
+// - Top-up: an area that already has a file only refetches its last
+//   TOPUP_DAYS days (about 65 calls) and merges them in, so history —
+//   and the shared corrections built from it — move on every day. 14
+//   days rather than 1 because the "actual" archive fills in a few days
+//   late, and re-fetching the recent days picks those up.
+// Either way the file keeps the most recent BACKFILL_DAYS days, in date
+// order, so replaying it always runs oldest to newest.
+const TOPUP_DAYS = 14;
+
+async function backfillArea(area, existing) {
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
   const end = addDays(today, -1); // yesterday — today's actual isn't final yet
-  const start = addDays(end, -(BACKFILL_DAYS - 1));
+  const topUp = !!(existing?.days && Object.keys(existing.days).length >= 30);
+  let start = addDays(end, -((topUp ? TOPUP_DAYS : BACKFILL_DAYS) - 1));
+  if (topUp) {
+    // Reach back to the day after the file's last date if that's further
+    // (a missed night, or the old monthly files), so no day is skipped.
+    const lastDate = Object.keys(existing.days).sort().pop();
+    const dayAfterLast = addDays(new Date(`${lastDate}T00:00:00Z`), 1);
+    if (dayAfterLast < start) start = dayAfterLast;
+    const earliest = addDays(end, -(BACKFILL_DAYS - 1));
+    if (start < earliest) start = earliest;
+  }
 
   const actualByDate = await fetchActual(area.lat, area.lon, start, end);
 
@@ -325,15 +370,24 @@ async function backfillArea(area) {
     }
   }
 
-  const days = {};
+  // Start from the existing days on a top-up. A source that failed this
+  // run keeps whatever it already had for those dates, rather than the
+  // whole day losing it.
+  const merged = topUp ? { ...existing.days } : {};
   Object.keys(actualByDate).forEach(date => {
-    days[date] = { actual: actualByDate[date], models: {} };
+    const prev = merged[date];
+    const entry = { actual: actualByDate[date], models: { ...(prev?.models || {}) } };
     for (const { id } of MODELS) {
-      if (modelsByDate[id]?.[date]) days[date].models[id] = modelsByDate[id][date];
+      if (modelsByDate[id]?.[date]) entry.models[id] = modelsByDate[id][date];
     }
+    merged[date] = entry;
   });
 
-  return { output: { updated: isoDate(today), areaCode: area.areaCode, days }, failedSourceIds };
+  const keep = Object.keys(merged).sort().slice(-BACKFILL_DAYS);
+  const days = {};
+  keep.forEach(date => { days[date] = merged[date]; });
+
+  return { output: { updated: isoDate(today), areaCode: area.areaCode, days }, failedSourceIds, mode: topUp ? "top-up" : "full year" };
 }
 
 async function main() {
@@ -349,11 +403,21 @@ async function main() {
 
   console.log(`Backfill run starting — ${areas.length} area(s): ${areas.map(a => a.areaCode).join(", ")}`);
 
+  let fullYearsThisRun = 0;
   for (const area of areas) {
     try {
-      console.log(`Backfilling ${area.areaCode} (${area.label})...`);
-      const { output, failedSourceIds } = await backfillArea(area);
       const outPath = new URL(`${area.areaCode}.json`, BACKFILL_DIR);
+      let existing = null;
+      try { existing = JSON.parse(await readFile(outPath, "utf8")); } catch { /* new area */ }
+      const isNew = !(existing?.days && Object.keys(existing.days).length >= 30);
+      if (isNew && fullYearsThisRun >= MAX_FULL_YEARS_PER_RUN) {
+        console.log(`Deferring ${area.areaCode}'s first full year to the next run (one per run keeps within Open-Meteo's daily allowance).`);
+        continue;
+      }
+      if (isNew) fullYearsThisRun += 1;
+      console.log(`Backfilling ${area.areaCode} (${area.label})...`);
+      const { output, failedSourceIds, mode } = await backfillArea(area, existing);
+      console.log(`  mode: ${mode}`);
       await writeFile(outPath, JSON.stringify(output), "utf8");
       const dayCount = Object.keys(output.days).length;
       const failedNote = failedSourceIds.length ? ` (${failedSourceIds.join(", ")} failed this run)` : "";

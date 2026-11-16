@@ -2884,7 +2884,9 @@ function renderHistoryStatus() {
     historyStatus.textContent = `Collected history unavailable: ${state.history.error}`;
     historyStatus.classList.add("is-error");
   } else if (state.history.status === "ready") {
-    if (state.history.areaMismatch) {
+    if (state.history.shared) {
+      historyStatus.textContent = `Corrections are shared by every device using this place, worked out each night from ${state.history.shared.dayCount} days of real history.`;
+    } else if (state.history.areaMismatch) {
       historyStatus.textContent = "The daily-collected history is for a different postcode area, so it isn't used here — this area relies on its own one-off backfill instead.";
     } else {
       historyStatus.textContent = state.history.dayCount > 0
@@ -2931,8 +2933,99 @@ function applyHistoryFileToFFV(data, store, eligStore) {
   return samplesAdded;
 }
 
+// ---- Shared corrections (Nov 2026) ----
+// GitHub works out every shared place's corrections nightly
+// (scripts/build-shared-ffv.mjs, using this file's own
+// applyHistoryFileToFFV) and publishes data/shared-ffv/<area>.json.
+// Where one exists it replaces this device's own learnt corrections for
+// the nine Open-Meteo sources, so every device shows the same figures
+// for the same place. Met Office Spot is still learnt on the device.
+// If the file can't be reached, the last set applied stays in use.
+const SHARED_FFV_DIR = "./data/shared-ffv/";
+// Fresh enough to replace what's here; older than this and the nightly
+// job has evidently stopped, so it's ignored rather than trusted.
+const SHARED_FFV_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000;
+
+function sharedFfvStampKey(areaCode) {
+  return `forecast-compare:sharedFfvApplied:${areaCode}`;
+}
+
+function sharedFfvAppliedStamp(areaCode) {
+  try { return localStorage.getItem(sharedFfvStampKey(areaCode)); } catch { return null; }
+}
+
+// Returns { data, changed } when a usable shared file exists for the
+// current area (changed: it differed from what this device last
+// applied), or null when there isn't one.
+async function loadSharedFfv() {
+  const areaCode = state.areaCode;
+  if (!areaCode) return null;
+  let data;
+  try {
+    const res = await fetchWithTimeout(`${SHARED_FFV_DIR}${encodeURIComponent(areaCode)}.json`, { cache: "no-cache" }, 15000);
+    if (!res.ok) return null;
+    data = await res.json();
+  } catch {
+    return null;
+  }
+  if (data?.version !== 1 || data.areaCode !== areaCode || !data.ffv || !data.elig) return null;
+  if (!(Date.now() - Date.parse(data.updated) < SHARED_FFV_MAX_AGE_MS)) return null;
+  if (state.areaCode !== areaCode) return null; // place changed while fetching
+
+  const changed = sharedFfvAppliedStamp(areaCode) !== data.updated;
+  if (changed) {
+    const store = loadFFVStore(areaCode);
+    const eligStore = loadEligibilityStore(areaCode);
+    const realIds = realSourceIds();
+    [store, eligStore].forEach(target => {
+      Object.values(target).forEach(bySource => realIds.forEach(id => { delete bySource[id]; }));
+    });
+    const copyInto = (target, from) => {
+      Object.entries(from).forEach(([conditionName, bySource]) => {
+        target[conditionName] ??= {};
+        Object.entries(bySource).forEach(([id, value]) => {
+          if (realIds.includes(id)) target[conditionName][id] = value;
+        });
+      });
+    };
+    copyInto(store, data.ffv);
+    copyInto(eligStore, data.elig);
+    saveFFVStore(areaCode, store);
+    saveEligibilityStore(areaCode, eligStore);
+    try { localStorage.setItem(sharedFfvStampKey(areaCode), data.updated); } catch { /* storage full or blocked */ }
+  }
+  return { data, changed };
+}
+
+// Re-runs the hourly blend with new corrections, if the front page's
+// figures are already showing (same as a late Met Office Spot result).
+function reblendHourly() {
+  if (state.hourly?.lastInputs && state.hourly.status === "ready") {
+    const { perSource, sharedTimes, extras } = state.hourly.lastInputs;
+    applyHourlyBlend(perSource, sharedTimes, extras);
+    if (typeof renderHeadline === "function" && headlineGrid) renderHeadline();
+  }
+}
+
 async function loadCommittedHistory() {
   if (!state.areaCode) return;
+
+  const shared = await loadSharedFfv();
+  if (shared) {
+    state.history.status = "ready";
+    state.history.error = null;
+    state.history.areaMismatch = false;
+    state.history.shared = { dayCount: shared.data.dayCount, to: shared.data.to };
+    state.history.dayCount = shared.data.dayCount;
+    renderHistoryStatus();
+    renderTable();
+    if (shared.changed) reblendHourly();
+    return;
+  }
+  state.history.shared = null;
+  // This area has used shared corrections before but the file couldn't
+  // be reached just now: keep them, rather than rebuilding over them.
+  if (sharedFfvAppliedStamp(state.areaCode)) return;
 
   state.history.status = "loading";
   state.history.error = null;
@@ -6855,6 +6948,17 @@ async function backfillRealSourceHistory() {
   // extended to every precached area. A genuinely new area (never added
   // to data/precache-config.json) has no file here and falls straight
   // through to the live fetch below, completely unchanged.
+  // A place with shared corrections uses those — the same set every
+  // other device has — rather than learning its own.
+  const shared = await loadSharedFfv();
+  if (shared) {
+    state.backfill = { status: "done", error: null, samplesAdded: shared.data.samples || 0, failedSourceIds: [] };
+    renderBackfillStatus();
+    renderTable();
+    if (shared.changed) reblendHourly();
+    return;
+  }
+
   try {
     const res = await fetchWithTimeout(`./data/backfill/${state.areaCode}.json`, { cache: "no-store" }, 15000);
     if (res.ok) {
@@ -6862,6 +6966,13 @@ async function backfillRealSourceHistory() {
       if (data.areaCode === state.areaCode && data.days && Object.keys(data.days).length) {
         const store = loadFFVStore(state.areaCode);
         const eligStore = loadEligibilityStore(state.areaCode);
+        // Rebuild from the file rather than adding it on top: replaying
+        // it a second time used to count the whole year twice, one of
+        // the ways two devices drifted apart (16 Nov 2026).
+        const realIds = realSourceIds();
+        [store, eligStore].forEach(target => {
+          Object.values(target).forEach(bySource => realIds.forEach(id => { delete bySource[id]; }));
+        });
         const samplesAdded = applyHistoryFileToFFV(data, store, eligStore);
         saveFFVStore(state.areaCode, store);
         saveEligibilityStore(state.areaCode, eligStore);

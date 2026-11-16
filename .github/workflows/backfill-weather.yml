@@ -2,15 +2,20 @@ name: Backfill weather history
 
 on:
   schedule:
-    # 1st of the month, 05:00 UTC — an hour before collect-weather's
-    # daily 06:00 run, and monthly rather than daily because a year of
-    # history barely shifts day to day; this only needs to catch newly
-    # added areas/favourites reasonably promptly, not track daily change.
-    - cron: "0 5 1 * *"
+    # Nightly at 03:40 UTC (Nov 2026; was monthly). Inside the precache
+    # job's quiet hours, so the extra Open-Meteo calls land when the
+    # least else is fetching. A place that already has a year of history
+    # only tops up its last 14 days (about 65 calls); a new place gets
+    # its full year (about 2,000 calls), at most one new place a night.
+    - cron: "40 3 * * *"
   workflow_dispatch: {} # lets you trigger it manually from the Actions tab
 
 permissions:
   contents: write
+
+concurrency:
+  group: backfill-weather
+  cancel-in-progress: false
 
 jobs:
   backfill:
@@ -22,13 +27,22 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Backfill a year of history for every known area
+      - name: Top up (or start) a year of history for every shared place
         run: node scripts/backfill-weather.mjs
 
-      - name: Commit updated backfill files
+      - name: Work out the shared corrections every device uses
+        run: node scripts/build-shared-ffv.mjs
+
+      - name: Commit updated history and corrections
         run: |
           git config user.name "forecast-compare-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/backfill/
-          git diff --staged --quiet || git commit -m "Update backfill history"
-          git push
+          git add data/backfill/ data/shared-ffv/
+          git diff --staged --quiet && exit 0
+          git commit -m "Update backfill history and shared corrections"
+          # Other jobs push to main every 20 minutes; rebase onto theirs.
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1

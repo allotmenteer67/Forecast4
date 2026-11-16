@@ -223,3 +223,12 @@ at night, sometimes with poor signal.
 ## Sky pictures use blended cloud (16 Nov 2026)
 - The Sunshine/Cloud sheet strip, the hour slider's sky icon and the frost-risk cloud check read Met Office cloud alone, while SUN HRS blends every source. On 16 Nov Met Office alone forecast thick cloud all day while six of seven sources expected 4-7 h of sun, so the sheet showed overcast beside "7/6".
 - All of them now read state.hourly.skyLow/Mid/High: the blended cloud bands, falling back to Met Office per hour only where the blend has no value.
+
+## Shared corrections (FFV) for shared places (16 Nov 2026)
+- Why: each device learned its own FFV. On 16 Nov the phone showed 23.6 mm rain for Zoy (TA7) and the iPad 17.4 mm from the same forecasts. TA7 learned only from the yearly backfill file, and each device replayed that on top of what it already had, at different times — drift, plus double counting.
+- Now: .github/workflows/backfill-weather.yml runs nightly at 03:40 UTC. backfill-weather.mjs tops each shared area up with its last 14 days (or back to the file's last date), or fetches a full year for a new area (max one new area per run, ~2,000 calls). build-shared-ffv.mjs then replays each area's history from scratch with app.js's own applyHistoryFileToFFV (lifted out of app.js at run time, so the maths can't drift) and writes data/shared-ffv/<area>.json. Also covers history.json's area (TA6).
+- App: loadCommittedHistory / backfillRealSourceHistory use the shared file when one exists, replacing the nine Open-Meteo sources' FFV and eligibility for that area, then re-blend the front page. Unreachable file: last applied set stays. File older than 21 days: ignored. Met Office Spot still learns on the device.
+- Safeguards: an area's file is only written with ≥60 days of actuals and ≥5 sources reporting in the last 30 days; otherwise the previous file stays.
+- Also fixed: the per-device backfill-file path now rebuilds instead of adding the year on top again.
+- Known gap: Cloud bands and Soil Temp have no past-forecast values from the Previous Runs API (always null), so they never get FFV — the Cloud cell's "Collecting data" never clears. Separate job.
+- Taunton/Tiree/Teesside in precache-config.json have no areaCode, so they get no backfill or shared corrections until one is added.
