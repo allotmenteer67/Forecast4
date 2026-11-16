@@ -235,3 +235,4 @@ at night, sometimes with poor signal.
 
 ## Removed Taunton/Tiree/Teesside from the precache (16 Nov 2026)
 - They were hand-picked test places nobody uses, costing about 1,900 Open-Meteo requests a day in the 20-minute weather precache (plus Met Office Spot calls). weatherLocations is now empty; the shared favourites (TA7, SA62, CM7) carry on as before.
+- Same day: removed the three test fishing spots too (Lowestoft, Lyme Regis, Liverpool), picked for spread and alliteration, not real use. None fed the Charmouth card (Lyme Regis is 2.7 km away, outside the 2 km match).

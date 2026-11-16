@@ -63,29 +63,7 @@
     "icon"
   ],
   "weatherLocations": [],
-  "fishingSpots": [
-    {
-      "id": "lowestoft",
-      "label": "Lowestoft",
-      "lat": 52.475,
-      "lon": 1.751,
-      "markType": "coastal"
-    },
-    {
-      "id": "lyme-regis",
-      "label": "Lyme Regis",
-      "lat": 50.725,
-      "lon": -2.9375,
-      "markType": "coastal"
-    },
-    {
-      "id": "liverpool",
-      "label": "Liverpool",
-      "lat": 53.405,
-      "lon": -2.995,
-      "markType": "coastal"
-    }
-  ],
+  "fishingSpots": [],
   "weatherFavourites": [
     {
       "outcode": "TA7",
