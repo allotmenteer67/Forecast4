@@ -2417,11 +2417,22 @@ function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
   // Action-side change, separate from this file.
   state.hourly.feelsLike = blend("feelsLike", "feelsLike");
   // Cloud bands blended across sources from the latest runs, for the
-  // front page's Cloud cell (liveCloudMean). The hour slider and the
-  // sheet's strip still read Met Office's own cloudCoverLow/Mid/High.
+  // front page's Cloud cell (liveCloudMean) and every sky picture.
   state.hourly.cloudLowBlend = blend("cloudLow", "cloudLow");
   state.hourly.cloudMidBlend = blend("cloudMid", "cloudMid");
   state.hourly.cloudHighBlend = blend("cloudHigh", "cloudHigh");
+  // What every sky picture and the frost check read (16 Nov 2026). They
+  // used to read Met Office cloud alone while SUN HRS blended all the
+  // sources, so on 16 Nov the sheet showed thick cloud all day beside a
+  // "7 hours of sun" figure. Blended cloud, hour by hour, falling back
+  // to Met Office's own value only for an hour the blend has nothing for.
+  const withFallback = (blended, own) => (own || []).map((v, i) => {
+    const b = blended?.[i];
+    return b !== null && b !== undefined ? b : v;
+  });
+  state.hourly.skyLow = withFallback(state.hourly.cloudLowBlend, state.hourly.cloudCoverLow);
+  state.hourly.skyMid = withFallback(state.hourly.cloudMidBlend, state.hourly.cloudCoverMid);
+  state.hourly.skyHigh = withFallback(state.hourly.cloudHighBlend, state.hourly.cloudCoverHigh);
   // Kept per source, not blended hour by hour: sunshine is counted as
   // hours per source first, then corrected and medianed (liveSunshineHours).
   state.hourly.sunDniBySource = Object.fromEntries(
@@ -4797,9 +4808,9 @@ function frostRiskTonight() {
   });
   if (minIdx === -1 || minTemp > FROST_TEMP_THRESHOLD) return false;
 
-  const low = state.hourly.cloudCoverLow?.[minIdx];
-  const mid = state.hourly.cloudCoverMid?.[minIdx];
-  const high = state.hourly.cloudCoverHigh?.[minIdx];
+  const low = state.hourly.skyLow?.[minIdx];
+  const mid = state.hourly.skyMid?.[minIdx];
+  const high = state.hourly.skyHigh?.[minIdx];
   const wind = state.hourly.windSpeed?.[minIdx];
   if (low === null || low === undefined || wind === null || wind === undefined) return false;
 
@@ -5236,9 +5247,9 @@ function renderHeadline() {
           valueEl.innerHTML = moonPhaseSvg(hourDate);
           valueEl.classList.add("headline-moon");
         } else {
-          const low = state.hourly.cloudCoverLow?.[state.hourIndex];
-          const mid = state.hourly.cloudCoverMid?.[state.hourIndex];
-          const high = state.hourly.cloudCoverHigh?.[state.hourIndex];
+          const low = state.hourly.skyLow?.[state.hourIndex];
+          const mid = state.hourly.skyMid?.[state.hourIndex];
+          const high = state.hourly.skyHigh?.[state.hourIndex];
           if (low === null || low === undefined) {
             valueEl.textContent = "–";
           } else {
@@ -6007,9 +6018,9 @@ function openHourlySheet(conditionName) {
       } else if (conditionName === "sunshine") {
         sheetBody.appendChild(sheetRenderSunStrip(
           hourTimes,
-          state.hourly.cloudCoverLow.slice(0, count),
-          state.hourly.cloudCoverMid.slice(0, count),
-          state.hourly.cloudCoverHigh.slice(0, count)
+          state.hourly.skyLow.slice(0, count),
+          state.hourly.skyMid.slice(0, count),
+          state.hourly.skyHigh.slice(0, count)
         ));
       } else if (conditionName === "cloud") {
         // Same strip Sunshine's own sheet already shows (it's the
@@ -6018,9 +6029,9 @@ function openHourlySheet(conditionName) {
         // about, reached by tapping the headline's own Cloud cell.
         sheetBody.appendChild(sheetRenderSunStrip(
           hourTimes,
-          state.hourly.cloudCoverLow.slice(0, count),
-          state.hourly.cloudCoverMid.slice(0, count),
-          state.hourly.cloudCoverHigh.slice(0, count)
+          state.hourly.skyLow.slice(0, count),
+          state.hourly.skyMid.slice(0, count),
+          state.hourly.skyHigh.slice(0, count)
         ));
       } else if (conditionName === "pressure") {
         const raw = state.hourly.pressure.slice(0, count);

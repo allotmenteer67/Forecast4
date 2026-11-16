@@ -219,3 +219,7 @@ at night, sometimes with poor signal.
 - 22:00-03:00 UK time, GitHub refreshes each saved weather place hourly instead of every 20 min (about 500 fewer Open-Meteo requests a night). The My Plot feed's place (TA7) is exempt: My Plot's frost warning matters most overnight and it only trusts the feed for 40 min.
 - The app accepts a place's data up to 75 min old in that window (30 min otherwise), and always trims hours that have already passed, so graphs still start at the current hour.
 - Considered and rejected: fetching sunrise/sunset or soil temperature separately/less often. Open-Meteo counts each request as at least one call, so splitting items off adds calls rather than saving them. Same reason a GitHub-vs-phone split by item doesn't help.
+
+## Sky pictures use blended cloud (16 Nov 2026)
+- The Sunshine/Cloud sheet strip, the hour slider's sky icon and the frost-risk cloud check read Met Office cloud alone, while SUN HRS blends every source. On 16 Nov Met Office alone forecast thick cloud all day while six of seven sources expected 4-7 h of sun, so the sheet showed overcast beside "7/6".
+- All of them now read state.hourly.skyLow/Mid/High: the blended cloud bands, falling back to Met Office per hour only where the blend has no value.
