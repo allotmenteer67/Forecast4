@@ -62,26 +62,7 @@
     "gfs",
     "icon"
   ],
-  "weatherLocations": [
-    {
-      "id": "taunton",
-      "label": "Taunton",
-      "lat": 51.019,
-      "lon": -3.1
-    },
-    {
-      "id": "tiree",
-      "label": "Tiree",
-      "lat": 56.5,
-      "lon": -6.88
-    },
-    {
-      "id": "teesside",
-      "label": "Teesside",
-      "lat": 54.576,
-      "lon": -1.235
-    }
-  ],
+  "weatherLocations": [],
   "fishingSpots": [
     {
       "id": "lowestoft",

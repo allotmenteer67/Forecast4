@@ -232,3 +232,6 @@ at night, sometimes with poor signal.
 - Also fixed: the per-device backfill-file path now rebuilds instead of adding the year on top again.
 - Known gap: Cloud bands and Soil Temp have no past-forecast values from the Previous Runs API (always null), so they never get FFV — the Cloud cell's "Collecting data" never clears. Separate job.
 - Taunton/Tiree/Teesside in precache-config.json have no areaCode, so they get no backfill or shared corrections until one is added.
+
+## Removed Taunton/Tiree/Teesside from the precache (16 Nov 2026)
+- They were hand-picked test places nobody uses, costing about 1,900 Open-Meteo requests a day in the 20-minute weather precache (plus Met Office Spot calls). weatherLocations is now empty; the shared favourites (TA7, SA62, CM7) carry on as before.
