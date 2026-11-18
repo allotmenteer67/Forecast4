@@ -605,7 +605,9 @@
 // Bumped to v148: front-page Sun hrs and Cloud follow the latest runs
 // over the 24/48h window (Sun hrs as "rest of today/tomorrow" on 48h)
 // instead of sitting on yesterday's daily figure all day.
-const SHELL_CACHE_NAME = "cloude-shell-v159";
+// Bumped to v160: weather map refetches its grid when the zoom changes
+// (zooming out used to leave the data in the old, smaller square).
+const SHELL_CACHE_NAME = "cloude-shell-v160";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

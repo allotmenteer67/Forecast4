@@ -630,6 +630,11 @@ function drawMapWaterways(ctx, geo, view, colour) {
 let mapGrid = null;
 let mapGridFetchedAt = 0;
 let mapGridCentre = null;
+// The radius the in-memory grid was fetched for. Zooming out used to
+// keep the smaller grid (same centre, so "not moved"), leaving rain and
+// temperature in a small square with blank map round it until the page
+// was reopened (Nov 2026). Any zoom change now refetches.
+let mapGridRadiusKm = null;
 
 // ---- Persistent grid cache ----
 // ensureGrid's in-memory checks below (MAP_STALE_MS + the movement test)
@@ -708,6 +713,7 @@ function hydrateMapGridFromCache(centre, radiusKm) {
     if (Date.now() - entry.cachedAt > MAP_STALE_MS) return false;
     mapGrid = entry.grid;
     mapGridCentre = { ...centre };
+    mapGridRadiusKm = radiusKm;
     mapGridFetchedAt = entry.cachedAt;
     return true;
   } catch {
@@ -953,13 +959,14 @@ async function ensureGrid(centre, radiusKm, force) {
   // by exactly the same rules as one fetched in this session; a hit that
   // turns out to be stale or too far from the current centre still falls
   // through to a fetch, same as always.
-  if (!mapGrid && !force) hydrateMapGridFromCache(centre, radiusKm);
+  if ((!mapGrid || mapGridRadiusKm !== radiusKm) && !force) hydrateMapGridFromCache(centre, radiusKm);
 
   const stale = Date.now() - mapGridFetchedAt > MAP_STALE_MS;
   const moved = !mapGridCentre || haversineKm(
     mapGridCentre.lat, mapGridCentre.lon, centre.lat, centre.lon
   ) > radiusKm * (MAP_FETCH_MARGIN - 1);
-  if (!force && mapGrid && !stale && !moved) return;
+  const rezoomed = mapGridRadiusKm !== radiusKm;
+  if (!force && mapGrid && !stale && !moved && !rezoomed) return;
 
   if (mapGridInFlight) {
     mapGridQueuedArgs = { centre, radiusKm, force };
@@ -981,6 +988,7 @@ async function runGridFetch(centre, radiusKm) {
   try {
     mapGrid = await fetchWeatherGrid(centre, radiusKm);
     mapGridCentre = { ...centre };
+    mapGridRadiusKm = radiusKm;
     mapGridFetchedAt = Date.now();
     saveMapGridCache(centre, radiusKm, mapGrid);
     setMapStatus("");
@@ -994,6 +1002,7 @@ async function runGridFetch(centre, radiusKm) {
       await new Promise(resolve => setTimeout(resolve, 1500));
       mapGrid = await fetchWeatherGrid(centre, radiusKm);
       mapGridCentre = { ...centre };
+      mapGridRadiusKm = radiusKm;
       mapGridFetchedAt = Date.now();
       saveMapGridCache(centre, radiusKm, mapGrid);
       setMapStatus("");

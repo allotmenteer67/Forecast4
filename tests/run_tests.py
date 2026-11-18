@@ -631,6 +631,25 @@ def callout_and_coast_wind_is_blended(browser):
     expect(out["sp"] == 5 and out["vis"] == 5 and out["n"] == 0, f"fallback to plain wind failed: {out}")
     expect(not errs and not errs2, errs + errs2)
 
+@check
+def map_refetches_grid_on_zoom(browser):
+    # Nov 2026 bug: zooming out kept the smaller grid (same centre, so
+    # "not moved"), leaving data in a small square until the page reopened.
+    pg = new_page(browser)
+    pg.goto(f"{BASE}/map.html"); pg.wait_for_timeout(2500)
+    res = pg.evaluate("""async () => {
+      const calls = [];
+      fetchWeatherGrid = async (c, r) => { calls.push(r); return buildStubGrid(c, r); };
+      const c = { lat: 51.13, lon: -2.99 };
+      const [small, big] = [MAP_ZOOM_RADII_KM[0], MAP_ZOOM_RADII_KM[MAP_ZOOM_RADII_KM.length - 1]];
+      await ensureGrid(c, small, true);
+      await ensureGrid(c, small);        // same view: no refetch
+      await ensureGrid(c, big);          // zoomed out: must refetch
+      return { calls, small, big };
+    }""")
+    expect(res["calls"] == [res["small"], res["big"]], f"grid fetches on zoom: {res}")
+    expect(not pg.errors, pg.errors)
+
 # ---------- runner ----------
 
 def main():
