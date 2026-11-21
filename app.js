@@ -1795,6 +1795,7 @@ function windArrowRotation(degrees) {
 }
 
 async function fetchActualWeather(lat, lon) {
+  const gen = loadLocationGeneration;
   state.actual.status = "loading";
   state.actual.error = null;
   renderActualStatus();
@@ -1822,6 +1823,7 @@ async function fetchActualWeather(lat, lon) {
     const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`);
     if (!res.ok) throw new Error("Weather lookup failed");
     const data = await res.json();
+    if (loadSupersededSince(gen)) return;
 
     const dayCount = data.daily.time.length; // MAX_ROLLBACK + 1, oldest first
 
@@ -1876,6 +1878,7 @@ async function fetchActualWeather(lat, lon) {
     );
     state.actual.status = "ready";
   } catch (err) {
+    if (loadSupersededSince(gen)) return;
     state.actual.status = "error";
     state.actual.error = err.message || "Could not load actual weather";
   }
@@ -1890,6 +1893,7 @@ async function fetchActualWeather(lat, lon) {
 // the same rollback index works for both. Called once per REAL_SOURCES
 // entry, in parallel, from loadLocationData.
 async function fetchRealSourceLive(sourceId, model, lat, lon) {
+  const gen = loadLocationGeneration;
   const slot = state.realSources[sourceId];
   slot.status = "loading";
   slot.error = null;
@@ -1929,6 +1933,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
     const res = await fetchOpenMeteo(`${PREVIOUS_RUNS_URL}?${params.toString()}`);
     if (!res.ok) throw new Error("Data lookup failed");
     const data = await res.json();
+    if (loadSupersededSince(gen)) return;
 
     const hourlyTimes = data.hourly.time;
     const dayCount = Math.floor(hourlyTimes.length / 24);
@@ -1971,6 +1976,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
     slot.byLeadDay = byLeadDay;
     slot.status = "ready";
   } catch (err) {
+    if (loadSupersededSince(gen)) return;
     slot.status = "error";
     slot.error = err.message || "Could not load data";
   }
@@ -2129,6 +2135,7 @@ function moSpotSlotFromArchive(archive) {
 }
 
 async function fetchMoSpot(lat, lon) {
+  const gen = loadLocationGeneration;
   const key = loadMoSpotKey();
   const areaCode = state.areaCode;
   if (!key) {
@@ -2151,6 +2158,7 @@ async function fetchMoSpot(lat, lon) {
       ]);
       hourly = compactMoSpotHourly(h);
       daily = moSpotDailyFromThreeHourly(t);
+      if (loadSupersededSince(gen)) return;
       try { localStorage.setItem(MO_SPOT_CACHE_KEY, JSON.stringify({ where, at: Date.now(), hourly, daily })); } catch {}
     }
 
@@ -2165,6 +2173,7 @@ async function fetchMoSpot(lat, lon) {
     // places only — see scripts/collect-mo-spot.mjs). This device's own
     // record always wins where it has one.
     const shared = areaCode ? await loadMoSpotSharedRecord(areaCode) : null;
+    if (loadSupersededSince(gen)) return;
     Object.entries(shared || {}).forEach(([issueDay, targets]) => {
       if (!archive.issued[issueDay] && issueDay <= today) archive.issued[issueDay] = targets;
     });
@@ -2176,6 +2185,7 @@ async function fetchMoSpot(lat, lon) {
     state.realSources[MO_SPOT_ID] = moSpotSlotFromArchive(archive);
     state.moSpot = { status: "ready", hourly };
   } catch (err) {
+    if (loadSupersededSince(gen)) return;
     state.moSpot = { status: "error", error: err.message, hourly: null };
     state.realSources[MO_SPOT_ID] = { status: "error", error: err.message, dates: [], byLeadDay: emptyLeadDayData() };
   }
@@ -2743,6 +2753,7 @@ function optionalHourly(data, key, from, length) {
 }
 
 async function fetchHourlyForecast(lat, lon, force = false) {
+  const gen = loadLocationGeneration;
   state.hourly.status = "loading";
   state.hourly.error = null;
 
@@ -2759,6 +2770,7 @@ async function fetchHourlyForecast(lat, lon, force = false) {
     // button) — a deliberate "get me the real current figure" request
     // should never quietly hand back a several-minutes-old file instead.
     const precached = force ? null : await tryPrecachedHourlyForecast(lat, lon);
+    if (loadSupersededSince(gen)) return;
     if (precached) {
       applyHourlyBlend(precached.sources, precached.times, {
         uvIndex: precached.uvIndex,
@@ -2801,6 +2813,7 @@ async function fetchHourlyForecast(lat, lon, force = false) {
       const data = await res.json();
       return { id, data };
     }));
+    if (loadSupersededSince(gen)) return;
 
     // metoffice sets the shared time axis every other source gets
     // sliced against — pulled out by id rather than relying on
@@ -2849,6 +2862,7 @@ async function fetchHourlyForecast(lat, lon, force = false) {
       }]))
     });
   } catch (err) {
+    if (loadSupersededSince(gen)) return;
     state.hourly.status = "error";
     state.hourly.error = err.message || "Could not load hourly forecast";
   }
@@ -3008,9 +3022,11 @@ function reblendHourly() {
 }
 
 async function loadCommittedHistory() {
+  const gen = loadLocationGeneration;
   if (!state.areaCode) return;
 
   const shared = await loadSharedFfv();
+  if (loadSupersededSince(gen)) return;
   if (shared) {
     state.history.status = "ready";
     state.history.error = null;
@@ -3036,6 +3052,7 @@ async function loadCommittedHistory() {
     const res = await fetchWithTimeout(HISTORY_URL, { cache: "no-store" });
     if (!res.ok) throw new Error("history.json not found");
     const data = await res.json();
+    if (loadSupersededSince(gen)) return;
 
     // This file is only ever collected for ONE fixed postcode area (set
     // once via the GitHub Action's secrets) — it is not per-visitor. If
@@ -3075,6 +3092,7 @@ async function loadCommittedHistory() {
     state.history.status = "ready";
     state.history.dayCount = dayCount;
   } catch (err) {
+    if (loadSupersededSince(gen)) return;
     state.history.status = "error";
     state.history.error = err.message || "Could not load collected history";
   }
@@ -3114,6 +3132,20 @@ let loadLocationDataPromise = null;
 let loadLocationPromisePostcode = null;
 let loadLocationQueuedPostcode = null;
 let loadLocationGeneration = 0;
+
+// 21 Nov 2026: switching place while the previous place was still
+// loading (opening the app and straight away tapping the place chip)
+// left the new place stuck: the switch queued behind the whole old
+// load (up to ~20 Open-Meteo calls, each allowed 20s), the old load's
+// late results were written into the shared state under the new
+// place's name, and its snapshot could then be cached under the wrong
+// place, so the map strip and figures jumped back to the old location.
+// Now a switch starts the new load straight away and bumps the
+// generation; every fetcher captures the generation when it starts and
+// drops its result if a newer load has begun since.
+function loadSupersededSince(gen) {
+  return gen !== loadLocationGeneration;
+}
 
 // This used to race the real fetch against a timeout and, when the
 // timeout won, treat the real fetch as abandoned — freeing
@@ -3186,6 +3218,11 @@ function loadLocationData(force = false) {
     const cache = loadRecentLocationCache();
     const snap = cache[state.postcode];
     if (snap && Date.now() - snap.cachedAt <= RECENT_LOCATION_CACHE_MS) {
+      // Any load still running for another place must stop writing into
+      // the state this snapshot has just restored.
+      loadLocationGeneration++;
+      loadLocationDataPromise = null;
+      loadLocationPromisePostcode = null;
       // cloude:location-ready is normally dispatched from inside
       // runLoadLocationData() below, once a real fetch resolves — the
       // map strip (map-strip.js) has no other way to learn where to
@@ -3272,10 +3309,9 @@ function loadLocationData(force = false) {
   // button is only reachable when the page is already showing settled
   // data, i.e. nothing mid-flight), and not worth the extra complexity
   // of threading force through the requeue for that edge case alone.
-  if (loadLocationDataPromise) {
-    if (loadLocationPromisePostcode !== state.postcode) {
-      loadLocationQueuedPostcode = state.postcode;
-    }
+  // Same place already loading: share that load. A DIFFERENT place
+  // starts now rather than queueing behind it (see loadSupersededSince).
+  if (loadLocationDataPromise && loadLocationPromisePostcode === state.postcode) {
     return loadLocationDataPromise;
   }
 
@@ -3295,25 +3331,20 @@ function loadLocationData(force = false) {
     }
   }, LOAD_SLOW_WARNING_MS);
 
-  loadLocationDataPromise = runLoadLocationData(force).finally(() => {
+  const thisLoad = runLoadLocationData(force, myGeneration).finally(() => {
     clearTimeout(warnTimeoutId);
-    loadLocationDataPromise = null;
-    loadLocationPromisePostcode = null;
-    // A switch to somewhere else arrived while this was running — it was
-    // queued rather than dropped, so pick it up now. The postcode check
-    // guards against yet another switch having happened in the meantime
-    // (away from what was queued) — in that case its OWN call to
-    // loadLocationData already re-queued the right, newer target.
-    if (loadLocationQueuedPostcode !== null && loadLocationQueuedPostcode === state.postcode) {
-      loadLocationQueuedPostcode = null;
-      loadLocationData();
+    // Only clear the bookkeeping if a newer load hasn't replaced it.
+    if (loadLocationDataPromise === thisLoad) {
+      loadLocationDataPromise = null;
+      loadLocationPromisePostcode = null;
     }
   });
+  loadLocationDataPromise = thisLoad;
 
-  return loadLocationDataPromise;
+  return thisLoad;
 }
 
-async function runLoadLocationData(force = false) {
+async function runLoadLocationData(force = false, gen = loadLocationGeneration) {
   // Captured up front so a late-arriving result from an abandoned or
   // timed-out request can tell it's been superseded by a newer switch —
   // and skip committing/rendering itself over the newer, correct data.
@@ -3334,7 +3365,7 @@ async function runLoadLocationData(force = false) {
     // slow, superseded resolve could corrupt a newer, already-displayed
     // location's identity for anything else that reads state.areaCode in
     // the meantime (FFV lookups, the eligibility store, and so on).
-    if (state.postcode !== requestedFor) return;
+    if (state.postcode !== requestedFor || loadSupersededSince(gen)) return;
 
     state.lat = lat;
     state.lon = lon;
@@ -3370,16 +3401,11 @@ async function runLoadLocationData(force = false) {
       fetchHourlyForecast(lat, lon, force)
     ]);
 
-    if (state.postcode !== requestedFor) {
-      // Superseded, but see cacheCurrentLocationSnapshot's own comment:
-      // this fetch genuinely completed for requestedFor, and nothing
-      // else could have touched state.actual/state.hourly in the
-      // meantime (switches are strictly queued, never concurrent) — so
-      // this is real, correct data for that place, worth caching under
-      // its own postcode even though display has already moved on.
-      cacheCurrentLocationSnapshot(requestedFor);
-      return;
-    }
+    // Superseded: a newer load owns the shared state now, so nothing
+    // here is this place's any more — don't render it and don't cache
+    // it (caching it under requestedFor is what made a later switch
+    // back "jump" to the wrong location, 21 Nov 2026).
+    if (state.postcode !== requestedFor || loadSupersededSince(gen)) return;
 
     // The map strip (map-strip.js, front page only) starts its own,
     // separate fetch here — deliberately AFTER the actual weather above
@@ -3435,6 +3461,7 @@ async function runLoadLocationData(force = false) {
     // page stuck showing stale/placeholder figures with no visible sign
     // anything had gone wrong.
     try {
+      if (loadSupersededSince(gen)) return;
       updateFFVHistory();
 
       // First time this postcode area has ever been seen (no real-source
@@ -3461,7 +3488,7 @@ async function runLoadLocationData(force = false) {
       console.error("FFV bookkeeping failed (data itself still loaded fine):", bookkeepingErr);
     }
 
-    if (state.postcode !== requestedFor) return; // superseded partway through bookkeeping — same reasoning as above
+    if (state.postcode !== requestedFor || loadSupersededSince(gen)) return; // superseded partway through bookkeeping — same reasoning as above
 
     // The final render of a load always reveals what was actually
     // fetched — this is what currentDisplayIsComplete flips true for,
@@ -3474,7 +3501,7 @@ async function runLoadLocationData(force = false) {
     renderTable();
     cacheCurrentLocationSnapshot();
   } catch (err) {
-    if (state.postcode !== requestedFor) return; // the newer request's own success/error handling owns the display now
+    if (state.postcode !== requestedFor || loadSupersededSince(gen)) return; // the newer request's own success/error handling owns the display now
     state.actual.status = "error";
     state.actual.error = err.message || "Could not resolve location";
     renderActualStatus();
@@ -7673,6 +7700,10 @@ function saveRecentLocationCache(cache) {
 // happened before it finished.
 function cacheCurrentLocationSnapshot(forPostcode = state.postcode) {
   if (state.actual.status !== "ready") return; // only a fully completed load is worth caching
+  // A snapshot with the hourly forecast still loading or failed used to
+  // be cached too, and then reused for 15 minutes without refetching —
+  // the front page sat on "loading" for that whole time.
+  if (state.hourly.status !== "ready") return;
   const cache = loadRecentLocationCache();
   cache[forPostcode] = {
     actual: state.actual,

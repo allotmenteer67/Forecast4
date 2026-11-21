@@ -50,6 +50,11 @@ down on purpose: don't bring it back without asking.
   irritating).
 - Ground-frost threshold is 4 °C, not 2 °C.
 - No notification-style nagging; passive visual cues only.
+- Switching place never waits for the previous place's load: the new load
+  starts at once and late results from the old one are dropped, never
+  shown or cached under the new place (21 Nov 2026: "jumps back to the
+  wrong place and weather doesn't load"). A place's snapshot is only
+  cached once both the daily and hourly data have loaded.
 - Sun hrs and Cloud (today) come from the latest model runs over the same
   24/48h window as the sheet, not yesterday's daily figure (that sat on
   "2 hrs" and a grey cloud all through a clear day, Nov 2026). Sun hrs on

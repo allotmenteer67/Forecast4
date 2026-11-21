@@ -607,7 +607,10 @@
 // instead of sitting on yesterday's daily figure all day.
 // Bumped to v160: weather map refetches its grid when the zoom changes
 // (zooming out used to leave the data in the old, smaller square).
-const SHELL_CACHE_NAME = "cloude-shell-v160";
+// Bumped to v161: switching place while the previous one is still
+// loading starts the new place straight away and ignores the old load's
+// late results (it used to jump back to the old place and stall).
+const SHELL_CACHE_NAME = "cloude-shell-v161";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

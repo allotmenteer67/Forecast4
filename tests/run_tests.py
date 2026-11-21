@@ -650,6 +650,30 @@ def map_refetches_grid_on_zoom(browser):
     expect(res["calls"] == [res["small"], res["big"]], f"grid fetches on zoom: {res}")
     expect(not pg.errors, pg.errors)
 
+@check
+def place_switch_while_loading_keeps_new_place(browser):
+    # 21 Nov 2026: switching place while the previous one was still loading
+    # queued behind it, then the old load's late result landed under the
+    # new place's name (map and figures "jumped back").
+    pg = new_page(browser)
+    pg.goto(f"{BASE}/index.html"); pg.wait_for_timeout(2000)
+    res = pg.evaluate("""async () => {
+      const coords = { SLOW: [51.13, -2.88], FAST: [51.12, -3.01] };
+      resolveLocation = async pc => {
+        if (pc === 'SLOW') await new Promise(r => setTimeout(r, 1500));
+        const [lat, lon] = coords[pc];
+        return { lat, lon, label: pc, areaCode: pc };
+      };
+      state.postcode = 'SLOW'; resetForLocationChange(); loadLocationData();
+      await new Promise(r => setTimeout(r, 100));
+      switchToPostcode('FAST');
+      const started = loadLocationPromisePostcode;
+      await new Promise(r => setTimeout(r, 3000));
+      return { started, pc: state.postcode, lat: state.lat };
+    }""")
+    expect(res["started"] == "FAST", f"new place waited behind the old load: {res}")
+    expect(res["pc"] == "FAST" and res["lat"] == 51.12, f"old place's result overwrote the new one: {res}")
+
 # ---------- runner ----------
 
 def main():
