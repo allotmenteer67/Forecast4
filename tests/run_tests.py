@@ -707,6 +707,51 @@ def zero_forecast_scored_not_learned(browser):
     ctx.close()
 
 @check
+def data_health_catches_a_silent_source(browser):
+    # 23 Nov 2026: BOM sent only blanks for months and nothing noticed.
+    # The nightly check must flag a source that sends nothing, and must
+    # NOT flag a short-range model for the days it never covers.
+    import shutil, tempfile
+    tmp = Path(tempfile.mkdtemp())
+    shutil.copytree(ROOT / "data", tmp / "data", ignore=shutil.ignore_patterns("coast", "*.geojson"))
+    (tmp / "scripts").mkdir(); shutil.copy(ROOT / "scripts" / "data-checks.mjs", tmp / "scripts")
+    shutil.copy(ROOT / "app.js", tmp / "app.js")
+    pre = json.loads((tmp / "data" / "precache-weather.json").read_text())
+    for k in pre["weather"][0]["sources"]["gem"]:
+        pre["weather"][0]["sources"]["gem"][k] = [None] * len(pre["weather"][0]["sources"]["gem"][k])
+    (tmp / "data" / "precache-weather.json").write_text(json.dumps(pre))
+    r = subprocess.run(["node", "scripts/data-checks.mjs", "health"], cwd=tmp, capture_output=True, text=True)
+    expect(r.returncode == 0, r.stderr)
+    h = json.loads((tmp / "data" / "health.json").read_text())
+    texts = [i["source"] + " " + i["text"] for i in h["issues"] if i.get("source")]
+    expect(any(t.startswith("gem sent nothing") for t in texts), f"all-blank GEM not flagged: {texts}")
+    expect(not any(t.startswith("meteofrance") and "blank" in t for t in texts), f"Meteo-France flagged for days it never covers: {texts}")
+    r = subprocess.run(["node", "scripts/data-checks.mjs", "weekly"], cwd=tmp, capture_output=True, text=True)
+    expect(r.returncode == 0 and (tmp / "data" / "weekly-check.json").exists(), r.stderr)
+    shutil.rmtree(tmp)
+
+@check
+def settings_shows_data_checks(browser):
+    ctx = browser.new_context(viewport=PHONE, device_scale_factor=2, is_mobile=True, has_touch=True)
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    health = {"checkedAt": "2026-11-23T03:45:00Z", "ok": False, "issues": [{"source": "gem", "text": "sent nothing in the latest refresh (every figure blank)"}]}
+    weekly = {"checkedAt": "2026-11-23T04:37:00Z", "ok": True, "flags": [], "areas": {}}
+    ctx.route(f"{BASE}/data/health.json*", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(health)))
+    ctx.route(f"{BASE}/data/weekly-check.json*", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(weekly)))
+    pg = ctx.new_page(); pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/settings.html"); pg.wait_for_timeout(1500)
+    h = pg.inner_text("#dataHealth"); w = pg.inner_text("#weeklyCheck")
+    expect("1 thing to look at" in h, f"health headline wrong: {h}")
+    pg.click("#dataHealth summary"); pg.wait_for_timeout(200)
+    expect("GEM (Canada): sent nothing" in pg.inner_text("#dataHealth"), f"issue not in plain words: {pg.inner_text('#dataHealth')}")
+    expect("close to what happened" in w, f"weekly all-clear wrong: {w}")
+    pg.locator("#dataHealth").scroll_into_view_if_needed()
+    pg.screenshot(path=str(OUT / "settings_data_checks.png"))
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
 def bom_paused_everywhere(browser):
     # 23 Nov 2026: Open-Meteo sends BOM (bom_access_global) as all blanks,
     # everywhere, and has for the whole year of history. It's paused: no

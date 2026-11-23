@@ -179,6 +179,15 @@
 
     <section class="controls">
       <fieldset>
+        <legend>Data checks</legend>
+        <p class="note">GitHub checks the forecasters' real data every night, and how Cloude's forecast compared with what actually happened every week. Nothing to do here unless something is listed.</p>
+        <div id="dataHealth" class="data-checks"><p class="note">Loading…</p></div>
+        <div id="weeklyCheck" class="data-checks"></div>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
         <legend>Met Office Spot (optional)</legend>
         <p class="note">Adds the Met Office's own forecast for your place as an extra forecaster — the one behind their app, not the raw model the "Met Office" forecaster already uses. It needs your own free key: register at datahub.metoffice.gov.uk, then subscribe to the free "Site Specific – Global Spot" plan (360 lookups a day, far more than Cloude uses). The key stays on this device only.</p>
         <p class="note">The Met Office doesn't publish past forecasts, so Cloude keeps its own record of what this forecast said, from the day the key is added. Like any new forecaster it shows "Collecting data" for 14 days before it joins the blend — and its record only grows on days you open the app for that place.</p>

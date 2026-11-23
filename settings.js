@@ -512,3 +512,76 @@ if (saveMoSpotKeyButton) {
     navigator.serviceWorker.addEventListener("controllerchange", update);
   }
 })();
+
+
+// ---- Data checks (23 Nov 2026) ----
+// Shows data/health.json (nightly) and data/weekly-check.json (weekly),
+// both written by scripts/data-checks.mjs in GitHub Actions. Quiet by
+// design: a plain line when all is well, the list when it isn't. No
+// badges or notifications. See DECISIONS.md "Data checks".
+(function dataChecks() {
+  const healthEl = document.getElementById("dataHealth");
+  const weeklyEl = document.getElementById("weeklyCheck");
+  if (!healthEl || !weeklyEl) return;
+
+  const NAMES = Object.fromEntries(FORECASTERS.map(f => [f.id, f.name]));
+  const COND = { rain: "rain", temperature: "temperature", wind: "wind", pressure: "pressure",
+    dewPoint: "dew point", sunshine: "sunshine", cloudLow: "low cloud", cloudMid: "mid cloud",
+    cloudHigh: "high cloud", soilTemperature: "soil temperature" };
+
+  function when(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    return d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  }
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  // Swaps forecaster ids and condition keys for their everyday names.
+  function plain(text) {
+    let t = text;
+    Object.entries(NAMES).forEach(([id, name]) => { t = t.replace(new RegExp("\\b" + id + "\\b", "g"), name); });
+    Object.entries(COND).forEach(([k, v]) => { t = t.replace(new RegExp("\\b" + k + "\\b", "g"), v); });
+    return t;
+  }
+  function list(parent, summary, items) {
+    const box = el("details", "data-checks-list");
+    box.appendChild(el("summary", null, summary));
+    const ul = el("ul");
+    items.forEach(text => ul.appendChild(el("li", null, plain(text))));
+    box.appendChild(ul);
+    parent.appendChild(box);
+  }
+  function load(file) {
+    return fetch(file, { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  }
+
+  load("data/health.json").then(h => {
+    healthEl.textContent = "";
+    if (!h) { healthEl.appendChild(el("p", "note", "Nightly check: no results yet.")); return; }
+    const head = "Nightly check, " + when(h.checkedAt) + ": ";
+    if (!h.issues.length) {
+      healthEl.appendChild(el("p", "data-checks-ok", head + "every forecaster sending data, nothing skipped that shouldn't be."));
+      return;
+    }
+    const n = h.issues.length;
+    healthEl.appendChild(el("p", "data-checks-warn", head + n + (n === 1 ? " thing" : " things") + " to look at."));
+    list(healthEl, "Show", h.issues.map(i => i.text.startsWith(i.source || "~") ? i.text : ((i.source ? i.source + ": " : "") + i.text)));
+  });
+
+  load("data/weekly-check.json").then(w => {
+    weeklyEl.textContent = "";
+    if (!w) { weeklyEl.appendChild(el("p", "note", "Weekly check: no results yet.")); return; }
+    const head = "Weekly check, " + when(w.checkedAt) + ": ";
+    if (!w.flags.length) {
+      weeklyEl.appendChild(el("p", "data-checks-ok", head + "forecasts close to what happened all week."));
+      return;
+    }
+    const n = w.flags.length;
+    weeklyEl.appendChild(el("p", "data-checks-warn", head + n + (n === 1 ? " miss or oddity" : " misses or oddities") + "."));
+    list(weeklyEl, "Show", w.flags.map(f => f.text));
+  });
+})();

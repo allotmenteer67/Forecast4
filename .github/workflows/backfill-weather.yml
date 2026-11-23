@@ -33,11 +33,14 @@ jobs:
       - name: Work out the shared corrections every device uses
         run: node scripts/build-shared-ffv.mjs
 
+      - name: Nightly data health check (scripts/data-checks.mjs, shown in Settings)
+        run: node scripts/data-checks.mjs health
+
       - name: Commit updated history and corrections
         run: |
           git config user.name "forecast-compare-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/backfill/ data/shared-ffv/
+          git add data/backfill/ data/shared-ffv/ data/health.json
           git diff --staged --quiet && exit 0
           git commit -m "Update backfill history and shared corrections"
           # Other jobs push to main every 20 minutes; rebase onto theirs.

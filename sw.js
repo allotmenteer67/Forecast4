@@ -610,7 +610,7 @@
 // Bumped to v161: switching place while the previous one is still
 // loading starts the new place straight away and ignores the old load's
 // late results (it used to jump back to the old place and stall).
-const SHELL_CACHE_NAME = "cloude-shell-v162";
+const SHELL_CACHE_NAME = "cloude-shell-v163";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

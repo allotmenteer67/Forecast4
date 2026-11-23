@@ -1,0 +1,41 @@
+name: Weekly reality check
+
+on:
+  schedule:
+    # Mondays 04:37 UTC, after the nightly backfill (03:40) has topped up
+    # last week's actuals and corrections. See scripts/data-checks.mjs.
+    - cron: "37 4 * * 1"
+  workflow_dispatch: {} # run it by hand from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weekly-check
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Compare last week's forecasts with what happened
+        run: node scripts/data-checks.mjs weekly
+
+      - name: Commit the result
+        run: |
+          git config user.name "forecast-compare-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/weekly-check.json
+          git diff --staged --quiet && exit 0
+          git commit -m "Weekly reality check"
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1

@@ -3386,3 +3386,12 @@ footer {
 /* Settings: a forecaster that can't be ticked yet (Met Office Spot with no key) */
 .check.is-disabled { opacity: 0.55; }
 .check .check-hint { font-size: 0.85em; margin: 0; display: inline; }
+
+/* Data checks in Settings (23 Nov 2026): quiet text, amber only for the headline when something's listed */
+.data-checks p { margin: 8px 0 0; font-size: 14px; }
+.data-checks-ok { color: #4a6b52; }
+.data-checks-warn { color: var(--amber); font-weight: 600; }
+.data-checks-list { margin: 4px 0 0; font-size: 13px; color: #4a5a4e; }
+.data-checks-list summary { cursor: pointer; color: var(--amber); }
+.data-checks-list ul { margin: 6px 0 0; padding-left: 18px; }
+.data-checks-list li { margin: 3px 0; }
