@@ -679,6 +679,34 @@ def place_switch_while_loading_keeps_new_place(browser):
 # ---------- runner ----------
 
 @check
+def zero_forecast_scored_not_learned(browser):
+    # 23 Nov 2026: a forecast of exactly 0 mm was skipped by the learning,
+    # so "said dry, then 9 mm fell" never counted against a model. Now it
+    # counts for accuracy, but still doesn't move the correction itself.
+    ctx = browser.new_context(viewport=PHONE)
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    pg = ctx.new_page(); pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/compare.html"); pg.wait_for_timeout(1200)
+    res = pg.evaluate("""(() => {
+      const store = {};
+      for (let i = 0; i < 5; i++) recordFFVSample(store, 'rain', 'gfs', 1, 4, 4, null, null);
+      const e = store.rain.gfs[1];
+      const before = { count: e.count, ratio: e.emaRatio, raw: e.emaErrorRaw, cor: e.emaErrorCorrected, scored: e.scoredCount };
+      recordFFVSample(store, 'rain', 'gfs', 1, 0, 9, null, null);   // said dry, 9 mm fell
+      recordFFVSample(store, 'rain', 'gfs', 1, null, 9, null, null); // no forecast at all
+      const after = { count: e.count, ratio: e.emaRatio, raw: e.emaErrorRaw, cor: e.emaErrorCorrected, scored: e.scoredCount };
+      const fresh = {}; recordFFVSample(fresh, 'rain', 'icon', 1, 0, 3, null, null);
+      return { before, after, freshCount: fresh.rain.icon[1].count, freshRaw: fresh.rain.icon[1].emaErrorRaw };
+    })()""")
+    b, a = res["before"], res["after"]
+    expect(a["count"] == b["count"] and a["ratio"] == b["ratio"], f"a 0 mm forecast changed the correction: {res}")
+    expect(a["raw"] > b["raw"] and a["cor"] > b["cor"] and a["scored"] == b["scored"] + 1, f"a 0 mm forecast wasn't scored: {res}")
+    expect(res["freshCount"] == 0 and res["freshRaw"] == 3, f"first-ever 0 mm sample handled wrongly: {res}")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
 def bom_paused_everywhere(browser):
     # 23 Nov 2026: Open-Meteo sends BOM (bom_access_global) as all blanks,
     # everywhere, and has for the whole year of history. It's paused: no

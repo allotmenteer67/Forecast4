@@ -247,4 +247,9 @@ at night, sometimes with poor signal.
 - Blanks were already handled safely: the blend, the per-device learning and the nightly shared-FFV job all skip a missing value rather than treating it as 0 mm.
 - Paused, not deleted: every BOM line is commented out with a "PAUSED 23 Nov 2026" note (app.js x2, settings.js, wind-blend.js, scripts/precache-weather.mjs, collect-weather.mjs, backfill-weather.mjs) and its forecast-config.json entry removed. To bring it back: uncomment those lines, re-add `{ "id": "bom", "name": "BOM (Australia)", "enabled": true }` to forecast-config.json, and put the tests back to nine sources (map median 5, callout wind 14 from 9, ten Settings boxes).
 - Saves about one Open-Meteo request in nine for the precache and daily jobs.
-- Open question (not changed): any model forecasting exactly 0 mm on a day is also skipped by the rain learning (actual/forecast can't divide by 0), so "said dry, it rained" misses are never counted. See the chat of 23 Nov for the options.
+
+## Zero forecasts are scored, not learned from (23 Nov 2026)
+- Before: recordFFVSample (and its real-source and Spot callers) skipped any forecast of exactly 0, because the correction divides actual by forecast. So "said 0 mm, 9 mm fell" never counted against a model, and every correct dry call was left out too.
+- Now (option 1 of 5 discussed): a 0 forecast is scored for accuracy (raw and corrected error) but leaves count, ratio and offset untouched, so the correction still learns only from days a model forecast some amount. A missing (null) forecast is still skipped completely. Applies to every condition (a 0.0 degC temperature forecast too).
+- Effect on TA7 rain, day 1: correction factors unchanged; average errors fall (e.g. Met Office 2.54 -> 1.73 mm), because most dry calls were right. Over the year each model said 0 mm on 136-176 days and 1 mm or more fell on 5-16 of them (Met Office/ECMWF/CMA 5, Meteo-France 16).
+- Rejected: counting 0 as 0.1 mm (one wet day blows the ratio up) and a fixed mm top-up (shows drizzle on every dry day). Possible follow-on: a separate "missed rain" score per model on Compare.

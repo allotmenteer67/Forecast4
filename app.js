@@ -2256,7 +2256,7 @@ function recordMoSpotSamples(store, eligStore) {
       if (actual === null || actual === undefined) return;
       for (let day = 1; day <= 7; day++) {
         const mean = threeDayMean(day, source, conditionName, rollbackDays);
-        if (!mean) continue;
+        if (mean === null || mean === undefined) continue; // 0 is scored, see recordFFVSample
         recordFFVSample(store, conditionName, MO_SPOT_ID, day, mean, actual, eligStore, dateKey);
         any = true;
       }
@@ -2939,7 +2939,7 @@ function applyHistoryFileToFFV(data, store, eligStore) {
 
         for (let day = 1; day <= 7; day++) {
           const mean = meanFromHistoryDay(dayEntry, sourceId, day, conditionName);
-          if (!mean) continue;
+          if (mean === null || mean === undefined) continue; // 0 is scored, see recordFFVSample
           recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, date);
           samplesAdded += 1;
         }
@@ -4069,8 +4069,17 @@ function clampOffset(offset) {
 // sum can't be meaningfully diluted by a comparatively short good streak.
 // An EMA answers "how's it been doing lately", which is what both the
 // Accuracy table and the underperformance check actually want to know.
+//
+// A forecast of exactly 0 (23 Nov 2026): it used to be skipped outright,
+// because the ratio actual/forecast can't divide by zero. That meant a
+// model that said "dry" and then saw 9 mm of rain was never marked down —
+// its accuracy looked better than it was. Now a zero forecast IS scored
+// for accuracy (raw and corrected error), but still teaches the
+// correction nothing: count, ratio and offset are left untouched, so
+// the correction keeps learning only from days the source forecast some
+// amount. A missing forecast (null) is still skipped completely.
 function recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, dateKey) {
-  if (!mean) return; // guards against divide-by-zero ratios
+  if (mean === null || mean === undefined || !Number.isFinite(mean)) return;
   if (eligStore) markDateSeen(eligStore, conditionName, sourceId, dateKey);
 
   store[conditionName] ??= {};
@@ -4095,6 +4104,8 @@ function recordFFVSample(store, conditionName, sourceId, day, mean, actual, elig
     entry.emaErrorCorrected = entry.emaErrorCorrected === undefined ? correctedError : ACCURACY_EMA_ALPHA * correctedError + (1 - ACCURACY_EMA_ALPHA) * entry.emaErrorCorrected;
     entry.scoredCount += 1;
   }
+
+  if (mean === 0) return; // scored above; nothing to learn a ratio from
 
   const newRatio = clampRatio(actual / mean);
   const newOffset = clampOffset(actual - mean);
@@ -7107,7 +7118,7 @@ async function backfillRealSourceHistory() {
               .filter(v => v !== null && v !== undefined);
             if (!values.length) return;
             const mean = values.reduce((a, b) => a + b, 0) / values.length;
-            if (!mean) return;
+            if (mean === null || mean === undefined) return; // 0 is scored, see recordFFVSample
 
             recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, dateKey);
             samplesAdded += 1;
