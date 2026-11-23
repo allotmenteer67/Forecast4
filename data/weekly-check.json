@@ -1,48 +1,48 @@
 {
- "checkedAt": "2026-11-23T03:18:11.015Z",
+ "checkedAt": "2026-11-23T15:14:28.480Z",
  "ok": false,
  "flags": [
   {
    "area": "SA62",
-   "date": "2026-11-15",
-   "condition": "rain",
-   "text": "SA62 Sun 15 Nov: rain forecast 9.2 mm, actual 5.5 mm"
-  },
-  {
-   "area": "SA62",
    "date": "2026-11-16",
    "condition": "rain",
-   "text": "SA62 Mon 16 Nov: rain forecast 9.5 mm, actual 5.1 mm"
+   "text": "SA62 Mon 16 Nov: rain forecast 8.6 mm, actual 5.1 mm"
   },
   {
    "area": "SA62",
-   "source": "meteofrance",
+   "date": "2026-11-22",
    "condition": "rain",
-   "text": "SA62: meteofrance rain off by 5.6 mm a day on average this week, against 2.6 for the rest"
+   "text": "SA62 Sun 22 Nov: rain forecast 10.3 mm, actual 5.7 mm"
   },
   {
    "area": "TA7",
    "date": "2026-11-16",
    "condition": "rain",
-   "text": "TA7 Mon 16 Nov: rain forecast 10.5 mm, actual 2.1 mm"
+   "text": "TA7 Mon 16 Nov: rain forecast 9 mm, actual 2.1 mm"
+  },
+  {
+   "area": "TA7",
+   "date": "2026-11-17",
+   "condition": "rain",
+   "text": "TA7 Tue 17 Nov: rain forecast 6.3 mm, actual 13.9 mm"
   },
   {
    "area": "TA7",
    "date": "2026-11-18",
    "condition": "rain",
-   "text": "TA7 Wed 18 Nov: rain forecast 9.9 mm, actual 5.1 mm"
+   "text": "TA7 Wed 18 Nov: rain forecast 8.7 mm, actual 5.1 mm"
   },
   {
    "area": "TA7",
    "date": "2026-11-19",
    "condition": "rain",
-   "text": "TA7 Thu 19 Nov: rain forecast 7 mm, actual 14.4 mm"
+   "text": "TA7 Thu 19 Nov: rain forecast 6.2 mm, actual 14.4 mm"
   },
   {
    "area": "TA7",
-   "date": "2026-11-20",
+   "date": "2026-11-22",
    "condition": "rain",
-   "text": "TA7 Fri 20 Nov: rain forecast 5.9 mm, actual 2.5 mm"
+   "text": "TA7 Sun 22 Nov: rain forecast 17.7 mm, actual 9 mm"
   },
   {
    "area": "TA6",
@@ -85,21 +85,6 @@
   "CM7": {
    "days": [
     {
-     "date": "2026-11-15",
-     "rain": {
-      "forecast": 3.7,
-      "actual": 5.9
-     },
-     "temperature": {
-      "forecast": 5.9,
-      "actual": 5.1
-     },
-     "wind": {
-      "forecast": 11.1,
-      "actual": 11.6
-     }
-    },
-    {
      "date": "2026-11-16",
      "rain": {
       "forecast": 2.7,
@@ -110,7 +95,7 @@
       "actual": 4.2
      },
      "wind": {
-      "forecast": 14.2,
+      "forecast": 14.3,
       "actual": 14.7
      }
     },
@@ -125,7 +110,7 @@
       "actual": 8.8
      },
      "wind": {
-      "forecast": 19.2,
+      "forecast": 19.4,
       "actual": 21.4
      }
     },
@@ -136,11 +121,11 @@
       "actual": 1.7
      },
      "temperature": {
-      "forecast": 8.7,
+      "forecast": 8.6,
       "actual": 9.5
      },
      "wind": {
-      "forecast": 14,
+      "forecast": 14.1,
       "actual": 14.4
      }
     },
@@ -151,11 +136,11 @@
       "actual": 7.3
      },
      "temperature": {
-      "forecast": 7.3,
+      "forecast": 7.2,
       "actual": 7
      },
      "wind": {
-      "forecast": 9.9,
+      "forecast": 10.1,
       "actual": 7.4
      }
     },
@@ -170,7 +155,7 @@
       "actual": 4.4
      },
      "wind": {
-      "forecast": 10.9,
+      "forecast": 11,
       "actual": 11.6
      }
     },
@@ -185,92 +170,91 @@
       "actual": 3.3
      },
      "wind": {
-      "forecast": 7,
+      "forecast": 7.2,
       "actual": 7.4
+     }
+    },
+    {
+     "date": "2026-11-22",
+     "rain": {
+      "forecast": 0,
+      "actual": 0.1
+     },
+     "temperature": {
+      "forecast": 5.5,
+      "actual": 5
+     },
+     "wind": {
+      "forecast": 12.9,
+      "actual": 15.1
      }
     }
    ],
    "sourceAverageError": {
     "metoffice": {
-     "rain": 1.16,
-     "temperature": 0.83,
-     "wind": 1.43
+     "rain": 0.49,
+     "temperature": 0.85,
+     "wind": 1.86
     },
     "ecmwf": {
-     "rain": 1.95,
-     "temperature": 0.35,
-     "wind": 1.31
+     "rain": 1.65,
+     "temperature": 0.44,
+     "wind": 1.18
     },
     "gfs": {
-     "rain": 2.2,
-     "temperature": 0.76,
-     "wind": 1.64
+     "rain": 2.18,
+     "temperature": 0.66,
+     "wind": 1.95
     },
     "icon": {
-     "rain": 3.13,
-     "temperature": 0.66,
+     "rain": 2.4,
+     "temperature": 0.62,
      "wind": 1.39
     },
     "gem": {
-     "rain": 1.59,
-     "temperature": 0.7,
-     "wind": 1.09
+     "rain": 1.23,
+     "temperature": 0.6,
+     "wind": 1.17
     },
     "meteofrance": {
-     "rain": 1.95,
-     "temperature": 0.76,
-     "wind": 2.03
+     "rain": 1.63,
+     "temperature": 0.7,
+     "wind": 2.6
     },
     "jma": {
-     "rain": 3.43,
-     "temperature": 0.93,
-     "wind": 1.47
+     "rain": 3.15,
+     "temperature": 0.9,
+     "wind": 1.64
     },
     "cma": {
-     "rain": 1.23,
-     "temperature": 1.01,
-     "wind": 2.15
+     "rain": 0.67,
+     "temperature": 0.89,
+     "wind": 2.28
     }
    }
   },
   "SA62": {
    "days": [
     {
-     "date": "2026-11-15",
-     "rain": {
-      "forecast": 9.2,
-      "actual": 5.5,
-      "miss": true
-     },
-     "temperature": {
-      "forecast": 9.2,
-      "actual": 9.6
-     },
-     "wind": {
-      "forecast": 21.7,
-      "actual": 22.1
-     }
-    },
-    {
      "date": "2026-11-16",
      "rain": {
-      "forecast": 9.5,
+      "forecast": 8.6,
       "actual": 5.1,
       "miss": true
      },
      "temperature": {
-      "forecast": 5.3,
+      "forecast": 5.2,
       "actual": 6
      },
      "wind": {
-      "forecast": 29.3,
+      "forecast": 29.1,
       "actual": 27.8
      }
     },
     {
      "date": "2026-11-17",
      "rain": {
-      "forecast": 15.7,
+      "forecast": 14.6,
       "actual": 18.5
      },
      "temperature": {
@@ -278,37 +262,37 @@
       "actual": 9.8
      },
      "wind": {
-      "forecast": 26.7,
+      "forecast": 26.5,
       "actual": 25
      }
     },
     {
      "date": "2026-11-18",
      "rain": {
-      "forecast": 14.2,
+      "forecast": 13.2,
       "actual": 20.6
      },
      "temperature": {
-      "forecast": 10.1,
+      "forecast": 10,
       "actual": 10
      },
      "wind": {
-      "forecast": 22.5,
+      "forecast": 22.3,
       "actual": 20.2
      }
     },
     {
      "date": "2026-11-19",
      "rain": {
-      "forecast": 5.1,
+      "forecast": 4.7,
       "actual": 5
      },
      "temperature": {
-      "forecast": 8.6,
+      "forecast": 8.5,
       "actual": 7.8
      },
      "wind": {
-      "forecast": 10,
+      "forecast": 9.9,
       "actual": 10.7
      }
     },
@@ -323,7 +307,7 @@
       "actual": 7.8
      },
      "wind": {
-      "forecast": 11.5,
+      "forecast": 11.4,
       "actual": 11.2
      }
     },
@@ -338,80 +322,81 @@
       "actual": 7.8
      },
      "wind": {
-      "forecast": 21.8,
+      "forecast": 21.5,
       "actual": 21.2
+     }
+    },
+    {
+     "date": "2026-11-22",
+     "rain": {
+      "forecast": 10.3,
+      "actual": 5.7,
+      "miss": true
+     },
+     "temperature": {
+      "forecast": 7.5,
+      "actual": 6.9
+     },
+     "wind": {
+      "forecast": 25.1,
+      "actual": 23.4
      }
     }
    ],
    "sourceAverageError": {
     "metoffice": {
-     "rain": 2.05,
-     "temperature": 0.57,
-     "wind": 1.41
+     "rain": 3.05,
+     "temperature": 0.62,
+     "wind": 1.3
     },
     "ecmwf": {
-     "rain": 1.89,
-     "temperature": 0.48,
-     "wind": 1.37
+     "rain": 3.15,
+     "temperature": 0.61,
+     "wind": 1.4
     },
     "gfs": {
-     "rain": 5.05,
-     "temperature": 0.61,
-     "wind": 1.5
+     "rain": 3.73,
+     "temperature": 0.58,
+     "wind": 1.84
     },
     "icon": {
-     "rain": 2.62,
-     "temperature": 0.61,
-     "wind": 1.25
+     "rain": 2.73,
+     "temperature": 0.73,
+     "wind": 1.65
     },
     "gem": {
-     "rain": 2.59,
-     "temperature": 0.79,
-     "wind": 1.74
+     "rain": 2.55,
+     "temperature": 0.72,
+     "wind": 1.73
     },
     "meteofrance": {
-     "rain": 5.63,
-     "temperature": 1.03,
-     "wind": 2.33
+     "rain": 5.37,
+     "temperature": 1.06,
+     "wind": 1.69
     },
     "jma": {
-     "rain": 3.38,
-     "temperature": 0.97,
-     "wind": 2.57
+     "rain": 3.82,
+     "temperature": 0.82,
+     "wind": 1.86
     },
     "cma": {
-     "rain": 2.37,
-     "temperature": 0.7,
-     "wind": 1.56
+     "rain": 3.21,
+     "temperature": 0.83,
+     "wind": 1.71
     }
    }
   },
   "TA7": {
    "days": [
     {
-     "date": "2026-11-15",
-     "rain": {
-      "forecast": 5.9,
-      "actual": 10.7
-     },
-     "temperature": {
-      "forecast": 7.2,
-      "actual": 7.2
-     },
-     "wind": {
-      "forecast": 13.4,
-      "actual": 15.6
-     }
-    },
-    {
      "date": "2026-11-16",
      "rain": {
-      "forecast": 10.5,
+      "forecast": 9,
       "actual": 2.1,
       "miss": true
      },
      "temperature": {
-      "forecast": 6.1,
+      "forecast": 6.2,
       "actual": 7.1
      },
      "wind": {
@@ -422,22 +407,23 @@
     {
      "date": "2026-11-17",
      "rain": {
-      "forecast": 7.3,
-      "actual": 13.9
+      "forecast": 6.3,
+      "actual": 13.9,
+      "miss": true
      },
      "temperature": {
-      "forecast": 10.6,
+      "forecast": 10.7,
       "actual": 10.9
      },
      "wind": {
-      "forecast": 18.5,
+      "forecast": 18.6,
       "actual": 20.2
      }
     },
     {
      "date": "2026-11-18",
      "rain": {
-      "forecast": 9.9,
+      "forecast": 8.7,
       "actual": 5.1,
       "miss": true
      },
@@ -446,14 +432,14 @@
       "actual": 10
      },
      "wind": {
-      "forecast": 13.7,
+      "forecast": 13.8,
       "actual": 13.7
      }
     },
     {
      "date": "2026-11-19",
      "rain": {
-      "forecast": 7,
+      "forecast": 6.2,
       "actual": 14.4,
       "miss": true
      },
@@ -469,9 +455,8 @@
     {
      "date": "2026-11-20",
      "rain": {
-      "forecast": 5.9,
-      "actual": 2.5,
-      "miss": true
+      "forecast": 5.2,
+      "actual": 2.5
      },
      "temperature": {
       "forecast": 5.8,
@@ -496,48 +481,64 @@
       "forecast": 13.7,
       "actual": 14
      }
+    },
+    {
+     "date": "2026-11-22",
+     "rain": {
+      "forecast": 17.7,
+      "actual": 9,
+      "miss": true
+     },
+     "temperature": {
+      "forecast": 7.4,
+      "actual": 7.4
+     },
+     "wind": {
+      "forecast": 16.8,
+      "actual": 18.1
+     }
     }
    ],
    "sourceAverageError": {
     "metoffice": {
-     "rain": 3.36,
-     "temperature": 0.73,
-     "wind": 1.49
+     "rain": 3.59,
+     "temperature": 0.67,
+     "wind": 1.18
     },
     "ecmwf": {
-     "rain": 5.05,
-     "temperature": 0.65,
-     "wind": 1.65
+     "rain": 6.14,
+     "temperature": 0.64,
+     "wind": 1.8
     },
     "gfs": {
-     "rain": 4.71,
+     "rain": 5.34,
      "temperature": 0.34,
-     "wind": 2.1
+     "wind": 2.05
     },
     "icon": {
-     "rain": 8.04,
-     "temperature": 0.84,
-     "wind": 1.65
+     "rain": 8.69,
+     "temperature": 0.76,
+     "wind": 1.31
     },
     "gem": {
-     "rain": 4.19,
-     "temperature": 0.58,
-     "wind": 1.23
+     "rain": 4.59,
+     "temperature": 0.52,
+     "wind": 1.06
     },
     "meteofrance": {
-     "rain": 7.25,
-     "temperature": 1.01,
-     "wind": 2.16
+     "rain": 6.91,
+     "temperature": 0.99,
+     "wind": 1.86
     },
     "jma": {
-     "rain": 6.93,
-     "temperature": 0.8,
-     "wind": 2.95
+     "rain": 6.76,
+     "temperature": 0.55,
+     "wind": 2.83
     },
     "cma": {
-     "rain": 4.37,
-     "temperature": 0.89,
-     "wind": 1.34
+     "rain": 4.63,
+     "temperature": 0.76,
+     "wind": 1.28
     }
    }
   },
