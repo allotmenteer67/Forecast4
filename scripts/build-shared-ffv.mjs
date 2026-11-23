@@ -40,7 +40,7 @@ const MIN_RECENT_SOURCES = 5; // of the nine, reporting in the last 30 days — 
 
 const APP_CONSTANTS = [
   "REAL_SOURCES", "REAL_DATA_CONDITIONS", "FFV_MIN_SAMPLES", "FFV_RATIO_CLAMP",
-  "FFV_OFFSET_CLAMP", "FFV_EMA_ALPHA", "ACCURACY_EMA_ALPHA"
+  "FFV_OFFSET_CLAMP", "FFV_EMA_ALPHA", "ACCURACY_EMA_ALPHA", "RATIO_FORECAST_FLOOR"
 ];
 const APP_FUNCTIONS = [
   "realSourceIds", "meanFromHistoryDay", "applyHistoryFileToFFV", "recordFFVSample",

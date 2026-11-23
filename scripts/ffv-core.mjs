@@ -18,6 +18,7 @@ export const FFV_MIN_SAMPLES = 3;
 export const FFV_RATIO_CLAMP = [0.1, 5];
 export const FFV_OFFSET_CLAMP = [-15, 15];
 export const FFV_EMA_ALPHA = 2 / (30 + 1);
+export const RATIO_FORECAST_FLOOR = { rain: 0.2, sunshine: 0.2, wind: 0.5, cloudLow: 1, cloudMid: 1, cloudHigh: 1 };
 
 // Same set as app.js's REAL_DATA_CONDITIONS minus sunshine/pressure/soil/
 // dew point — this module only ever needs to correct the conditions the
@@ -43,11 +44,20 @@ function clampOffset(offset) {
 // learn the current correction (emaRatio/emaOffset/count), not also track
 // accuracy/eligibility bookkeeping, which is a browser-only concern.
 function recordSample(entry, conditionName, mean, actual) {
-  if (!mean) return entry; // guards against divide-by-zero ratios
-  const newRatio = clampRatio(actual / mean);
-  const newOffset = clampOffset(actual - mean);
-  entry.emaRatio = entry.count === 0 ? newRatio : FFV_EMA_ALPHA * newRatio + (1 - FFV_EMA_ALPHA) * entry.emaRatio;
-  entry.emaOffset = entry.count === 0 ? newOffset : FFV_EMA_ALPHA * newOffset + (1 - FFV_EMA_ALPHA) * entry.emaOffset;
+  // Mirrors app.js recordFFVSample (23 Nov 2026): ratio conditions learn
+  // from recency-weighted running totals (forecast vs actual), not an
+  // average of daily ratios, which ran 30-90% high for rain. A 0 forecast
+  // is part of the total; the factor is held while the running forecast
+  // total is below the floor.
+  if (isRatioCondition(conditionName)) {
+    entry.emaForecast = entry.emaForecast === undefined ? mean : FFV_EMA_ALPHA * mean + (1 - FFV_EMA_ALPHA) * entry.emaForecast;
+    entry.emaActual = entry.emaActual === undefined ? actual : FFV_EMA_ALPHA * actual + (1 - FFV_EMA_ALPHA) * entry.emaActual;
+    const floor = RATIO_FORECAST_FLOOR[conditionName] ?? 0.1;
+    if (entry.emaForecast > floor) entry.emaRatio = clampRatio(entry.emaActual / entry.emaForecast);
+  } else {
+    const newOffset = clampOffset(actual - mean);
+    entry.emaOffset = entry.count === 0 ? newOffset : FFV_EMA_ALPHA * newOffset + (1 - FFV_EMA_ALPHA) * entry.emaOffset;
+  }
   entry.count += 1;
   return entry;
 }
@@ -83,7 +93,7 @@ export function buildFFVStore(historyData, conditionNames, sourceIds) {
 
         for (let day = 1; day <= 7; day++) {
           const mean = meanFromHistoryDay(dayEntry, sourceId, day, conditionName);
-          if (!mean) continue;
+          if (mean === null || mean === undefined) continue; // 0 is part of the running total
           store[conditionName] ??= {};
           store[conditionName][sourceId] ??= {};
           const entry = (store[conditionName][sourceId][day] ??= { emaRatio: 1, emaOffset: 0, count: 0 });

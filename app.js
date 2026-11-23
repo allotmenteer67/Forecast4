@@ -4070,14 +4070,23 @@ function clampOffset(offset) {
 // An EMA answers "how's it been doing lately", which is what both the
 // Accuracy table and the underperformance check actually want to know.
 //
-// A forecast of exactly 0 (23 Nov 2026): it used to be skipped outright,
-// because the ratio actual/forecast can't divide by zero. That meant a
-// model that said "dry" and then saw 9 mm of rain was never marked down —
-// its accuracy looked better than it was. Now a zero forecast IS scored
-// for accuracy (raw and corrected error), but still teaches the
-// correction nothing: count, ratio and offset are left untouched, so
-// the correction keeps learning only from days the source forecast some
-// amount. A missing forecast (null) is still skipped completely.
+// Ratio conditions learn from running TOTALS (23 Nov 2026). Before, each
+// day's actual/forecast was worked out and those daily ratios averaged.
+// That average is lopsided: a day forecast 0.3 mm that saw 3 mm counts as
+// "10x too low" (capped at 5), a day forecast 6 mm that saw 3 mm only as
+// "0.5x". At TA7 the learned rain factors came out at 1.3-1.9 when the
+// models' own totals were within about 10% of what fell, so the
+// correction was turning near-right forecasts into over-forecasts (55-day
+// replay against EA gauges: 214 mm forecast vs 166 mm fell). Now each
+// entry keeps a recency-weighted running total of forecasts (emaForecast)
+// and of actuals (emaActual), and the factor is one divided by the other.
+// A 0 mm forecast is simply part of the total, so dry calls (right or
+// wrong) are learned from properly too. While a source's running
+// forecast total is tiny (a long dry spell), the factor is held where it
+// was rather than divided by almost nothing. Additive conditions
+// (temperature etc.) are unchanged: the average offset was already right.
+const RATIO_FORECAST_FLOOR = { rain: 0.2, sunshine: 0.2, wind: 0.5, cloudLow: 1, cloudMid: 1, cloudHigh: 1 };
+
 function recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, dateKey) {
   if (mean === null || mean === undefined || !Number.isFinite(mean)) return;
   if (eligStore) markDateSeen(eligStore, conditionName, sourceId, dateKey);
@@ -4105,20 +4114,30 @@ function recordFFVSample(store, conditionName, sourceId, day, mean, actual, elig
     entry.scoredCount += 1;
   }
 
-  if (mean === 0) return; // scored above; nothing to learn a ratio from
+  if (isRatioCondition(conditionName)) {
+    // An entry from before this change: start the totals so they give
+    // its old factor back, weighted as a single 1-unit day, so new days
+    // take over quickly. (Real sources are rebuilt from history anyway.)
+    if (entry.emaForecast === undefined && entry.count > 0) {
+      entry.emaForecast = 1;
+      entry.emaActual = entry.emaRatio;
+    }
+    entry.emaForecast = entry.emaForecast === undefined ? mean : FFV_EMA_ALPHA * mean + (1 - FFV_EMA_ALPHA) * entry.emaForecast;
+    entry.emaActual = entry.emaActual === undefined ? actual : FFV_EMA_ALPHA * actual + (1 - FFV_EMA_ALPHA) * entry.emaActual;
+    const floor = RATIO_FORECAST_FLOOR[conditionName] ?? 0.1;
+    if (entry.emaForecast > floor) entry.emaRatio = clampRatio(entry.emaActual / entry.emaForecast);
+    else if (entry.count === 0) entry.emaRatio = 1;
+  } else {
+    const newOffset = clampOffset(actual - mean);
+    // EMA blend — the very first sample simply becomes the starting value
+    // rather than being diluted by the neutral 0 default.
+    entry.emaOffset = entry.count === 0 ? newOffset : FFV_EMA_ALPHA * newOffset + (1 - FFV_EMA_ALPHA) * entry.emaOffset;
+  }
 
-  const newRatio = clampRatio(actual / mean);
-  const newOffset = clampOffset(actual - mean);
-  // EMA blend — the very first sample simply becomes the starting value
-  // rather than being diluted by the neutral 1/0 default.
-  entry.emaRatio = entry.count === 0 ? newRatio : FFV_EMA_ALPHA * newRatio + (1 - FFV_EMA_ALPHA) * entry.emaRatio;
-  entry.emaOffset = entry.count === 0 ? newOffset : FFV_EMA_ALPHA * newOffset + (1 - FFV_EMA_ALPHA) * entry.emaOffset;
-
-  // Kept for eligibility gating and as the one-time seed for the EMAs
-  // above on an entry recorded before this change — no longer used to
-  // derive either the correction or the accuracy figures directly.
-  entry.sumRatio += newRatio;
-  entry.sumOffset += newOffset;
+  // Kept for eligibility gating and as the one-time seed for an entry
+  // recorded before the EMA change — not used for the correction itself.
+  if (mean !== 0) entry.sumRatio += clampRatio(actual / mean);
+  entry.sumOffset += clampOffset(actual - mean);
   entry.count += 1;
 }
 

@@ -679,7 +679,7 @@ def place_switch_while_loading_keeps_new_place(browser):
 # ---------- runner ----------
 
 @check
-def zero_forecast_scored_not_learned(browser):
+def zero_forecast_scored_and_learned(browser):
     # 23 Nov 2026: a forecast of exactly 0 mm was skipped by the learning,
     # so "said dry, then 9 mm fell" never counted against a model. Now it
     # counts for accuracy, but still doesn't move the correction itself.
@@ -700,9 +700,11 @@ def zero_forecast_scored_not_learned(browser):
       return { before, after, freshCount: fresh.rain.icon[1].count, freshRaw: fresh.rain.icon[1].emaErrorRaw };
     })()""")
     b, a = res["before"], res["after"]
-    expect(a["count"] == b["count"] and a["ratio"] == b["ratio"], f"a 0 mm forecast changed the correction: {res}")
+    # Since the running-totals change (same night) a 0 mm forecast is also
+    # learned from: "said dry, 9 mm fell" must push the factor up.
+    expect(a["count"] == b["count"] + 1 and a["ratio"] > b["ratio"], f"a missed wet day after a 0 mm forecast wasn't learned: {res}")
     expect(a["raw"] > b["raw"] and a["cor"] > b["cor"] and a["scored"] == b["scored"] + 1, f"a 0 mm forecast wasn't scored: {res}")
-    expect(res["freshCount"] == 0 and res["freshRaw"] == 3, f"first-ever 0 mm sample handled wrongly: {res}")
+    expect(res["freshCount"] == 1 and res["freshRaw"] == 3, f"first-ever 0 mm sample handled wrongly: {res}")
     expect(not pg.errors, pg.errors)
     ctx.close()
 
@@ -748,6 +750,44 @@ def settings_shows_data_checks(browser):
     expect("close to what happened" in w, f"weekly all-clear wrong: {w}")
     pg.locator("#dataHealth").scroll_into_view_if_needed()
     pg.screenshot(path=str(OUT / "settings_data_checks.png"))
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
+def rain_correction_uses_running_totals(browser):
+    # 23 Nov 2026: averaging each day's actual/forecast ran 30-90% high
+    # (a 0.3 mm forecast with 3 mm fallen counted as "10x too low", a 6 mm
+    # forecast with 3 mm fallen only as "0.5x"). A source whose totals
+    # match reality must end up with a factor of about 1.
+    ctx = browser.new_context(viewport=PHONE)
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    pg = ctx.new_page(); pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/compare.html"); pg.wait_for_timeout(1200)
+    res = pg.evaluate("""(() => {
+      const store = {};
+      // forecast 0.3 -> 3 fell, then 6 -> 3.3 fell: totals 6.3 vs 6.3
+      for (let i = 0; i < 20; i++) {
+        recordFFVSample(store, 'rain', 'gfs', 1, 0.3, 3, null, null);
+        recordFFVSample(store, 'rain', 'gfs', 1, 6, 3.3, null, null);
+      }
+      const k = store.rain.gfs[1].emaRatio;
+      // A long dry spell: factor held, not divided by nearly nothing
+      for (let i = 0; i < 60; i++) recordFFVSample(store, 'rain', 'gfs', 1, 0, 0, null, null);
+      const held = store.rain.gfs[1].emaRatio;
+      // Said dry, it rained: now learned (factor goes up), not ignored
+      const s2 = {};
+      for (let i = 0; i < 10; i++) recordFFVSample(s2, 'rain', 'icon', 1, 2, 2, null, null);
+      const before = s2.rain.icon[1].emaRatio;
+      for (let i = 0; i < 3; i++) recordFFVSample(s2, 'rain', 'icon', 1, 0, 4, null, null);
+      // Temperature still uses an average offset
+      const t = {}; for (let i = 0; i < 5; i++) recordFFVSample(t, 'temperature', 'gfs', 1, 0, 1.5, null, null);
+      return { k, held, before, after: s2.rain.icon[1].emaRatio, off: t.temperature.gfs[1].emaOffset };
+    })()""")
+    expect(0.9 < res["k"] < 1.1, f"factor should be about 1 when totals match, got {res['k']}")
+    expect(abs(res["held"] - res["k"]) < 0.05, f"factor not held through a dry spell: {res}")
+    expect(res["after"] > res["before"] + 0.1, f"a missed wet day after 'dry' wasn't learned: {res}")
+    expect(abs(res["off"] - 1.5) < 1e-6, f"temperature offset changed: {res}")
     expect(not pg.errors, pg.errors)
     ctx.close()
 
