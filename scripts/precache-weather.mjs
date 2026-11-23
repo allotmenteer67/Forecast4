@@ -70,7 +70,8 @@ const REAL_SOURCES_BY_ID = {
   gem: "gem_seamless",
   meteofrance: "meteofrance_seamless",
   jma: "jma_seamless",
-  bom: "bom_access_global",
+  // PAUSED 23 Nov 2026: Open-Meteo sends BOM as all blanks. Uncomment to bring back (see DECISIONS.md).
+  // bom: "bom_access_global",
   cma: "cma_grapes_global"
 };
 

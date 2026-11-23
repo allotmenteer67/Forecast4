@@ -26,7 +26,6 @@
     { "id": "gem", "name": "GEM (Canada)", "enabled": true },
     { "id": "meteofrance", "name": "M\u00e9t\u00e9o-France", "enabled": true },
     { "id": "jma", "name": "JMA (Japan)", "enabled": true },
-    { "id": "bom", "name": "BOM (Australia)", "enabled": true },
     { "id": "cma", "name": "CMA (China)", "enabled": true }
   ],
   "rollback_days": 6,

@@ -15,7 +15,7 @@
 // this project does for helpers shared by pages that don't load app.js).
 const WIND_BLEND_MODELS = [
   "ukmo_global_deterministic_10km", "ecmwf_ifs025", "gfs_seamless", "icon_seamless",
-  "gem_seamless", "meteofrance_seamless", "jma_seamless", "bom_access_global", "cma_grapes_global"
+  "gem_seamless", "meteofrance_seamless", "jma_seamless", /* "bom_access_global", PAUSED 23 Nov 2026, see DECISIONS.md */ "cma_grapes_global"
 ];
 
 function windBlendMedian(values) {

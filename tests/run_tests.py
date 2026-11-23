@@ -463,13 +463,14 @@ def map_is_the_blend_not_best_match(browser):
     expect(grid_reqs, "map made no grid request")
     expect(all("models=" in u for u in grid_reqs), "a map grid request didn't name its models (would get UKV best-match)")
     rain = pg.evaluate("sampleGrid(mapGrid,'rain',3,51.131,-2.911)")
-    # rain from all nine sources giving 1..9 -> median 5; best-match would have been 9
-    expect(rain is not None and abs(rain - 5) < 1e-6, f"map rain at pin {rain}, expected nine-source median 5")
+    # rain from all eight sources giving 1..8 -> median 4.5; best-match would have been higher
+    # (eight since BOM was paused, 23 Nov 2026)
+    expect(rain is not None and abs(rain - 4.5) < 1e-6, f"map rain at pin {rain}, expected eight-source median 4.5")
     temp = pg.evaluate("sampleGrid(mapGrid,'temp',3,51.131,-2.911)")
     # other layers from the top four giving 10..13 -> median 11.5
     expect(temp is not None and abs(temp - 11.5) < 1e-6, f"map temperature at pin {temp}, expected top-four median 11.5")
     expect(pg.evaluate("mapGrid.sources.join(',')") == "metoffice,ecmwf,gfs,icon", "map's other layers aren't using the top forecasters")
-    expect(len(pg.evaluate("mapGrid.rainSources")) == 9, "map rain isn't using all nine forecasters")
+    expect(len(pg.evaluate("mapGrid.rainSources")) == 8, "map rain isn't using all eight forecasters")
     expect(not pg.errors, pg.errors)
     ctx.close()
 
@@ -554,9 +555,10 @@ def met_office_spot_record_and_blend(browser):
     expect(res["before"] == 5, f"Spot joined the blend before 14 days (median of 0,10 is 5): {res}")
     expect(res["joins"] and res["after"] == 6, f"after 14 days the median of 0,10,6 should be 6: {res}")
     boxes = pg.evaluate("[...document.querySelectorAll('#forecasters input')].map(i => i.disabled)")
-    expect(len(boxes) == 10 and not boxes[-1], f"Spot box should be enabled with a key: {boxes}")
+    expect(len(boxes) == 9 and not boxes[-1]  # 9 since BOM paused
+          , f"Spot box should be enabled with a key: {boxes}")
     pg.evaluate("localStorage.removeItem('forecast-compare:moSpotKey'); refreshSpotCheckbox()")
-    expect(pg.evaluate("document.querySelectorAll('#forecasters input')[9].disabled"), "Spot box should be greyed out without a key")
+    expect(pg.evaluate("document.querySelectorAll('#forecasters input')[8].disabled"), "Spot box should be greyed out without a key")
     expect(not pg.errors, pg.errors)
     ctx.close()
 
@@ -624,8 +626,8 @@ def callout_and_coast_wind_is_blended(browser):
         errs = pg.errors; ctx.close()
         return out, errs
     out, errs = run(False)
-    # nine models give 10..18 -> median 14; direction from the first (0)
-    expect(out["sp"] == 14 and out["gu"] == 14 and out["dir"] == 0 and out["n"] == 9, f"wind not blended: {out}")
+    # eight models (BOM paused) give 10..17 -> median 13.5; direction from the first (0)
+    expect(out["sp"] == 13.5 and out["gu"] == 13.5 and out["dir"] == 0 and out["n"] == 8, f"wind not blended: {out}")
     expect(out["vis"] == 5, f"visibility lost: {out}")
     out, errs2 = run(True)
     expect(out["sp"] == 5 and out["vis"] == 5 and out["n"] == 0, f"fallback to plain wind failed: {out}")
@@ -675,6 +677,24 @@ def place_switch_while_loading_keeps_new_place(browser):
     expect(res["pc"] == "FAST" and res["lat"] == 51.12, f"old place's result overwrote the new one: {res}")
 
 # ---------- runner ----------
+
+@check
+def bom_paused_everywhere(browser):
+    # 23 Nov 2026: Open-Meteo sends BOM (bom_access_global) as all blanks,
+    # everywhere, and has for the whole year of history. It's paused: no
+    # page or GitHub job may ask for it, and Settings mustn't offer it.
+    for f in ["app.js", "settings.js", "wind-blend.js", "scripts/precache-weather.mjs",
+              "scripts/collect-weather.mjs", "scripts/backfill-weather.mjs"]:
+        live = [l for l in (ROOT / f).read_text().splitlines()
+                if "bom" in l.lower() and not l.strip().startswith("//") and "/* \"bom_access_global\"" not in l]
+        expect(not live, f"{f} still uses BOM: {live}")
+    expect("bom" not in (ROOT / "forecast-config.json").read_text(), "forecast-config.json still lists BOM")
+    ctx = browser.new_context(viewport=PHONE)
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    pg = ctx.new_page(); pg.goto(f"{BASE}/settings.html"); pg.wait_for_timeout(1500)
+    expect("BOM" not in pg.inner_text("body"), "Settings still offers BOM")
+    expect(pg.evaluate("typeof REAL_SOURCES === 'undefined' || !REAL_SOURCES.some(s => s.id === 'bom')"), "BOM still in REAL_SOURCES")
+    ctx.close()
 
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""

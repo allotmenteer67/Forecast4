@@ -219,7 +219,8 @@ const CONFIG = {
     { id: "gem", name: "GEM (Canada)", enabled: true },
     { id: "meteofrance", name: "Météo-France", enabled: true },
     { id: "jma", name: "JMA (Japan)", enabled: true },
-    { id: "bom", name: "BOM (Australia)", enabled: true },
+    // PAUSED 23 Nov 2026: Open-Meteo sends BOM as all blanks. Uncomment to bring back (see DECISIONS.md).
+    // { id: "bom", name: "BOM (Australia)", enabled: true },
     { id: "cma", name: "CMA (China)", enabled: true },
     // The Met Office's own site forecast via Weather DataHub (needs a free
     // key in Settings) — see the Met Office Spot section.
@@ -873,7 +874,8 @@ const REAL_SOURCES = [
   // since a wrong model string here would silently fall back to demo
   // data with no obvious error.
   { id: "jma", model: "jma_seamless" },        // Japan Meteorological Agency
-  { id: "bom", model: "bom_access_global" },   // Australian Bureau of Meteorology
+  // PAUSED 23 Nov 2026: Open-Meteo sends BOM as all blanks. Uncomment to bring back (see DECISIONS.md).
+  // { id: "bom", model: "bom_access_global" },   // Australian Bureau of Meteorology
   { id: "cma", model: "cma_grapes_global" }    // China Meteorological Administration
 ];
 // Met Office Spot constants — see the "Met Office Spot" section below.

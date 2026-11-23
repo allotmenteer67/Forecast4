@@ -241,3 +241,10 @@ at night, sometimes with poor signal.
 ## Removed Taunton/Tiree/Teesside from the precache (16 Nov 2026)
 - They were hand-picked test places nobody uses, costing about 1,900 Open-Meteo requests a day in the 20-minute weather precache (plus Met Office Spot calls). weatherLocations is now empty; the shared favourites (TA7, SA62, CM7) carry on as before.
 - Same day: removed the three test fishing spots too (Lowestoft, Lyme Regis, Liverpool), picked for spread and alliteration, not real use. None fed the Charmouth card (Lyme Regis is 2.7 km away, outside the 2 km match).
+
+## BOM paused (23 Nov 2026)
+- Open-Meteo sends BOM (bom_access_global) as blanks for every field, everywhere (checked TA7 and Sydney). The whole year of backfill and every day of history.json hold no BOM figures, so it never learned a correction and never joined a blend. Cloude has really been blending eight forecasters.
+- Blanks were already handled safely: the blend, the per-device learning and the nightly shared-FFV job all skip a missing value rather than treating it as 0 mm.
+- Paused, not deleted: every BOM line is commented out with a "PAUSED 23 Nov 2026" note (app.js x2, settings.js, wind-blend.js, scripts/precache-weather.mjs, collect-weather.mjs, backfill-weather.mjs) and its forecast-config.json entry removed. To bring it back: uncomment those lines, re-add `{ "id": "bom", "name": "BOM (Australia)", "enabled": true }` to forecast-config.json, and put the tests back to nine sources (map median 5, callout wind 14 from 9, ten Settings boxes).
+- Saves about one Open-Meteo request in nine for the precache and daily jobs.
+- Open question (not changed): any model forecasting exactly 0 mm on a day is also skipped by the rain learning (actual/forecast can't divide by 0), so "said dry, it rained" misses are never counted. See the chat of 23 Nov for the options.

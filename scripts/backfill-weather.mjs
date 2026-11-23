@@ -71,7 +71,8 @@ const MODELS = [
   { id: "gem", model: "gem_seamless" },
   { id: "meteofrance", model: "meteofrance_seamless" },
   { id: "jma", model: "jma_seamless" },
-  { id: "bom", model: "bom_access_global" },
+  // PAUSED 23 Nov 2026: Open-Meteo sends BOM as all blanks. Uncomment to bring back (see DECISIONS.md).
+  // { id: "bom", model: "bom_access_global" },
   { id: "cma", model: "cma_grapes_global" }
 ];
 

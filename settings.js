@@ -9,7 +9,8 @@ const FORECASTERS = [
   { id: "gem", name: "GEM (Canada)", enabled: true },
   { id: "meteofrance", name: "Météo-France", enabled: true },
   { id: "jma", name: "JMA (Japan)", enabled: true },
-  { id: "bom", name: "BOM (Australia)", enabled: true },
+  // PAUSED 23 Nov 2026: Open-Meteo sends BOM as all blanks. Uncomment to bring back (see DECISIONS.md).
+  // { id: "bom", name: "BOM (Australia)", enabled: true },
   { id: "cma", name: "CMA (China)", enabled: true },
   { id: "mospot", name: "Met Office Spot", enabled: true }
 ];
