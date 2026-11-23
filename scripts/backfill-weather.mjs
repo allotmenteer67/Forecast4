@@ -47,6 +47,7 @@
 // the app itself would resolve for that place, so this doesn't try —
 // it asks rather than guesses.
 
+import { findGauges, gaugeRainByDay, applyGaugeRain, GAUGE_RADIUS_KM } from "./ea-gauge-rain.mjs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 
 const CONFIG_PATH = new URL("../data/precache-config.json", import.meta.url);
@@ -384,11 +385,31 @@ async function backfillArea(area, existing) {
     merged[date] = entry;
   });
 
+  // Measured rain from EA gauges as the rain actual, where there are any
+  // (see ea-gauge-rain.mjs). Dates fetched this run, plus any date never
+  // checked yet (the first run after this change does the whole year).
+  // A failure leaves those dates unmarked, so the next night retries.
+  let gaugeInfo = existing?.gauges ?? null;
+  const refreshedFrom = isoDate(start);
+  const needGauges = Object.keys(merged).sort().slice(-BACKFILL_DAYS)
+    .filter(d => merged[d].actual && (!merged[d].actual.rainSource || d >= refreshedFrom));
+  if (needGauges.length) {
+    try {
+      const gauges = await findGauges(area.lat, area.lon);
+      const byDay = gauges.length ? await gaugeRainByDay(gauges, needGauges[0], needGauges[needGauges.length - 1]) : {};
+      const used = applyGaugeRain(merged, needGauges, byDay);
+      gaugeInfo = gauges.map(g => ({ id: g.id, label: g.label }));
+      console.log(`  rain actual: ${gauges.length} EA gauge(s) within ${GAUGE_RADIUS_KM} km, measured rain on ${used} of ${needGauges.length} day(s)`);
+    } catch (err) {
+      console.error(`  EA gauges failed, keeping the archive rain for now: ${err.message}`);
+    }
+  }
+
   const keep = Object.keys(merged).sort().slice(-BACKFILL_DAYS);
   const days = {};
   keep.forEach(date => { days[date] = merged[date]; });
 
-  return { output: { updated: isoDate(today), areaCode: area.areaCode, days }, failedSourceIds, mode: topUp ? "top-up" : "full year" };
+  return { output: { updated: isoDate(today), areaCode: area.areaCode, gauges: gaugeInfo, days }, failedSourceIds, mode: topUp ? "top-up" : "full year" };
 }
 
 async function main() {

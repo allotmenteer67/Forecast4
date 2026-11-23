@@ -105,7 +105,8 @@ function blendHour(sourcesById, sourceIds, field, conditionName, hourIdx, ffvSto
     })
     .filter(v => v !== null && v !== undefined);
 
-  if (values.length) return { value: median(values), corrected: true };
+  // Rain by average, the rest by middle value — same as app.js blendFor (23 Nov 2026).
+  if (values.length) return { value: conditionName === "rain" ? values.reduce((x, y) => x + y, 0) / values.length : median(values), corrected: true };
 
   const metofficeRaw = sourcesById.metoffice?.[field]?.[hourIdx];
   if (metofficeRaw !== null && metofficeRaw !== undefined) {

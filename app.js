@@ -2404,7 +2404,7 @@ function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
         const ffv = ffvFor(source, conditionName, day);
         return ffv !== null ? applyCorrection(raw, ffv, conditionName) : raw;
       }).filter(v => v !== null && v !== undefined);
-      return values.length ? median(values) : null;
+      return blendFor(values, conditionName);
     });
   }
 
@@ -2736,7 +2736,7 @@ async function fetchBlendedGrid(lats, lons, fields, forecastDays, timeoutMs) {
             const f = condition ? ffv[condition][sources[s].id][day] : null;
             values.push(f !== null && f !== undefined ? applyCorrection(v, f, condition) : v);
           });
-          return values.length ? median(values) : null;
+          return blendFor(values, condition);
         });
       });
     });
@@ -4317,6 +4317,28 @@ function formatError(avgError, conditionName, mode) {
   return `${unitsText} (${percentText})`;
 }
 
+// Rain is blended by AVERAGE, everything else by the middle value
+// (23 Nov 2026). Rain amounts are lopsided — most models a little,
+// one or two a lot — so the middle value sat low: replaying a year
+// against EA gauges, the median blend came out 9-17% under what fell,
+// the average within about 5% either way. A forecast that leans either
+// way lets someone down (watering vs. washing), so rain uses the
+// average. Temperature, wind, pressure etc. keep the median, which
+// shrugs off one wild model.
+function blendFor(values, conditionName) {
+  if (!values.length) return null;
+  if (conditionName === "rain") return values.reduce((a, b) => a + b, 0) / values.length;
+  return median(values);
+}
+
+function weightedBlend(entries, conditionName) {
+  if (conditionName !== "rain") return weightedMedian(entries);
+  const valid = entries.filter(e => e.value !== null && e.value !== undefined && e.weight > 0);
+  if (!valid.length) return null;
+  const total = valid.reduce((sum, e) => sum + e.weight, 0);
+  return valid.reduce((sum, e) => sum + e.value * e.weight, 0) / total;
+}
+
 function median(values) {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
@@ -4655,7 +4677,7 @@ function mergedValueFor(conditionName, day, rollbackDays) {
     }
     return { value, weight: sourceWeight(source, conditionName) };
   });
-  return weightedMedian(entries);
+  return weightedBlend(entries, conditionName);
 }
 
 function headlineValueFor(conditionName) {
@@ -6614,7 +6636,7 @@ function whatIfMergedValue() {
     }
     return { value, weight: sourceWeight(source, state.condition) };
   });
-  return weightedMedian(entries);
+  return weightedBlend(entries, state.condition);
 }
 
 function renderWhatIfResult() {

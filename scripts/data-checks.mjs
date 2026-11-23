@@ -321,7 +321,8 @@ async function weekly() {
             (err[cond] ??= []).push(Math.abs(value - actual));
           }
         });
-        const blend = median(corrected);
+        // Rain by average, the rest by middle value, as the app does (blendFor).
+        const blend = cond === "rain" ? (corrected.length ? corrected.reduce((x, y) => x + y, 0) / corrected.length : null) : median(corrected);
         const cell = { forecast: round(blend), actual: round(actual) };
         if (isNum(blend) && isNum(actual) && Math.abs(blend - actual) > MISS[cond](actual)) {
           cell.miss = true;

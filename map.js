@@ -851,7 +851,8 @@ const MAP_FORECAST_DAYS = 3;
 
 // Built from Cloude's own blend (fetchBlendedGrid in app.js): the same
 // top forecasters the front page blends, each FFV-corrected, then the
-// median — so the map at your pin agrees with the rain graph. Nov 2026:
+// median (rain: the average, see blendFor in app.js) — so the map at
+// your pin agrees with the rain graph. Nov 2026:
 // this used to ask Open-Meteo for its default "best match", which in the
 // UK silently meant the Met Office's 2km UKV model on its own — exactly
 // what the note at the top of this file said the map must never be.

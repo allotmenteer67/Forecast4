@@ -1,5 +1,5 @@
 {
- "checkedAt": "2026-11-23T02:34:41.207Z",
+ "checkedAt": "2026-11-23T03:18:10.915Z",
  "windowDays": 30,
  "ok": false,
  "issues": [
@@ -17,9 +17,9 @@
  "sources": {
   "metoffice": {
    "latest": {
-    "at": "2026-11-23T02:27:09.497Z",
-    "filled": 817,
-    "total": 840
+    "at": "2026-11-23T02:47:22.524Z",
+    "filled": 805,
+    "total": 828
    },
    "conditions": {
     "rain": {
@@ -68,9 +68,9 @@
   },
   "ecmwf": {
    "latest": {
-    "at": "2026-11-23T02:27:09.497Z",
-    "filled": 840,
-    "total": 840
+    "at": "2026-11-23T02:47:22.524Z",
+    "filled": 828,
+    "total": 828
    },
    "conditions": {
     "rain": {
@@ -119,9 +119,9 @@
   },
   "gfs": {
    "latest": {
-    "at": "2026-11-23T02:27:09.497Z",
-    "filled": 770,
-    "total": 840
+    "at": "2026-11-23T02:47:22.524Z",
+    "filled": 759,
+    "total": 828
    },
    "conditions": {
     "rain": {
@@ -170,9 +170,9 @@
   },
   "icon": {
    "latest": {
-    "at": "2026-11-23T02:27:09.497Z",
-    "filled": 840,
-    "total": 840
+    "at": "2026-11-23T02:47:22.524Z",
+    "filled": 828,
+    "total": 828
    },
    "conditions": {
     "rain": {
@@ -221,9 +221,9 @@
   },
   "gem": {
    "latest": {
-    "at": "2026-11-23T02:27:09.497Z",
-    "filled": 770,
-    "total": 840
+    "at": "2026-11-23T02:47:22.524Z",
+    "filled": 759,
+    "total": 828
    },
    "conditions": {
     "rain": {
@@ -272,9 +272,9 @@
   },
   "meteofrance": {
    "latest": {
-    "at": "2026-11-23T02:27:09.497Z",
-    "filled": 770,
-    "total": 840
+    "at": "2026-11-23T02:47:22.524Z",
+    "filled": 759,
+    "total": 828
    },
    "conditions": {
     "rain": {
@@ -323,9 +323,9 @@
   },
   "jma": {
    "latest": {
-    "at": "2026-11-23T02:27:09.497Z",
-    "filled": 630,
-    "total": 840
+    "at": "2026-11-23T02:47:22.524Z",
+    "filled": 621,
+    "total": 828
    },
    "conditions": {
     "rain": {
@@ -367,9 +367,9 @@
   },
   "cma": {
    "latest": {
-    "at": "2026-11-23T02:27:09.497Z",
-    "filled": 840,
-    "total": 840
+    "at": "2026-11-23T02:47:22.524Z",
+    "filled": 828,
+    "total": 828
    },
    "conditions": {
     "rain": {

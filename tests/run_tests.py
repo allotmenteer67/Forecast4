@@ -552,8 +552,9 @@ def met_office_spot_record_and_blend(browser):
     expect(res["t1"] == 8, f"temperature mean wrong: {res}")
     expect(res["cloud"] is None, "Spot invented a cloud figure")
     expect(res["viaApp"] == 4, f"Compare would show {res['viaApp']} not 4")
-    expect(res["before"] == 5, f"Spot joined the blend before 14 days (median of 0,10 is 5): {res}")
-    expect(res["joins"] and res["after"] == 6, f"after 14 days the median of 0,10,6 should be 6: {res}")
+    expect(res["before"] == 5, f"Spot joined the blend before 14 days (average of 0,10 is 5): {res}")
+    # rain blends by average since 23 Nov 2026: (0 + 10 + 6) / 3
+    expect(res["joins"] and abs(res["after"] - 16 / 3) < 1e-9, f"after 14 days the average of 0,10,6 should be 5.33: {res}")
     boxes = pg.evaluate("[...document.querySelectorAll('#forecasters input')].map(i => i.disabled)")
     expect(len(boxes) == 9 and not boxes[-1]  # 9 since BOM paused
           , f"Spot box should be enabled with a key: {boxes}")
@@ -788,6 +789,44 @@ def rain_correction_uses_running_totals(browser):
     expect(abs(res["held"] - res["k"]) < 0.05, f"factor not held through a dry spell: {res}")
     expect(res["after"] > res["before"] + 0.1, f"a missed wet day after 'dry' wasn't learned: {res}")
     expect(abs(res["off"] - 1.5) < 1e-6, f"temperature offset changed: {res}")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
+def gauge_rain_days_and_actual(browser):
+    # 23 Nov 2026: EA gauge readings (GMT, 15-minute) are summed into UK
+    # calendar days, clock changes included, and become the rain actual
+    # with the archive figure kept beside it.
+    code = """
+import { applyGaugeRain } from './scripts/ea-gauge-rain.mjs';
+const m = await import('./scripts/ea-gauge-rain.mjs');
+const days = { '2026-11-22': { actual: { rain: 4 } }, '2026-11-21': { actual: { rain: 1 } } };
+const used = applyGaugeRain(days, ['2026-11-22', '2026-11-21'], { '2026-11-22': { mm: 9.2, gauges: 3 } });
+console.log(JSON.stringify({ used, days }));
+"""
+    r = subprocess.run(["node", "--input-type=module", "-e", code], cwd=ROOT, capture_output=True, text=True)
+    expect(r.returncode == 0, r.stderr)
+    out = json.loads(r.stdout)
+    a, b = out["days"]["2026-11-22"]["actual"], out["days"]["2026-11-21"]["actual"]
+    expect(out["used"] == 1 and a["rain"] == 9.2 and a["rainModel"] == 4 and a["rainSource"] == "gauges", f"gauge day wrong: {out}")
+    expect(b["rain"] == 1 and b["rainSource"] == "model", f"no-gauge day wrong: {out}")
+    src = (ROOT / "scripts" / "ea-gauge-rain.mjs").read_text()
+    slots = subprocess.run(["node", "--input-type=module", "-e",
+        src.replace("export ", "") + "\nconsole.log([slotsIn('2026-03-29'), slotsIn('2026-10-25'), slotsIn('2026-11-22'), ukDayOf('2026-06-30T23:30:00')].join(','));"],
+        cwd=ROOT, capture_output=True, text=True)
+    expect(slots.stdout.strip() == "92,100,96,2026-07-01", f"UK day handling wrong: {slots.stdout} {slots.stderr}")
+
+@check
+def rain_blends_by_average(browser):
+    ctx = browser.new_context(viewport=PHONE)
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    pg = ctx.new_page(); pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/compare.html"); pg.wait_for_timeout(1200)
+    res = pg.evaluate("""[blendFor([0, 0, 1, 2, 12], 'rain'), blendFor([0, 0, 1, 2, 12], 'wind'),
+      weightedBlend([{value: 2, weight: 1}, {value: 8, weight: 3}], 'rain'),
+      weightedBlend([{value: 2, weight: 1}, {value: 8, weight: 3}], 'temperature')]""")
+    expect(res == [3, 1, 6.5, 8], f"blend wrong: {res}")
     expect(not pg.errors, pg.errors)
     ctx.close()
 
