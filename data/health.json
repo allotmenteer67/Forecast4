@@ -1,5 +1,5 @@
 {
- "checkedAt": "2026-11-23T13:37:20.238Z",
+ "checkedAt": "2026-11-24T14:13:49.024Z",
  "windowDays": 30,
  "ok": false,
  "issues": [
@@ -17,436 +17,436 @@
  "sources": {
   "metoffice": {
    "latest": {
-    "at": "2026-11-23T13:27:11.252Z",
-    "filled": 697,
-    "total": 708
+    "at": "2026-11-24T14:08:17.952Z",
+    "filled": 685,
+    "total": 696
    },
    "conditions": {
     "rain": {
-     "used": 387,
+     "used": 383,
      "blank": 120,
-     "zero": 333,
+     "zero": 337,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "temperature": {
      "used": 720,
      "blank": 120,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "wind": {
      "used": 720,
      "blank": 120,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "pressure": {
      "used": 720,
      "blank": 120,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "dewPoint": {
      "used": 720,
      "blank": 120,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "sunshine": {
-     "used": 96,
+     "used": 97,
      "blank": 720,
-     "zero": 24,
+     "zero": 23,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     }
    }
   },
   "ecmwf": {
    "latest": {
-    "at": "2026-11-23T13:27:11.252Z",
-    "filled": 708,
-    "total": 708
+    "at": "2026-11-24T14:08:17.952Z",
+    "filled": 696,
+    "total": 696
    },
    "conditions": {
     "rain": {
-     "used": 499,
+     "used": 494,
      "blank": 0,
-     "zero": 340,
+     "zero": 345,
      "outOfRange": 1,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "temperature": {
      "used": 840,
      "blank": 0,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "wind": {
      "used": 840,
      "blank": 0,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "pressure": {
      "used": 840,
      "blank": 0,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "dewPoint": {
      "used": 840,
      "blank": 0,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "sunshine": {
-     "used": 688,
+     "used": 690,
      "blank": 0,
-     "zero": 152,
+     "zero": 150,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     }
    }
   },
   "gfs": {
    "latest": {
-    "at": "2026-11-23T13:27:11.252Z",
-    "filled": 649,
-    "total": 708
+    "at": "2026-11-24T14:08:17.952Z",
+    "filled": 638,
+    "total": 696
    },
    "conditions": {
     "rain": {
-     "used": 460,
+     "used": 450,
      "blank": 0,
-     "zero": 380,
+     "zero": 390,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "temperature": {
      "used": 840,
      "blank": 0,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "wind": {
      "used": 840,
      "blank": 0,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "pressure": {
      "used": 840,
      "blank": 0,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "dewPoint": {
      "used": 840,
      "blank": 0,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "sunshine": {
-     "used": 781,
+     "used": 782,
      "blank": 0,
-     "zero": 59,
+     "zero": 58,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     }
    }
   },
   "icon": {
    "latest": {
-    "at": "2026-11-23T13:27:11.252Z",
-    "filled": 708,
-    "total": 708
+    "at": "2026-11-24T14:08:17.952Z",
+    "filled": 696,
+    "total": 696
    },
    "conditions": {
     "rain": {
-     "used": 360,
+     "used": 353,
      "blank": 120,
-     "zero": 360,
+     "zero": 367,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "temperature": {
      "used": 720,
      "blank": 120,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "wind": {
      "used": 720,
      "blank": 120,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "pressure": {
      "used": 720,
      "blank": 120,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "dewPoint": {
      "used": 720,
      "blank": 120,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "sunshine": {
-     "used": 572,
+     "used": 582,
      "blank": 120,
-     "zero": 148,
+     "zero": 138,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     }
    }
   },
   "gem": {
    "latest": {
-    "at": "2026-11-23T13:27:11.252Z",
-    "filled": 649,
-    "total": 708
+    "at": "2026-11-24T14:08:17.952Z",
+    "filled": 638,
+    "total": 696
    },
    "conditions": {
     "rain": {
-     "used": 448,
-     "blank": 112,
-     "zero": 280,
+     "used": 459,
+     "blank": 98,
+     "zero": 283,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "temperature": {
-     "used": 728,
-     "blank": 112,
+     "used": 742,
+     "blank": 98,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "wind": {
-     "used": 728,
-     "blank": 112,
+     "used": 742,
+     "blank": 98,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "pressure": {
-     "used": 728,
-     "blank": 112,
+     "used": 742,
+     "blank": 98,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "dewPoint": {
-     "used": 728,
-     "blank": 112,
+     "used": 742,
+     "blank": 98,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "sunshine": {
-     "used": 690,
-     "blank": 112,
-     "zero": 38,
+     "used": 700,
+     "blank": 98,
+     "zero": 42,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     }
    }
   },
   "meteofrance": {
    "latest": {
-    "at": "2026-11-23T13:27:11.252Z",
-    "filled": 649,
-    "total": 708
+    "at": "2026-11-24T14:08:17.952Z",
+    "filled": 638,
+    "total": 696
    },
    "conditions": {
     "rain": {
-     "used": 158,
-     "blank": 528,
+     "used": 164,
+     "blank": 522,
      "zero": 154,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "temperature": {
-     "used": 312,
-     "blank": 528,
+     "used": 318,
+     "blank": 522,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "wind": {
-     "used": 312,
-     "blank": 528,
+     "used": 318,
+     "blank": 522,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "pressure": {
-     "used": 312,
-     "blank": 528,
+     "used": 318,
+     "blank": 522,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "dewPoint": {
-     "used": 312,
-     "blank": 528,
+     "used": 318,
+     "blank": 522,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "sunshine": {
-     "used": 261,
-     "blank": 528,
-     "zero": 51,
+     "used": 263,
+     "blank": 522,
+     "zero": 55,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     }
    }
   },
   "jma": {
    "latest": {
-    "at": "2026-11-23T13:27:11.252Z",
-    "filled": 531,
-    "total": 708
+    "at": "2026-11-24T14:08:17.952Z",
+    "filled": 522,
+    "total": 696
    },
    "conditions": {
     "rain": {
-     "used": 472,
-     "blank": 56,
-     "zero": 311,
+     "used": 476,
+     "blank": 49,
+     "zero": 314,
      "outOfRange": 1,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "temperature": {
-     "used": 784,
-     "blank": 56,
+     "used": 791,
+     "blank": 49,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "wind": {
-     "used": 784,
-     "blank": 56,
+     "used": 791,
+     "blank": 49,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "pressure": {
-     "used": 784,
-     "blank": 56,
+     "used": 791,
+     "blank": 49,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "dewPoint": {
-     "used": 784,
-     "blank": 56,
+     "used": 791,
+     "blank": 49,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     }
    }
   },
   "cma": {
    "latest": {
-    "at": "2026-11-23T13:27:11.252Z",
-    "filled": 708,
-    "total": 708
+    "at": "2026-11-24T14:08:17.952Z",
+    "filled": 696,
+    "total": 696
    },
    "conditions": {
     "rain": {
-     "used": 261,
+     "used": 259,
      "blank": 360,
-     "zero": 219,
+     "zero": 221,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "temperature": {
      "used": 480,
      "blank": 360,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "wind": {
      "used": 480,
      "blank": 360,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "pressure": {
      "used": 480,
      "blank": 360,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "dewPoint": {
      "used": 480,
      "blank": 360,
      "zero": 0,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     },
     "sunshine": {
-     "used": 406,
+     "used": 414,
      "blank": 360,
-     "zero": 74,
+     "zero": 66,
      "outOfRange": 0,
-     "lastSent": "2026-11-22"
+     "lastSent": "2026-11-23"
     }
    }
   }
  },
  "actuals": {
   "CM7": {
-   "lastDate": "2026-11-22",
+   "lastDate": "2026-11-23",
    "blankDays": {
     "soilTemperature": 7
    }
   },
   "SA62": {
-   "lastDate": "2026-11-22",
+   "lastDate": "2026-11-23",
    "blankDays": {
     "soilTemperature": 7
    }
   },
   "TA7": {
-   "lastDate": "2026-11-22",
+   "lastDate": "2026-11-23",
    "blankDays": {
     "soilTemperature": 7
    }
   },
   "TA6": {
-   "lastDate": "2026-11-21",
+   "lastDate": "2026-11-22",
    "blankDays": {
     "soilTemperature": 7
    }
   }
  },
  "moSpotLastRecorded": {
-  "TA7": "2026-11-23",
-  "SA62": "2026-11-23",
-  "CM7": "2026-11-23"
+  "TA7": "2026-11-24",
+  "SA62": "2026-11-24",
+  "CM7": "2026-11-24"
  },
  "gauges": {
   "52101": {
