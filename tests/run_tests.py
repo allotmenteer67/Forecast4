@@ -1020,6 +1020,19 @@ def travel_cells_own_ticks(browser):
     ctx.close()
 
 @check
+def settings_back_goes_to_travel_when_opened_from_travel(browser):
+    pg = new_page(browser)
+    pg.goto(f"{BASE}/travel.html"); pg.wait_for_timeout(500)
+    pg.click(".settings-icon-button"); pg.wait_for_timeout(800)
+    expect(pg.get_attribute("#settingsBack", "href") == "travel.html", "Settings from Travel doesn't go back to Travel")
+    pg.goto(f"{BASE}/help.html"); pg.goto(f"{BASE}/settings.html"); pg.wait_for_timeout(300)
+    expect(pg.get_attribute("#settingsBack", "href") == "travel.html", "lost the way back to Travel after Help")
+    pg.goto(f"{BASE}/index.html"); pg.wait_for_timeout(500)
+    pg.click(".settings-icon-button"); pg.wait_for_timeout(800)
+    expect(pg.get_attribute("#settingsBack", "href") == "index.html", "Settings from the front page doesn't go back to the front page")
+    expect(not pg.errors, pg.errors)
+
+@check
 def air_quality_indices(browser):
     pg = new_page(browser)
     pg.goto(f"{BASE}/travel.html"); pg.wait_for_timeout(500)

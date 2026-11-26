@@ -624,7 +624,8 @@
 // (airquality.js). See DECISIONS.md.
 // Bumped to v168: Travel map is now just the continent map beside the
 // time (blue water), not a detailed map behind it.
-const SHELL_CACHE_NAME = "cloude-shell-v168";
+// Bumped to v169: Settings opened from Travel goes back to Travel.
+const SHELL_CACHE_NAME = "cloude-shell-v169";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

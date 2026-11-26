@@ -25,7 +25,27 @@
 <body>
   <main class="app">
     <header>
-      <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
+      <p class="back-link"><a id="settingsBack" href="index.html">&larr; Back to Cloude</a></p>
+      <script>
+        // Opened from the Travel page: the back link goes back to Travel
+        // rather than the front page. Remembered for this visit (session
+        // only), so a trip into Help and back still returns to Travel;
+        // opening Settings from the front page clears it again.
+        (function () {
+          try {
+            var ref = document.referrer ? new URL(document.referrer) : null;
+            if (ref && ref.origin === location.origin) {
+              if (/\/travel\.html$/.test(ref.pathname)) sessionStorage.setItem("cloude:settingsFrom", "travel");
+              else if (/\/(index\.html)?$/.test(ref.pathname)) sessionStorage.removeItem("cloude:settingsFrom");
+            }
+            if (sessionStorage.getItem("cloude:settingsFrom") === "travel") {
+              var a = document.getElementById("settingsBack");
+              a.href = "travel.html";
+              a.textContent = "\u2190 Back to Travel";
+            }
+          } catch (e) {}
+        })();
+      </script>
       <h1>Settings</h1>
       <p>Location, places, units, and which forecasters appear on Compare.</p>
     </header>
