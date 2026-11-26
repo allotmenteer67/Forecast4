@@ -1011,11 +1011,14 @@ def travel_cells_own_ticks(browser):
     # Changing a UK tick afterwards leaves Travel alone.
     pg.evaluate("saveHeadlineToggle('pressure', true)")
     expect(not pg.evaluate("loadTravelToggles().pressure"), "Travel ticks followed a later UK change")
-    expect(pg.locator("#travelToggles input").count() == 10, "Travel ticks missing from Settings")
+    expect(pg.locator("#travelToggles input").count() == 9, "Travel ticks missing from Settings")
     # More than 8 boxes ticked: the grid scrolls.
     pg.evaluate("TRAVEL_OPTIONAL_FIELDS.forEach(f => saveTravelToggle(f, true))")
     travel_add_shanghai(pg)
     expect(pg.evaluate("document.getElementById('travelGrid').classList.contains('travel-grid-scrolls')"), "more than 8 cells don't scroll")
+    hint = pg.inner_text("#travelMoreHint")
+    expect("Air" in hint, f"no hint naming the boxes below: {hint!r}")
+    expect(cell_text(pg, "SOIL") is None, "Soil Temp still on the Travel page")
     expect(not pg.errors, pg.errors)
     ctx.close()
 

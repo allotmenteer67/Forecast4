@@ -61,7 +61,7 @@
     clock: $("travelClock"), place: $("travelPlace"), dayLine: $("travelDayLine"),
     headline: $("travelHeadline"), dateText: $("travelDateText"), refresh: $("travelRefresh"), updated: $("travelUpdated"),
     statusBlock: $("travelStatusBlock"), status: $("travelStatus"), retry: $("travelRetry"),
-    grid: $("travelGrid"), hourSlider: $("travelHourSlider"), hourLabel: $("travelHourLabel"),
+    grid: $("travelGrid"), moreHint: $("travelMoreHint"), hourSlider: $("travelHourSlider"), hourLabel: $("travelHourLabel"),
     dateControls: $("travelDateControls"), dateSlider: $("travelDateSlider"), dateMid: $("travelDateMid"), dateEnd: $("travelDateEnd"),
     manage: $("travelManage"), manageHint: $("travelManageHint"), destList: $("travelDestList"),
     searchInput: $("travelSearchInput"), searchButton: $("travelSearchButton"), searchStatus: $("travelSearchStatus"),
@@ -638,6 +638,24 @@
     } else {
       grid.classList.remove("travel-grid-scrolls");
     }
+    updateMoreHint();
+  }
+
+  // With more than 8 boxes ticked the rest are below, inside the grid.
+  // Says how many and which, until scrolled to the bottom.
+  function updateMoreHint() {
+    const grid = el.grid;
+    const cells = [...grid.querySelectorAll(".headline-cell")];
+    if (!grid.classList.contains("travel-grid-scrolls")) { el.moreHint.hidden = true; return; }
+    const bottom = grid.scrollTop + grid.clientHeight;
+    const hidden = cells.filter(c => c.offsetTop - grid.offsetTop + c.offsetHeight / 2 > bottom);
+    if (!hidden.length) { el.moreHint.hidden = true; return; }
+    const names = hidden.map(c => {
+      const t = c.querySelector(".headline-label").textContent.trim().split(" ")[0];
+      return t.length <= 2 ? t : t.charAt(0) + t.slice(1).toLowerCase(); // "UV" stays capitals
+    });
+    el.moreHint.textContent = `\u2193 Scroll the boxes for ${names.join(", ")}`;
+    el.moreHint.hidden = false;
   }
 
   function renderDateText() {
@@ -709,7 +727,7 @@
 
   // "Paris, France" but "Paris, Texas": the state or province for big
   // countries where the country name alone doesn't place it.
-  const BY_REGION = new Set(["US", "CA", "AU", "BR", "IN", "CN", "MX", "RU"]);
+  const BY_REGION = new Set(["US", "CA", "AU"]);
   function placeLabel(d) {
     const second = BY_REGION.has(d.cc) && d.admin1 && d.admin1 !== d.name ? d.admin1 : d.country;
     return [d.name, second].filter(Boolean).join(", ");
@@ -904,6 +922,8 @@
   el.searchInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); search(); } });
   el.refresh.addEventListener("click", () => refresh(true));
   el.retry.addEventListener("click", () => refresh(true));
+
+  el.grid.addEventListener("scroll", updateMoreHint, { passive: true });
 
   el.hourSlider.addEventListener("input", () => {
     const h = Math.round(Number(el.hourSlider.value) || 0);

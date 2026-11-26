@@ -3534,3 +3534,13 @@ footer {
 .travel-manage-done {
   margin-top: 4px;
 }
+
+/* "Scroll the boxes for UV, Air…" under a Travel grid with more than 8
+   boxes (v170). */
+.travel-more-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-muted);
+}
+.travel-more-hint[hidden] { display: none; }

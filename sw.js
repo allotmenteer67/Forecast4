@@ -625,7 +625,9 @@
 // Bumped to v168: Travel map is now just the continent map beside the
 // time (blue water), not a detailed map behind it.
 // Bumped to v169: Settings opened from Travel goes back to Travel.
-const SHELL_CACHE_NAME = "cloude-shell-v169";
+// Bumped to v170: Travel map file renamed (old cached copy drew only sea),
+// Soil Temp dropped from Travel, "more boxes below" hint on Travel.
+const SHELL_CACHE_NAME = "cloude-shell-v170";
 const SHELL_FILES = [
   "index.html",
   "solar.html",
@@ -695,9 +697,9 @@ const GEO_DATA_FILES = [
   "data/coastline-50m.json",
   "data/lakes-50m.json",
   "data/places.json",
-  // Travel page locator map (v167; v168 dropped world-50m.json),
-  // Natural Earth, never changes.
-  "data/world-110m.json"
+  // Travel page locator map, Natural Earth, never changes. (v170: new
+  // name, as phones held v167's old-format world-110m.json.)
+  "data/world-countries.json"
 ];
 
 function isGeoDataRequest(pathname) {

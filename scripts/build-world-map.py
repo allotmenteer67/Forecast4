@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds data/world-110m.json for the Travel page's locator map, from
+"""Builds data/world-countries.json for the Travel page's locator map, from
 Natural Earth (public domain, no credit needed).
 
 Run once by hand, not by a GitHub job - the map never changes. Needs the
@@ -101,7 +101,7 @@ def build():
 
 
 if __name__ == "__main__":
-    path = os.path.join(OUT, "world-110m.json")
+    path = os.path.join(OUT, "world-countries.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(build(), f, separators=(",", ":"))
-    print("world-110m.json", os.path.getsize(path), "bytes")
+    print("world-countries.json", os.path.getsize(path), "bytes")

@@ -13,12 +13,12 @@
 // always show.
 
 const TRAVEL_CORE_FIELDS = ["rain", "temperature", "wind"];
-const TRAVEL_OPTIONAL_FIELDS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "feelsLike", "visibility", "uv", "airQuality", "pollen"];
+// Soil Temp left out (v170, on request): not much use away from home.
+const TRAVEL_OPTIONAL_FIELDS = ["pressure", "sunshine", "cloud", "dewPoint", "feelsLike", "visibility", "uv", "airQuality", "pollen"];
 const TRAVEL_FIELD_LABELS = {
   pressure: "Pressure",
   sunshine: "Sunshine",
   cloud: "Cloud",
-  soilTemperature: "Soil Temp",
   dewPoint: "Dew Point",
   feelsLike: "Feels Like",
   visibility: "Visibility",

@@ -282,7 +282,7 @@ Simplified worldwide weather on its own page (travel.html, travel.js, travel-fie
 
 ### Page layout
 - Local time at the top, in the destination's own time zone with DST handled, plus "Xh ahead/behind you". Hour slider and date labels in destination local time.
-- Locator map: a small continent map (about 5,500 km across) beside the local time, always shown: country borders, big lakes, water always blue, a red dot on the destination. Natural Earth 110m (public domain, no credit needed), data/world-110m.json, saved on the phone: no weather data, no API calls.
+- Locator map: a small continent map (about 5,500 km across) beside the local time, always shown: country borders, big lakes, water always blue, a red dot on the destination. Natural Earth 110m (public domain, no credit needed), data/world-countries.json (renamed from world-110m.json in v170: phones kept v167's old-format file and drew only sea), saved on the phone: no weather data, no API calls.
   - v167 had a detailed 560 km map (coast, borders, state lines, rivers, cities) as a pale background behind the time, with the continent map only as an inset for inland places. Changed in v168 at the user's request: the continent map is the more useful one, and water should be blue. data/world-50m.json removed.
 - Up to 8 headline boxes (4 rows of 2), slightly slimmer than the UK page. More than 8 ticked scrolls.
 - Left out: weather map, sunrise/sunset, moon times, tide, fishing, coast, callout, night moon-icon swap, footnote.
@@ -293,7 +293,7 @@ Simplified worldwide weather on its own page (travel.html, travel.js, travel-fie
 - Uses the colour theme picked under Appearance (same as every other page), the same fixed box order and look as the UK front page (slightly slimmer), and the UK unit choices (mm, °C, mph). No user box ordering.
 
 ### Fields
-- Travel has its own set of ticks in Settings, independent of the UK set. First time: a copy of the UK ticks with UV and air quality switched on (pollen too, since it hides itself outside Europe). One set for all destinations.
+- Travel has its own set of ticks in Settings, independent of the UK set. First time: a copy of the UK ticks with UV and air quality switched on (pollen too, since it hides itself outside Europe). One set for all destinations. Soil Temp not offered on Travel (v170, on request). With more than 8 ticked, a line under the grid names the boxes still below ("Scroll the boxes for UV, Air…") until scrolled to them.
 - How each box reads: Today = the next 24/48h (as the UK page); another day = that whole local day (rain total, temp high/low, wind at the peak hour, pressure/dew point/feels like/soil the day's mean, sun hours capped at daylight, cloud over daylight, UV the day's peak, visibility the lowest in daylight). Hour slider = that hour (Sunshine as Sunny/Some/None, "–" at night).
 
 ### Air quality

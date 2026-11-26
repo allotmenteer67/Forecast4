@@ -9,7 +9,9 @@
 // continent map alone, always shown, and water always blue.)
 //
 // Natural Earth data (public domain, no credit needed), saved with the
-// app as data/world-110m.json (built by scripts/build-world-map.py). No
+// app as data/world-countries.json (built by scripts/build-world-map.py).
+// (Renamed from world-110m.json in v170: phones kept v167's old file of
+// that name, in a different format, and drew only sea.) No
 // weather data and no API calls: it works with no signal once saved.
 
 const TRAVEL_MAP_WIDTH_KM = 5500;
@@ -36,7 +38,7 @@ function travelBox(pts) {
 
 function travelLoadWorld() {
   if (travelWorldLoading) return travelWorldLoading;
-  const url = "data/world-110m.json";
+  const url = "data/world-countries.json";
   const get = typeof fetchWithTimeout === "function" ? fetchWithTimeout(url, {}, 20000) : fetch(url);
   travelWorldLoading = get
     .then(r => (r.ok ? r.json() : null))
