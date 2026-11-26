@@ -15,7 +15,8 @@
 //   (travel-map.js).
 // - Cells: same look and fixed order as the UK front page, a little
 //   slimmer, chosen by their own ticks in Settings (travel-fields.js).
-//   Up to 8 show; more than that scrolls.
+//   All show if the page fits the screen; otherwise the boxes scroll
+//   (never fewer than 8 showing).
 // - The last forecast fetched for each destination is kept on the phone,
 //   so it still shows on landing with no signal ("Updated 5h ago").
 //
@@ -33,7 +34,7 @@
   const REFRESH_AFTER_MS = 20 * 60000;     // re-download if older than this
   const SHOW_AGE_AFTER_MS = 45 * 60000;    // say "Updated …" once older than this
   const DAYS = 5;                          // today + 4
-  const MAX_VISIBLE_CELLS = 8;
+  const MIN_VISIBLE_CELLS = 8;  // never squeezed below this; the page scrolls instead
 
   // Four forecasters by region. Fixed: no settings.
   const REGION_MODELS = {
@@ -628,15 +629,31 @@
         console.error(`Travel cell "${field}" failed:`, err);
       }
     });
-    // More than 8 boxes: show 8 and let the rest scroll.
-    const cells = grid.querySelectorAll(".headline-cell");
-    if (cells.length > MAX_VISIBLE_CELLS) {
-      const last = cells[MAX_VISIBLE_CELLS - 1];
-      const height = last.offsetTop + last.offsetHeight - grid.offsetTop;
-      if (height > 0) grid.style.maxHeight = `${height + 2}px`;
-      grid.classList.add("travel-grid-scrolls");
-    } else {
-      grid.classList.remove("travel-grid-scrolls");
+    fitGrid();
+  }
+
+  // Every box shows if the page still fits on the screen. Only when it
+  // wouldn't (lots ticked, small phone) does the grid get a height limit
+  // and scroll, cut at the end of a row, never fewer than 8 boxes.
+  // (v171: was always 8 then scroll, even with room to spare on an iPad.)
+  function fitGrid() {
+    const grid = el.grid;
+    grid.style.maxHeight = "";
+    grid.classList.remove("travel-grid-scrolls");
+    const cells = [...grid.querySelectorAll(".headline-cell")];
+    const pageBottom = el.dateControls.getBoundingClientRect().bottom + window.scrollY + 12;
+    const overflow = pageBottom - window.innerHeight;
+    if (cells.length > MIN_VISIBLE_CELLS && overflow > 0) {
+      const top = grid.getBoundingClientRect().top;
+      const rowEnds = [...new Set(cells.map(c => Math.round(c.getBoundingClientRect().bottom - top)))].sort((a, b) => a - b);
+      const minEnd = Math.round(cells[MIN_VISIBLE_CELLS - 1].getBoundingClientRect().bottom - top);
+      const want = grid.scrollHeight - overflow;
+      const fits = rowEnds.filter(e => e <= want && e >= minEnd);
+      const height = fits.length ? fits[fits.length - 1] : minEnd;
+      if (height < grid.scrollHeight - 2) {
+        grid.style.maxHeight = `${height + 2}px`;
+        grid.classList.add("travel-grid-scrolls");
+      }
     }
     updateMoreHint();
   }
@@ -982,7 +999,7 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) resume(); });
   window.addEventListener("pageshow", e => { if (e.persisted) resume(); });
   window.addEventListener("online", () => refresh(false));
-  window.addEventListener("resize", () => { if (view.dest) renderTimeCard(); });
+  window.addEventListener("resize", () => { if (view.dest) { renderTimeCard(); fitGrid(); } });
 
   setInterval(() => { if (!document.hidden) renderClock(); }, 15000);
   setInterval(() => {

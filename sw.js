@@ -627,7 +627,8 @@
 // Bumped to v169: Settings opened from Travel goes back to Travel.
 // Bumped to v170: Travel map file renamed (old cached copy drew only sea),
 // Soil Temp dropped from Travel, "more boxes below" hint on Travel.
-const SHELL_CACHE_NAME = "cloude-shell-v170";
+// Bumped to v171: Travel shows every box when the page fits the screen.
+const SHELL_CACHE_NAME = "cloude-shell-v171";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

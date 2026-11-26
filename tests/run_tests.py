@@ -1019,6 +1019,10 @@ def travel_cells_own_ticks(browser):
     hint = pg.inner_text("#travelMoreHint")
     expect("Air" in hint, f"no hint naming the boxes below: {hint!r}")
     expect(cell_text(pg, "SOIL") is None, "Soil Temp still on the Travel page")
+    # With room to spare (iPad) every box shows and nothing scrolls.
+    pg.set_viewport_size({"width": 820, "height": 1180}); pg.wait_for_timeout(400)
+    expect(not pg.evaluate("document.getElementById('travelGrid').classList.contains('travel-grid-scrolls')"), "boxes scroll although they fit on an iPad screen")
+    expect(pg.is_hidden("#travelMoreHint"), "scroll hint shown with nothing to scroll to")
     expect(not pg.errors, pg.errors)
     ctx.close()
 
