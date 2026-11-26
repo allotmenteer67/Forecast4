@@ -262,6 +262,49 @@ at night, sometimes with poor signal.
 - First run already found: the rain "actual" (Open-Meteo's archive) for TA6 was well under the EA gauges on 15, 19 and 20 Nov (5 vs 10.4, 5.8 vs 15.9, 0.3 vs 3.7 mm). Every rain correction learns against that archive figure. Not acted on yet.
 - Used occasionally, not as rules: an edge-case pass on a calculation (zero, blank, negative, first-ever day, midnight and clock changes, one source wildly out), and a fresh separate review of a bigger change before it goes live. The user asks, or Claude suggests one for a big or risky change.
 
+## Travel page (agreed 26 Nov 2026, NOT BUILT YET)
+
+Simplified worldwide weather on its own page, so the UK front page and its machinery are untouched. Build in Forecast4 (push to main, bump SHELL_CACHE_NAME, add tests, add this to DECISIONS.md).
+
+### Getting there and places
+- One extra line, "Abroad…", in the place menu (postcode chip). No new front-page button.
+- Worldwide place search with a pick list (there are several Parises).
+- Saved destinations kept on the phone only, separate from UK places.
+
+### Forecast
+- Plain blend: no FFV corrections, no two-week "collecting data" wait, no rain gauges, no Met Office Spot, no shared corrections.
+- Four forecasters chosen by region (fixed table, no settings), asked for in one multi-model request:
+  - Europe: ECMWF, ICON, Meteo-France, Met Office global
+  - North America: ECMWF, GFS, GEM, ICON
+  - East Asia: ECMWF, JMA, CMA, ICON
+  - Everywhere else: ECMWF, GFS, ICON, Met Office global
+- Date slider: today to +4 days only, for everything. Hour slider as on the UK page.
+
+### Page layout
+- Local time at the top, in the destination's own time zone with DST handled, plus "Xh ahead/behind you". Hour slider and date labels in destination local time.
+- Locator map as a pale background behind the local time: Natural Earth (public domain, no credit needed) world coastline, country borders, state/province borders for big countries, big rivers and lakes, a few large reference cities, a red dot on the destination, roughly 500–600 km across. Static files saved on the phone: no weather data, no API calls. Small continent inset for inland places.
+- Up to 8 headline boxes (4 rows of 2), slightly slimmer than the UK page. More than 8 ticked scrolls.
+- Left out: weather map, sunrise/sunset, moon times, tide, fishing, coast, callout, night moon-icon swap, footnote.
+
+### Fields
+- Travel has its own set of ticks in Settings, independent of the UK set. First time: a copy of the UK ticks with UV and air quality switched on. One set for all destinations.
+
+### Air quality
+- Open-Meteo Air Quality API (CAMS). Local index where it can be matched properly (UK DAQI 1–10, India AQI, China AQI, US AQI), worked out from pollutant levels. European AQI elsewhere. Say it's a close match, not the official figure.
+- Show the main pollutant. Pollen only in Europe, in season. Box coloured by band.
+- Also an optional air quality condition (DAQI) on the normal UK front page, off by default.
+
+### Shared destinations (GitHub precache)
+- Any user can add a destination through the favourites relay. Stored as rounded coordinates. Sticky: never removed automatically.
+- New additions written to the repo only in a weekly batch at a fixed time, so commit times don't reveal when anyone travels.
+- All entries refreshed equally every 2 hours, with a simple one-tap switch (Actions "Run workflow" choice) to every 4 hours if Open-Meteo limits get close.
+- Which destination a phone is using stays on the phone.
+- Needs a new version of the favourites relay Worker (Cloudflare, not in the repo): a "destination" type, KV for pending entries, a weekly cron. Give the user the complete replacement file and the Cloudflare steps.
+
+### Rejected
+- Usage tracking of any kind (which postcodes are looked at, how often).
+- For now: a weather map abroad (too many Open-Meteo calls on the free plan); request counters (only if "too many requests" errors appear).
+
 ## How the app's saved files are used (26 Nov 2026, v166)
 - Bug: opening the app after a few hours took 20+ seconds. The service worker served every file "saved copy first, check in the background", including data/precache-weather.json. After a long gap the saved copy was hours old, the app rejected it as stale, and fetched all nine forecasters live.
 - Now: data/*.json files GitHub refreshes (precache-weather, precache-config, shared-ffv, history, backfill, health, weekly-check, mo-spot-record, tide-gauges...) come from the network first, falling back to the saved copy after 5 seconds or when offline.
