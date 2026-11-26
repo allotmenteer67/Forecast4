@@ -301,6 +301,18 @@ Simplified worldwide weather on its own page (travel.html, travel.js, travel-fie
 - Show the main pollutant. Pollen only in Europe, in season. Box coloured by band.
 - Also an optional air quality condition (DAQI) on the normal UK front page, off by default.
 
+### Fresh review (26 Nov 2026, v173)
+A separate reviewer went through v167–v172. AQ breakpoints confirmed against Defra DAQI, CPCB India and China HJ 633-2012; no XSS (names always via textContent); date-line maps fine; UK page and other app.js pages unaffected. Fixed in v173:
+- A saved forecast entirely in the past now says it has run out (it showed its last hour as Today).
+- A finished download is always saved, even after switching destination mid-download (needed for no-signal use).
+- One download per destination at a time (iOS fires several resume events together).
+- Date heading and slider date labels come from local days, so they're right across clock changes (were a day out).
+- A swipe no longer swallows the next tap (Travel, and the same old bug on the UK front page).
+- While left open, Today's boxes and the hour label move on when the hour changes (checked each minute).
+- The world map file is retried if it failed to load; near the poles the map narrows so the wrap-round cut doesn't show.
+- Adding a destination with storage full says so; UK air quality cell no longer clears on a same-place refresh; Settings → Compare → Settings no longer keeps "Back to Travel"; soil temperature no longer downloaded for Travel; v167's unused map files removed from the phone's saved geo files.
+Not changed (noted): slider labels for screen readers (same gap as the UK page); graph hour labels can look odd for a destination hour falling in the UK's own spring-forward hour (rare).
+
 ### Shared destinations (GitHub precache) — LEFT OUT FOR NOW (26 Nov 2026)
 User's call before the build: not worth it yet (other users are unlikely to want each other's destinations). Nothing below is built; no relay Worker change. Kept for if it comes back:
 - Any user can add a destination through the favourites relay. Stored as rounded coordinates. Sticky: never removed automatically.

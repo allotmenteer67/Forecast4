@@ -43,7 +43,7 @@ function travelLoadWorld() {
   travelWorldLoading = get
     .then(r => (r.ok ? r.json() : null))
     .then(w => {
-      if (!w || !w.countries) return false;
+      if (!w || !w.countries) { travelWorldLoading = null; return false; } // try again next time
       const rings = [];
       w.countries.forEach(c => c.forEach(r => rings.push(travelDecode(r, w.q))));
       const lakes = (w.lakes || []).map(r => travelDecode(r, w.q));
@@ -117,7 +117,11 @@ async function drawTravelMap(canvas, lat, lon) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = TRAVEL_MAP_WATER;
   ctx.fillRect(0, 0, w, h);
-  const { project, boxVisible } = travelProjector(lat, lon, TRAVEL_MAP_WIDTH_KM, w, h);
+  // Near the poles 5,500 km is most of the way round the world, which
+  // would show the cut where the map wraps; keep it under half a turn.
+  const kmLon = 111.32 * Math.cos(lat * Math.PI / 180);
+  const widthKm = Math.min(TRAVEL_MAP_WIDTH_KM, Math.max(800, kmLon * 170));
+  const { project, boxVisible } = travelProjector(lat, lon, widthKm, w, h);
 
   if (ok && travelWorld) {
     const W = travelWorld;
@@ -148,4 +152,5 @@ async function drawTravelMap(canvas, lat, lon) {
   ctx.arc(x, y, 3.5, 0, Math.PI * 2);
   ctx.fillStyle = "#d0342c";
   ctx.fill();
+  return !!ok;
 }

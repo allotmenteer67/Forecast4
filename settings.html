@@ -36,7 +36,8 @@
             var ref = document.referrer ? new URL(document.referrer) : null;
             if (ref && ref.origin === location.origin) {
               if (/\/travel\.html$/.test(ref.pathname)) sessionStorage.setItem("cloude:settingsFrom", "travel");
-              else if (/\/(index\.html)?$/.test(ref.pathname)) sessionStorage.removeItem("cloude:settingsFrom");
+              // Only Help (and Settings itself) keep the way back to Travel.
+              else if (!/\/(help|settings)\.html$/.test(ref.pathname)) sessionStorage.removeItem("cloude:settingsFrom");
             }
             if (sessionStorage.getItem("cloude:settingsFrom") === "travel") {
               var a = document.getElementById("settingsBack");

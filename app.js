@@ -7897,6 +7897,9 @@ function attachSavedPlaceSwipe(el, excludeSelector) {
   let startX = null, startY = null, pointerId = null;
 
   el.addEventListener("pointerdown", e => {
+    // A swipe produces no click on iOS, so a leftover flag would swallow
+    // the next real tap on a cell (found in the 26 Nov review).
+    savedPlaceSwiped = false;
     if (pointerId !== null) return;
     if (excludeSelector && e.target.closest(excludeSelector)) return; // let this control handle its own gesture entirely
     pointerId = e.pointerId;

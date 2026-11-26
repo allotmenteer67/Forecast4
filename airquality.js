@@ -425,7 +425,11 @@ function buildAirQualityHeadlineCell() {
   return aqBuildCell("daqi", reading);
 }
 
+// New place: start afresh. A refresh of the same place keeps what's
+// there (no "–" flash, no extra download).
 document.addEventListener("cloude:location-ready", () => {
+  if (typeof state === "undefined" || typeof state.lat !== "number") return;
+  if (aqUkCache && aqUkCache.key === aqUkKey()) return;
   aqUkCache = null;
   aqUkLastAttempt = { key: null, at: 0 };
 });

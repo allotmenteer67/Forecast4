@@ -629,7 +629,11 @@
 // Soil Temp dropped from Travel, "more boxes below" hint on Travel.
 // Bumped to v171: Travel shows every box when the page fits the screen.
 // Bumped to v172: hourly graphs on the Travel page.
-const SHELL_CACHE_NAME = "cloude-shell-v172";
+// Bumped to v173: fixes from the 26 Nov fresh review of the Travel page
+// (expired saved forecast, downloads kept when switching, one download at
+// a time, date labels across clock changes, tap after a swipe, "now"
+// moving on while open, map retry, poles). See DECISIONS.md.
+const SHELL_CACHE_NAME = "cloude-shell-v173";
 const SHELL_FILES = [
   "index.html",
   "solar.html",
@@ -754,6 +758,10 @@ self.addEventListener("activate", event => {
           .filter(n => n !== SHELL_CACHE_NAME && n !== GEO_CACHE_NAME)
           .map(n => caches.delete(n))
       ))
+      // v173: v167's Travel map files, no longer used, out of the geo cache.
+      .then(() => caches.open(GEO_CACHE_NAME))
+      .then(geo => Promise.all(["data/world-110m.json", "data/world-50m.json"].map(f => geo.delete(f))))
+      .catch(() => {})
       .then(() => self.clients.claim())
   );
 });

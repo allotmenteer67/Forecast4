@@ -88,8 +88,16 @@
       return Array.isArray(list) ? list.filter(d => d && typeof d.lat === "number" && typeof d.lon === "number") : [];
     } catch { return []; }
   }
+  // Returns false if the phone's storage is full even after clearing
+  // the other destinations' saved forecasts.
   function saveDestinations(list) {
-    try { localStorage.setItem(DEST_KEY, JSON.stringify(list)); } catch {}
+    const text = JSON.stringify(list);
+    try { localStorage.setItem(DEST_KEY, text); return true; } catch {}
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith(CACHE_PREFIX)).forEach(k => localStorage.removeItem(k));
+      localStorage.setItem(DEST_KEY, text);
+      return true;
+    } catch { return false; }
   }
   function loadCurrentId() {
     try { return localStorage.getItem(CURRENT_KEY); } catch { return null; }
@@ -170,7 +178,7 @@
 
   const HOURLY_FIELDS = [
     "temperature_2m", "precipitation", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
-    "pressure_msl", "soil_temperature_0cm", "dewpoint_2m", "apparent_temperature",
+    "pressure_msl", "dewpoint_2m", "apparent_temperature",
     "direct_normal_irradiance", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high"
   ];
 
@@ -246,7 +254,6 @@
       gust: blend("wind_gusts_10m", "mid", 1),
       dir,
       pressure: blend("pressure_msl", "mid", 1),
-      soilTemperature: blend("soil_temperature_0cm", "mid", 1),
       dewPoint: blend("dewpoint_2m", "mid", 1),
       feelsLike: blend("apparent_temperature", "mid", 1),
       sunFrac,
@@ -278,11 +285,17 @@
   }
 
   let loadGen = 0;
+  const inFlight = new Set(); // destination ids being downloaded right now
   async function refresh(force) {
     const dest = view.dest;
     if (!dest) return;
     const saved = loadSaved(dest.id);
     if (!force && saved && Date.now() - saved.fetchedAt < REFRESH_AFTER_MS) return;
+    // One download per destination at a time (iOS can fire several
+    // "back on screen" events together). A forced refresh while one is
+    // already running just waits for that one.
+    if (inFlight.has(dest.id)) return;
+    inFlight.add(dest.id);
     const gen = ++loadGen;
     view.loading = true;
     view.lastError = null;
@@ -298,11 +311,14 @@
     } catch (e) {
       error = e;
     }
+    inFlight.delete(dest.id);
+    // Always keep a finished download, even if you've moved on to another
+    // destination meanwhile, so it's there offline later (review fix).
+    const payload = fc ? { fetchedAt: Date.now(), fc, aq: aq || (saved && saved.aq) || null } : null;
+    if (payload) storeSaved(dest.id, payload);
     if (gen !== loadGen || view.dest !== dest) return;
     view.loading = false;
-    if (fc) {
-      const payload = { fetchedAt: Date.now(), fc, aq: aq || (saved && saved.aq) || null };
-      storeSaved(dest.id, payload);
+    if (payload) {
       applySaved(payload);
     } else {
       view.lastError = (error && error.message) || "Couldn't load the weather";
@@ -327,6 +343,9 @@
     let idx = -1;
     for (let i = 0; i < fc.times.length; i++) { if (fc.times[i] <= now) idx = i; else break; }
     if (idx < 0 && fc.times.length && fc.times[0] > now) idx = 0;
+    // A saved forecast that has entirely run out: no "now" in it at all
+    // (review fix, v173: it used to show its last hour as Today).
+    if (fc.times.length && now >= fc.times[fc.times.length - 1] + 3600) return -1;
     return idx;
   }
 
@@ -636,7 +655,7 @@
     const n0 = Math.max(0, nowIndex());
     const idx = [];
     for (let i = n0; i < Math.min(fc.times.length, n0 + loadHourRange()); i++) idx.push(i);
-    const pick = arr => idx.map(i => (arr[i] === undefined ? null : arr[i]));
+    const pick = arr => idx.map(i => (!arr || arr[i] === undefined ? null : arr[i]));
     const sunriseByDate = {}, sunsetByDate = {};
     fc.sunrise.forEach((t, d) => {
       const rise = localIso(t, tz);
@@ -652,7 +671,6 @@
       windGust: pick(fc.gust),
       windDirection: pick(fc.dir),
       pressure: pick(fc.pressure),
-      soilTemperature: pick(fc.soilTemperature),
       dewPoint: pick(fc.dewPoint),
       feelsLike: pick(fc.feelsLike),
       skyLow: pick(fc.cloudLow),
@@ -739,7 +757,10 @@
     if (view.day === 0) {
       el.dateText.textContent = loadHourRange() === 48 ? "Today and Tomorrow" : "Today";
     } else {
-      const t = (n0 >= 0 ? fc.times[n0] : Date.now() / 1000) + view.day * 86400;
+      // From the day the boxes are actually showing (local day keys),
+      // not "now + N×24h", which is a day out across a clock change.
+      const sel = n0 >= 0 ? currentIndices() : { indices: [] };
+      const t = sel.indices.length ? fc.times[sel.indices[0]] : Date.now() / 1000 + view.day * 86400;
       el.dateText.textContent = longDayText(t, view.dest.tz);
     }
   }
@@ -786,9 +807,15 @@
 
   function renderDateRange() {
     if (!view.dest) return;
-    const now = Date.now() / 1000;
-    el.dateMid.textContent = shortDayText(now + 2 * 86400, view.dest.tz);
-    el.dateEnd.textContent = shortDayText(now + 4 * 86400, view.dest.tz);
+    // Local midday of today, then whole local days on from it: midday
+    // never crosses into the wrong date whatever the clock change.
+    const tz = view.dest.tz;
+    const nowSec = Date.now() / 1000;
+    const offset = tzOffsetMinutes(tz, new Date(nowSec * 1000)) * 60;
+    const localMidnight = Math.floor((nowSec + offset) / 86400) * 86400;
+    const dayAt = d => localMidnight + d * 86400 + 12 * 3600 - offset;
+    el.dateMid.textContent = shortDayText(dayAt(2), tz);
+    el.dateEnd.textContent = shortDayText(dayAt(4), tz);
   }
 
   function renderClock() {
@@ -820,7 +847,8 @@
     const key = `${d.id}|${el.timeCard.clientWidth}|${document.documentElement.dataset.theme || ""}`;
     if (mapDrawnFor !== key) {
       mapDrawnFor = key;
-      drawTravelMap(el.map, d.lat, d.lon);
+      // If the world map file couldn't load, try again next time round.
+      Promise.resolve(drawTravelMap(el.map, d.lat, d.lon)).then(ok => { if (ok === false && mapDrawnFor === key) mapDrawnFor = null; });
     }
   }
 
@@ -961,7 +989,10 @@
     };
     const list = loadDestinations();
     if (!list.some(d => d.id === dest.id)) list.push(dest);
-    saveDestinations(list);
+    if (!saveDestinations(list)) {
+      el.searchStatus.textContent = "Couldn't save: this phone's storage for Cloude is full.";
+      return;
+    }
     el.searchInput.value = "";
     el.searchResults.innerHTML = "";
     el.searchStatus.textContent = `${dest.name} added.`;
@@ -1025,6 +1056,7 @@
   (function () {
     let sx = null, sy = null, pid = null, swiped = false;
     el.headline.addEventListener("pointerdown", e => {
+      swiped = false; // a swipe makes no click on iOS, so don't let it eat the next tap
       if (pid !== null || e.target.closest("input, #travelRefresh")) return;
       pid = e.pointerId; sx = e.clientX; sy = e.clientY;
     });
@@ -1059,11 +1091,22 @@
   window.addEventListener("resize", () => { if (view.dest) { renderTimeCard(); fitGrid(); } });
 
   setInterval(() => { if (!document.hidden) renderClock(); }, 15000);
+  // Each minute: once the hour has moved on (or the destination has
+  // passed midnight), move Today's boxes and the hour slider with it;
+  // every 5 minutes, check whether the forecast wants re-downloading.
+  let lastNowIdx = null, ticks = 0;
   setInterval(() => {
     if (document.hidden || !view.dest) return;
-    renderStatus();
-    refresh(false);
-  }, 5 * 60000);
+    const n0 = nowIndex();
+    if (n0 !== lastNowIdx) {
+      if (lastNowIdx !== null) { renderDateText(); renderHourLabel(); renderDateRange(); renderGrid(); }
+      lastNowIdx = n0;
+    }
+    if (++ticks % 5 === 0) {
+      renderStatus();
+      refresh(false);
+    }
+  }, 60000);
 
   // ---- Start ----
   const list = loadDestinations();

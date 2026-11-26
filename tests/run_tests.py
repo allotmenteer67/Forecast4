@@ -1020,6 +1020,41 @@ def travel_keeps_last_forecast_offline(browser):
     ctx.close()
 
 @check
+def travel_expired_saved_forecast_says_so(browser):
+    # Review fix: a saved forecast entirely in the past used to show its
+    # last hour as Today.
+    ctx = travel_context(browser)
+    pg = ctx.new_page(); pg.errors = []; pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    travel_add_shanghai(pg)
+    pg.evaluate("""() => { const k = Object.keys(localStorage).find(k => k.startsWith('cloude-travelcache:'));
+        const v = JSON.parse(localStorage.getItem(k)); const shift = 7 * 86400;
+        v.fetchedAt -= shift * 1000; v.fc.times = v.fc.times.map(t => t - shift);
+        localStorage.setItem(k, JSON.stringify(v)); }""")
+    ctx.unroute("https://api.open-meteo.com/**"); ctx.unroute("https://air-quality-api.open-meteo.com/**")
+    pg.reload(); pg.wait_for_timeout(1500)
+    expect("run out" in pg.inner_text("#travelGrid"), f"expired forecast still shown: {pg.inner_text('#travelGrid')[:80]!r}")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
+def travel_download_kept_after_switching_away(browser):
+    # Review fix: switching destination mid-download threw the download away.
+    ctx = travel_context(browser)
+    pg = ctx.new_page(); pg.errors = []; pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    travel_add_shanghai(pg)
+    pg.evaluate("""() => { localStorage.setItem('cloude-travel:destinations', JSON.stringify([
+        ...JSON.parse(localStorage.getItem('cloude-travel:destinations')),
+        { id: '35.68,139.69', name: 'Tokyo', admin1: '', country: 'Japan', cc: 'JP', lat: 35.68, lon: 139.69, tz: 'Asia/Tokyo' }]));
+        Object.keys(localStorage).filter(k => k.startsWith('cloude-travelcache:')).forEach(k => localStorage.removeItem(k)); }""")
+    pg.reload(); pg.wait_for_timeout(50)
+    pg.click("#travelChip"); pg.click("#travelMenuList button >> text=Tokyo")  # switch while Shanghai loads
+    pg.wait_for_timeout(2000)
+    n = pg.evaluate("Object.keys(localStorage).filter(k => k.startsWith('cloude-travelcache:')).length")
+    expect(n == 2, f"only {n} of 2 downloads kept after switching")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
 def travel_cells_own_ticks(browser):
     ctx = travel_context(browser)
     pg = ctx.new_page(); pg.errors = []; pg.on("pageerror", lambda e: pg.errors.append(str(e)))
