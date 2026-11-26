@@ -610,7 +610,16 @@
 // Bumped to v161: switching place while the previous one is still
 // loading starts the new place straight away and ignores the old load's
 // late results (it used to jump back to the old place and stall).
-const SHELL_CACHE_NAME = "cloude-shell-v165";
+// Bumped to v166: slow start after a long gap (26 Nov 2026). Every file,
+// including the GitHub-refreshed data/*.json (precache-weather.json,
+// shared-ffv, history.json...), was served "saved copy first, check in
+// the background". After hours away the saved precache-weather.json was
+// hours old, so the app rejected it as stale and fetched all nine
+// forecasters live: 20+ seconds. Those data files now come from the
+// network first (saved copy only if there's no answer within
+// DATA_NETWORK_TIMEOUT_MS). The map/geo files are now checked for a newer
+// copy at most once a day instead of on every open. See DECISIONS.md.
+const SHELL_CACHE_NAME = "cloude-shell-v166";
 const SHELL_FILES = [
   "index.html",
   "solar.html",
@@ -730,6 +739,41 @@ self.addEventListener("message", event => {
   }
 });
 
+// Data files GitHub keeps refreshing (anything under data/ that isn't a
+// geo file): network first, because a saved copy from the last visit is
+// usually too old to use. Falls back to the saved copy if the network
+// hasn't answered within this time, or there is no connection.
+const DATA_NETWORK_TIMEOUT_MS = 5000;
+// Geo files (rivers, terrain, coastline, coast map tiles) change only when
+// they're rebuilt, so they're served straight from the saved copy and
+// checked for a newer one at most once a day.
+const GEO_RECHECK_MS = 24 * 60 * 60 * 1000;
+const GEO_CHECKED_HEADER = "x-cloude-checked";
+
+function isRefreshedDataRequest(pathname) {
+  return pathname.includes("/data/") && !isGeoDataRequest(pathname);
+}
+
+// Fetch and save. Resolves to the response, or null if offline/failed.
+function fetchAndStore(cache, request, stamp) {
+  return fetch(request)
+    .then(async response => {
+      if (response.ok) {
+        if (stamp) {
+          // Record when this copy was checked, so the daily re-check knows.
+          const body = await response.clone().blob();
+          const headers = new Headers(response.headers);
+          headers.set(GEO_CHECKED_HEADER, String(Date.now()));
+          await cache.put(request, new Response(body, { status: response.status, statusText: response.statusText, headers }));
+        } else {
+          await cache.put(request, response.clone());
+        }
+      }
+      return response;
+    })
+    .catch(() => null);
+}
+
 self.addEventListener("fetch", event => {
   const url = new URL(event.request.url);
 
@@ -740,27 +784,57 @@ self.addEventListener("fetch", event => {
   // offline. This service worker is deliberately never in that path.
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
 
-  // Same stale-while-revalidate strategy either way — only WHICH cache
-  // a file lives in differs (see the v58 note above). A geo data file
-  // still gets a background revalidation fetch on every request just
-  // like a shell file does; what changes is that a shell version bump
-  // can no longer evict it.
-  const cacheName = isGeoDataRequest(url.pathname) ? GEO_CACHE_NAME : SHELL_CACHE_NAME;
+  // Refreshed data files: network first, saved copy as the fallback.
+  if (isRefreshedDataRequest(url.pathname)) {
+    event.respondWith(
+      caches.open(SHELL_CACHE_NAME).then(async cache => {
+        const network = fetchAndStore(cache, event.request, false);
+        // Let a slow download finish and update the saved copy even if
+        // the app has already been handed the old one.
+        event.waitUntil(network);
+        const timeout = new Promise(resolve => setTimeout(() => resolve(null), DATA_NETWORK_TIMEOUT_MS));
+        const first = await Promise.race([network, timeout]);
+        if (first) return first;
+        const cached = await cache.match(event.request, { ignoreSearch: true });
+        return cached || (await network) || Response.error();
+      })
+    );
+    return;
+  }
 
+  // Geo files: saved copy first; look for a newer one at most once a day.
+  if (isGeoDataRequest(url.pathname)) {
+    event.respondWith(
+      caches.open(GEO_CACHE_NAME).then(async cache => {
+        const cached = await cache.match(event.request);
+        if (!cached) return (await fetchAndStore(cache, event.request, true)) || Response.error();
+        const checked = Number(cached.headers.get(GEO_CHECKED_HEADER));
+        if (!Number.isFinite(checked) || checked <= 0) {
+          // Saved by an older version with no date: count it as checked now
+          // rather than downloading it all again straight away.
+          const body = await cached.clone().blob();
+          const headers = new Headers(cached.headers);
+          headers.set(GEO_CHECKED_HEADER, String(Date.now()));
+          event.waitUntil(cache.put(event.request, new Response(body, { status: cached.status, statusText: cached.statusText, headers })));
+        } else if (Date.now() - checked > GEO_RECHECK_MS) {
+          event.waitUntil(fetchAndStore(cache, event.request, true));
+        }
+        return cached;
+      })
+    );
+    return;
+  }
+
+  // App files (pages, scripts, styles, icons): stale-while-revalidate as
+  // before — saved copy straight away, fresh copy fetched for next time.
   event.respondWith(
-    caches.open(cacheName).then(async cache => {
+    caches.open(SHELL_CACHE_NAME).then(async cache => {
       // Pages are the same file whatever follows the "?" (coast.html?area=…),
       // so a page is found in the cache without it — otherwise a page
       // opened with a new ?query wouldn't load offline.
       const cached = await cache.match(event.request) ||
         (url.pathname.endsWith(".html") && url.search ? await cache.match(event.request, { ignoreSearch: true }) : undefined);
-      const network = fetch(event.request)
-        .then(response => {
-          if (response.ok) cache.put(event.request, response.clone());
-          return response;
-        })
-        .catch(() => null); // offline — fall back to whatever's cached below
-
+      const network = fetchAndStore(cache, event.request, false);
       return cached || (await network) || Response.error();
     })
   );

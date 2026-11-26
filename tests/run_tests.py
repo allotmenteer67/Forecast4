@@ -22,9 +22,15 @@ BASE = f"http://127.0.0.1:{PORT}"
 LIVE = os.environ.get("LIVE") == "1"
 PHONE = {"width": 375, "height": 667}  # iPhone SE: the smallest screen in use
 
+SERVED = []  # every path the local server was asked for (sw check counts these)
 def serve():
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *a): pass
+        def do_GET(self):
+            SERVED.append(self.path); super().do_GET()
+        def end_headers(self):
+            # Like GitHub Pages, so the browser's own cache behaves the same.
+            self.send_header("Cache-Control", "max-age=600"); super().end_headers()
     H = functools.partial(Quiet, directory=str(ROOT))
     socketserver.TCPServer.allow_reuse_address = True
     s = socketserver.ThreadingTCPServer(("127.0.0.1", PORT), H)
@@ -847,6 +853,38 @@ def bom_paused_everywhere(browser):
     expect("BOM" not in pg.inner_text("body"), "Settings still offers BOM")
     expect(pg.evaluate("typeof REAL_SOURCES === 'undefined' || !REAL_SOURCES.some(s => s.id === 'bom')"), "BOM still in REAL_SOURCES")
     ctx.close()
+
+@check
+def sw_data_files_fresh_and_geo_daily(browser):
+    # 26 Nov 2026: after hours away, the service worker handed the app the
+    # saved precache-weather.json from the last visit, which was too old to
+    # use, so the front page fetched all nine forecasters live (20+ s).
+    # GitHub-refreshed data files must come from the network first; geo
+    # files must not be re-downloaded on every open (once a day at most).
+    probe = ROOT / "data" / "_sw-probe.json"
+    probe.write_text('"old"')
+    ctx = browser.new_context(viewport=PHONE, service_workers="allow")
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    try:
+        pg = ctx.new_page(); pg.goto(f"{BASE}/index.html")
+        pg.wait_for_function("navigator.serviceWorker.controller", timeout=20000)
+        get = "fetch('data/_sw-probe.json').then(r=>r.json())"
+        expect(pg.evaluate(get) == "old", "probe not served")
+        probe.write_text('"new"')
+        expect(pg.evaluate(get) == "new", "data file served from the saved copy, not the network")
+        pg.reload(); pg.wait_for_timeout(1000)
+        expect(pg.evaluate(get) == "new", "data file stale after reopening")
+        geo = "fetch('data/lakes-50m.json').then(r=>r.ok)"
+        expect(pg.evaluate(geo), "geo file not served")
+        pg.wait_for_timeout(500)
+        before = sum(1 for x in SERVED if x.endswith("lakes-50m.json"))
+        for _ in range(3):
+            pg.reload(); pg.wait_for_timeout(800); pg.evaluate(geo)
+        pg.wait_for_timeout(800)
+        after = sum(1 for x in SERVED if x.endswith("lakes-50m.json"))
+        expect(after == before, f"geo file re-downloaded {after - before} times in 3 opens")
+    finally:
+        probe.unlink(missing_ok=True); ctx.close()
 
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""

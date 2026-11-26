@@ -262,6 +262,12 @@ at night, sometimes with poor signal.
 - First run already found: the rain "actual" (Open-Meteo's archive) for TA6 was well under the EA gauges on 15, 19 and 20 Nov (5 vs 10.4, 5.8 vs 15.9, 0.3 vs 3.7 mm). Every rain correction learns against that archive figure. Not acted on yet.
 - Used occasionally, not as rules: an edge-case pass on a calculation (zero, blank, negative, first-ever day, midnight and clock changes, one source wildly out), and a fresh separate review of a bigger change before it goes live. The user asks, or Claude suggests one for a big or risky change.
 
+## How the app's saved files are used (26 Nov 2026, v166)
+- Bug: opening the app after a few hours took 20+ seconds. The service worker served every file "saved copy first, check in the background", including data/precache-weather.json. After a long gap the saved copy was hours old, the app rejected it as stale, and fetched all nine forecasters live.
+- Now: data/*.json files GitHub refreshes (precache-weather, precache-config, shared-ffv, history, backfill, health, weekly-check, mo-spot-record, tide-gauges...) come from the network first, falling back to the saved copy after 5 seconds or when offline.
+- Geo files (waterways, elevation, coastline, lakes, places, data/coast/) come from the saved copy and are checked for a newer one at most once a day, not on every open. That was the v58 intent; the every-open check was a leftover, never chosen.
+- App files (pages, scripts, styles) unchanged: saved copy first, fresh copy for next time.
+
 ## Ratio corrections learn from running totals (23 Nov 2026)
 - Bug: for rain, wind, cloud and sunshine, each day's actual/forecast was averaged. That average is lopsided (0.3 mm forecast, 3 mm fell = "10x too low", capped at 5; 6 mm forecast, 3 mm fell = only "0.5x"), so rain factors at TA7 came out 1.3-1.9 when the models' own totals were within about 10% of reality.
 - Now: each entry keeps recency-weighted running totals of forecast (emaForecast) and actual (emaActual), same 30-day weighting as before, and the factor is actual total / forecast total (still capped 0.1-5). A 0 forecast is part of the total, so dry calls are learned from (supersedes "Zero forecasts are scored, not learned from" above). While the running forecast total is under RATIO_FORECAST_FLOOR (rain 0.2 mm, sunshine 0.2 h, wind 0.5 mph, cloud 1%) the factor is held. Temperature and the other additive conditions are unchanged.
