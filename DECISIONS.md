@@ -282,7 +282,8 @@ Simplified worldwide weather on its own page (travel.html, travel.js, travel-fie
 
 ### Page layout
 - Local time at the top, in the destination's own time zone with DST handled, plus "Xh ahead/behind you". Hour slider and date labels in destination local time.
-- Locator map as a pale background behind the local time: Natural Earth (public domain, no credit needed) world coastline, country borders, state/province borders for big countries, big rivers and lakes, a few large reference cities, a red dot on the destination, roughly 500–600 km across. Static files saved on the phone: no weather data, no API calls. Small continent inset for inland places.
+- Locator map: a small continent map (about 5,500 km across) beside the local time, always shown: country borders, big lakes, water always blue, a red dot on the destination. Natural Earth 110m (public domain, no credit needed), data/world-110m.json, saved on the phone: no weather data, no API calls.
+  - v167 had a detailed 560 km map (coast, borders, state lines, rivers, cities) as a pale background behind the time, with the continent map only as an inset for inland places. Changed in v168 at the user's request: the continent map is the more useful one, and water should be blue. data/world-50m.json removed.
 - Up to 8 headline boxes (4 rows of 2), slightly slimmer than the UK page. More than 8 ticked scrolls.
 - Left out: weather map, sunrise/sunset, moon times, tide, fishing, coast, callout, night moon-icon swap, footnote.
 - No hourly graph behind the cells yet (so no ">" on their labels). Swipe across the weather card moves between destinations, like UK places.

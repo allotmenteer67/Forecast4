@@ -11,7 +11,7 @@
 // - Date slider: today to +4 days. Hour slider: as on the UK page
 //   (24 or 48 hours, from Settings), in the destination's own time.
 // - The destination's local time sits on top, clock changes handled by
-//   the phone's own time zone rules, over a pale locator map
+//   the phone's own time zone rules, beside a small continent map
 //   (travel-map.js).
 // - Cells: same look and fixed order as the UK front page, a little
 //   slimmer, chosen by their own ticks in Settings (travel-fields.js).
@@ -57,7 +57,7 @@
   const el = {
     chip: $("travelChip"), chipLabel: $("travelChipLabel"), menu: $("travelMenu"), menuList: $("travelMenuList"),
     menuManage: $("travelMenuManage"),
-    timeCard: $("travelTimeCard"), map: $("travelMap"), inset: $("travelInset"),
+    timeCard: $("travelTimeCard"), map: $("travelMap"),
     clock: $("travelClock"), place: $("travelPlace"), dayLine: $("travelDayLine"),
     headline: $("travelHeadline"), dateText: $("travelDateText"), refresh: $("travelRefresh"), updated: $("travelUpdated"),
     statusBlock: $("travelStatusBlock"), status: $("travelStatus"), retry: $("travelRetry"),
@@ -728,7 +728,7 @@
     const key = `${d.id}|${el.timeCard.clientWidth}|${document.documentElement.dataset.theme || ""}`;
     if (mapDrawnFor !== key) {
       mapDrawnFor = key;
-      drawTravelMap(el.map, el.inset, d.lat, d.lon);
+      drawTravelMap(el.map, d.lat, d.lon);
     }
   }
 

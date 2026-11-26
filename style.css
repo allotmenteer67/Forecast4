@@ -3413,42 +3413,34 @@ footer {
    colour theme (Settings → Appearance) applies exactly as it does there.
    Only what's new to this page is styled here. */
 
-/* Local time over the pale locator map. */
+/* Local time, with a small continent map on the right (v168: was a
+   detailed map behind the time). */
 .travel-time-card {
-  position: relative;
-  height: 128px;
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
   border-radius: 14px;
-  overflow: hidden;
   margin: 8px 0 12px;
-  background: var(--accent-light);
+  padding: 12px;
+  background: var(--headline-bg);
   box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
 }
 .travel-time-card[hidden] { display: none; }
-.travel-map {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-.travel-inset {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  width: 76px;
-  height: 48px;
-  border-radius: 6px;
-  border: 1px solid rgba(76, 106, 88, 0.3);
-  background: var(--accent-light);
-}
-.travel-inset[hidden] { display: none; }
 .travel-time-text {
-  position: relative;
-  padding: 12px 15px;
-  max-width: 66%;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 3px;
   color: var(--accent-dark);
-  /* A soft wash behind the text so it always reads over the map. */
-  text-shadow: 0 0 6px rgba(255, 255, 255, 0.9), 0 0 2px rgba(255, 255, 255, 0.9);
+}
+.travel-map {
+  flex: 0 0 auto;
+  width: 40%;
+  max-width: 240px;
+  min-height: 92px;
+  border-radius: 10px;
+  border: 1px solid rgba(76, 106, 88, 0.25);
+  display: block;
+  order: 2; /* on the right, where the inset was */
 }
 .travel-clock {
   font-size: 40px;

@@ -622,7 +622,9 @@
 // Bumped to v167: Travel page (travel.html and its scripts, the world
 // locator map files) and the optional UK air quality cell
 // (airquality.js). See DECISIONS.md.
-const SHELL_CACHE_NAME = "cloude-shell-v167";
+// Bumped to v168: Travel map is now just the continent map beside the
+// time (blue water), not a detailed map behind it.
+const SHELL_CACHE_NAME = "cloude-shell-v168";
 const SHELL_FILES = [
   "index.html",
   "solar.html",
@@ -692,8 +694,8 @@ const GEO_DATA_FILES = [
   "data/coastline-50m.json",
   "data/lakes-50m.json",
   "data/places.json",
-  // Travel page locator map (v167), Natural Earth, never changes.
-  "data/world-50m.json",
+  // Travel page locator map (v167; v168 dropped world-50m.json),
+  // Natural Earth, never changes.
   "data/world-110m.json"
 ];
 
