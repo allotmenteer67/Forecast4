@@ -5647,7 +5647,11 @@ function sheetClockLabel(iso) {
   // tomorrow — a bare "02:00" partway along doesn't say whether that's
   // later tonight or the small hours of the next day. Same pattern the
   // Hour slider's own label already uses.
-  const crossesDay = isoDate(d) !== isoDate(new Date());
+  // The Travel page (travel.js) fills state.hourly with the destination's
+  // own local clock times and sets localTodayKey to the destination's
+  // date, so "today" there is judged in the destination, not here.
+  const today = (state.hourly && state.hourly.localTodayKey) || isoDate(new Date());
+  const crossesDay = isoDate(d) !== today;
   return crossesDay ? `${time}, ${formatDateShort(d)}` : time;
 }
 

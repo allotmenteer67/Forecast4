@@ -286,7 +286,7 @@ Simplified worldwide weather on its own page (travel.html, travel.js, travel-fie
   - v167 had a detailed 560 km map (coast, borders, state lines, rivers, cities) as a pale background behind the time, with the continent map only as an inset for inland places. Changed in v168 at the user's request: the continent map is the more useful one, and water should be blue. data/world-50m.json removed.
 - Headline boxes slightly slimmer than the UK page. All ticked boxes show if the page fits the screen; only if it wouldn't does the grid scroll, cut at a row end, never fewer than 8 showing (v171; v167 always stopped at 8, which wasted room on an iPad).
 - Left out: weather map, sunrise/sunset, moon times, tide, fishing, coast, callout, night moon-icon swap, footnote.
-- No hourly graph behind the cells yet (so no ">" on their labels). Swipe across the weather card moves between destinations, like UK places.
+- Hourly graphs (v172): tapping Rain, Temp, Wind, Pressure, Sunshine, Cloud, Dew Point or Feels Like opens the front page's own graph sheet (openHourlySheet), fed the destination's blended hours as local clock times (state.hourly.localTodayKey makes the date labels judge "today" there). UV, visibility, air quality and pollen have no graph (no ">"). Swipe across the weather card moves between destinations, like UK places.
 - The last forecast downloaded for each destination is kept on the phone (key cloude-travelcache:<id>, outside backups) so it shows on landing with no signal, with "Updated Xh ago". Re-downloaded when over 20 minutes old.
 
 ### Look

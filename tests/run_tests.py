@@ -982,6 +982,27 @@ def travel_page_regional_blend_and_local_time(browser):
     ctx.close()
 
 @check
+def travel_hourly_graphs_in_local_time(browser):
+    ctx = travel_context(browser)
+    pg = ctx.new_page(); pg.errors = []; pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    travel_add_shanghai(pg)
+    pg.click("#travelGrid .headline-cell.travel-has-graph >> nth=0"); pg.wait_for_timeout(500)
+    expect(pg.is_visible("#sheet"), "tapping Rain didn't open the graph")
+    expect(pg.inner_text("#sheetTitle") == "Rain", pg.inner_text("#sheetTitle"))
+    expect(pg.locator("#sheetBody svg rect").count() >= 24, "no rain bars drawn")
+    # The graph's hours are Shanghai's clock, starting with the hour now there.
+    first = pg.evaluate("state.hourly.times[0]")
+    want = pg.evaluate("""(() => { const p = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',hour12:false}).format(new Date()); return String(Number(p) % 24).padStart(2,'0') + ':00'; })()""")
+    expect(first.endswith(want), f"graph starts at {first}, not Shanghai's current hour {want}")
+    expect(pg.inner_text("#sheetFootnote").startswith("Total across shown"), "rain total line missing")
+    pg.click("#sheetClose"); pg.wait_for_timeout(400)
+    # UV has no graph.
+    uv = pg.evaluate("[...document.querySelectorAll('#travelGrid .headline-label')].find(l => l.textContent.trim().startsWith('UV'))?.classList.contains('travel-no-graph')")
+    expect(uv, "UV label shows a > although it has no graph")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
 def travel_keeps_last_forecast_offline(browser):
     ctx = travel_context(browser)
     pg = ctx.new_page(); pg.errors = []; pg.on("pageerror", lambda e: pg.errors.append(str(e)))

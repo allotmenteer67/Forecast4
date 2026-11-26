@@ -628,7 +628,8 @@
 // Bumped to v170: Travel map file renamed (old cached copy drew only sea),
 // Soil Temp dropped from Travel, "more boxes below" hint on Travel.
 // Bumped to v171: Travel shows every box when the page fits the screen.
-const SHELL_CACHE_NAME = "cloude-shell-v171";
+// Bumped to v172: hourly graphs on the Travel page.
+const SHELL_CACHE_NAME = "cloude-shell-v172";
 const SHELL_FILES = [
   "index.html",
   "solar.html",

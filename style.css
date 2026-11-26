@@ -3476,9 +3476,12 @@ footer {
 .travel-grid .headline-value {
   font-size: 21px;
 }
-/* No graph behind these cells, so no ">" on the labels. */
-.travel-grid .headline-label::after {
+/* Cells with no graph behind them (UV, visibility) have no ">". */
+.travel-grid .headline-label.travel-no-graph::after {
   display: none;
+}
+.travel-grid .headline-cell.travel-has-graph {
+  cursor: pointer;
 }
 .travel-grid-scrolls {
   overflow-y: auto;

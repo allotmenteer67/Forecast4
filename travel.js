@@ -494,6 +494,14 @@
     else if (field === "sunshine") labelText = hourly ? "Sun" : `${HEADLINE_LABEL_NAME.sunshine} ${unitLabel("sunshine")}`;
     else labelText = standardLabel(field);
     const { cell, valueEl, valueRow } = cellShell(field, labelText);
+    // Tap for the hourly graph, the same sheet as the front page. UV and
+    // visibility have none, so no ">" on those labels.
+    if (GRAPH_FIELDS.has(field)) {
+      cell.classList.add("travel-has-graph");
+      cell.addEventListener("click", () => openTravelSheet(field));
+    } else {
+      cell.querySelector(".headline-label").classList.add("travel-no-graph");
+    }
     if (!indices.length) { valueEl.textContent = "–"; return cell; }
 
     switch (field) {
@@ -606,6 +614,55 @@
         valueEl.textContent = "–";
     }
     return cell;
+  }
+
+  // ---- Hourly graphs ----
+  // The front page's own graph sheet (openHourlySheet in app.js), fed the
+  // destination's blended hours. The times are handed over as the
+  // destination's local clock times, so the graph's hour labels and the
+  // readout read in local time there, as everything else on this page.
+  const GRAPH_FIELDS = new Set(["rain", "temperature", "wind", "pressure", "sunshine", "cloud", "dewPoint", "feelsLike"]);
+
+  function localIso(sec, tz) {
+    const parts = fmt(tz, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(sec * 1000));
+    const get = t => parts.find(p => p.type === t).value;
+    return `${get("year")}-${get("month")}-${get("day")}T${String(Number(get("hour")) % 24).padStart(2, "0")}:${get("minute")}`;
+  }
+
+  function openTravelSheet(field) {
+    const fc = view.fc;
+    if (!fc || typeof openHourlySheet !== "function") return;
+    const tz = view.dest.tz;
+    const n0 = Math.max(0, nowIndex());
+    const idx = [];
+    for (let i = n0; i < Math.min(fc.times.length, n0 + loadHourRange()); i++) idx.push(i);
+    const pick = arr => idx.map(i => (arr[i] === undefined ? null : arr[i]));
+    const sunriseByDate = {}, sunsetByDate = {};
+    fc.sunrise.forEach((t, d) => {
+      const rise = localIso(t, tz);
+      sunriseByDate[rise.slice(0, 10)] = rise;
+      if (fc.sunset[d]) sunsetByDate[rise.slice(0, 10)] = localIso(fc.sunset[d], tz);
+    });
+    Object.assign(state.hourly, {
+      status: "ready",
+      times: idx.map(i => localIso(fc.times[i], tz)),
+      precipitation: pick(fc.rain),
+      temperature: pick(fc.temperature),
+      windSpeed: pick(fc.wind),
+      windGust: pick(fc.gust),
+      windDirection: pick(fc.dir),
+      pressure: pick(fc.pressure),
+      soilTemperature: pick(fc.soilTemperature),
+      dewPoint: pick(fc.dewPoint),
+      feelsLike: pick(fc.feelsLike),
+      skyLow: pick(fc.cloudLow),
+      skyMid: pick(fc.cloudMid),
+      skyHigh: pick(fc.cloudHigh),
+      sunriseByDate,
+      sunsetByDate,
+      localTodayKey: dayKey(Date.now() / 1000, tz)
+    });
+    openHourlySheet(field);
   }
 
   function renderGrid() {
