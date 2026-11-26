@@ -886,6 +886,167 @@ def sw_data_files_fresh_and_geo_daily(browser):
     finally:
         probe.unlink(missing_ok=True); ctx.close()
 
+# ---------- Travel page (26 Nov 2026) ----------
+
+TRAVEL_PLACE = {"id": 1, "name": "Shanghai", "latitude": 31.2222, "longitude": 121.4581, "country": "China",
+                "country_code": "CN", "admin1": "Shanghai", "timezone": "Asia/Shanghai"}
+
+def travel_om_body(url):
+    """Open-Meteo forecast in unix time. Forecaster k gives rain k+1 and
+    temperature 10+k, so the blend is easy to check: rain is the average,
+    everything else the middle value."""
+    import time as _t
+    from urllib.parse import urlparse, parse_qs
+    q = parse_qs(urlparse(url).query)
+    vars_ = q["hourly"][0].split(",")
+    models = [m for m in q.get("models", [""])[0].split(",") if m]
+    t0 = int(_t.time() // 86400 * 86400) - 8 * 3600  # midnight in Shanghai
+    times = [t0 + 3600 * i for i in range(120)]
+    h = {"time": times}
+    def val(v, k):
+        return {"precipitation": k + 1, "wind_direction_10m": 90 * k, "temperature_2m": 10 + k,
+                "direct_normal_irradiance": 500, "visibility": 20000, "uv_index": 4}.get(v, 10 + k)
+    if not models:
+        for v in vars_: h[v] = [val(v, 0)] * 120
+    for k, m in enumerate(models):
+        for v in vars_: h[f"{v}_{m}"] = [val(v, k)] * 120
+    body = {"timezone": "Asia/Shanghai", "hourly": h}
+    if "daily" in q:
+        body["daily"] = {"time": [t0 + 86400 * d for d in range(5)],
+                         "sunrise": [t0 + 86400 * d + 6 * 3600 + 1800 for d in range(5)],
+                         "sunset": [t0 + 86400 * d + 17 * 3600 for d in range(5)]}
+    return json.dumps(body)
+
+def travel_aq_body(url, pm25=40):
+    import time as _t
+    from urllib.parse import urlparse, parse_qs
+    q = parse_qs(urlparse(url).query)
+    t0 = int(_t.time() // 3600 * 3600) - 30 * 3600
+    times = [t0 + 3600 * i for i in range(150)]
+    h = {"time": times}
+    for f in q["hourly"][0].split(","):
+        h[f] = [pm25 if f == "pm2_5" else (0 if "pollen" in f or "aqi" in f else 5)] * 150
+    return json.dumps({"hourly": h})
+
+def travel_context(browser, seen=None, offline=False):
+    ctx = browser.new_context(viewport=PHONE, device_scale_factor=2, is_mobile=True, has_touch=True)
+    ctx.route(lambda u: not u.startswith(BASE), lambda r: r.abort())
+    if not offline:
+        def om(route):
+            if seen is not None: seen.append(route.request.url)
+            route.fulfill(status=200, content_type="application/json", body=travel_om_body(route.request.url))
+        ctx.route("https://api.open-meteo.com/**", om)
+        ctx.route("https://geocoding-api.open-meteo.com/**", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps({"results": [TRAVEL_PLACE]})))
+        ctx.route("https://air-quality-api.open-meteo.com/**", lambda r: r.fulfill(status=200, content_type="application/json", body=travel_aq_body(r.request.url)))
+    return ctx
+
+def travel_add_shanghai(pg):
+    pg.goto(f"{BASE}/travel.html"); pg.wait_for_timeout(800)
+    pg.fill("#travelSearchInput", "Shanghai"); pg.click("#travelSearchButton"); pg.wait_for_timeout(400)
+    pg.click(".travel-search-result"); pg.wait_for_timeout(1500)
+
+def cell_text(pg, label):
+    return pg.evaluate("""l => { const c = [...document.querySelectorAll('#travelGrid .headline-cell')]
+        .find(c => c.querySelector('.headline-label').textContent.trim().toUpperCase().startsWith(l));
+        return c ? c.querySelector('.headline-value-row').textContent.trim() : null; }""", label)
+
+@check
+def travel_page_regional_blend_and_local_time(browser):
+    seen = []
+    ctx = travel_context(browser, seen)
+    pg = ctx.new_page(); pg.errors = []; pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    travel_add_shanghai(pg)
+    pg.screenshot(path=str(OUT / "travel.png"))
+    multi = [u for u in seen if "models=" in u]
+    expect(multi, "no multi-model forecast request")
+    from urllib.parse import urlparse, parse_qs
+    models = parse_qs(urlparse(multi[0]).query)["models"][0].split(",")
+    expect(models == ["ecmwf_ifs025", "jma_seamless", "cma_grapes_global", "icon_seamless"], f"East Asia forecasters wrong: {models}")
+    expect(parse_qs(urlparse(multi[0]).query)["timezone"][0] == "Asia/Shanghai", "not asked in the destination's time zone")
+    # Hourly view: rain is the average of 1,2,3,4 = 2.5 mm; temperature
+    # the middle of 10..13 = 11.5 -> "12" (rounds like the UK page).
+    pg.evaluate("const s=document.getElementById('travelHourSlider'); s.value='3'; s.dispatchEvent(new Event('input'))")
+    pg.wait_for_timeout(200)
+    expect(cell_text(pg, "RAIN") == "2.5", f"rain not the average: {cell_text(pg, 'RAIN')}")
+    expect(cell_text(pg, "TEMP") == "12", f"temperature not the middle value: {cell_text(pg, 'TEMP')}")
+    # Local clock shows Shanghai time, and the date slider stops at +4 days.
+    want = pg.evaluate("new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date())")
+    expect(pg.inner_text("#travelClock") == want, f"clock {pg.inner_text('#travelClock')} not Shanghai time {want}")
+    expect(pg.get_attribute("#travelDateSlider", "max") == "4", "date slider isn't today to +4 days")
+    # China gets the China index (PM2.5 at 40 -> 56, "Good").
+    aq = cell_text(pg, "AIR CHINA")
+    expect(aq and aq.startswith("56") and "Good" in aq, f"China air quality index wrong: {aq}")
+    # Pollen is Europe only.
+    expect(cell_text(pg, "POLLEN") is None, "pollen shown outside Europe")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
+def travel_keeps_last_forecast_offline(browser):
+    ctx = travel_context(browser)
+    pg = ctx.new_page(); pg.errors = []; pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    travel_add_shanghai(pg)
+    # Pretend that download was 5 hours ago, then lose the signal.
+    pg.evaluate("""() => { const k = Object.keys(localStorage).find(k => k.startsWith('cloude-travelcache:'));
+        const v = JSON.parse(localStorage.getItem(k)); v.fetchedAt -= 5 * 3600e3; localStorage.setItem(k, JSON.stringify(v)); }""")
+    ctx.unroute("https://api.open-meteo.com/**"); ctx.unroute("https://air-quality-api.open-meteo.com/**")
+    pg.reload(); pg.wait_for_timeout(2000)
+    expect(cell_text(pg, "RAIN") not in (None, "–"), "saved forecast not shown with no signal")
+    upd = pg.inner_text("#travelUpdated")
+    expect("5h" in upd, f"age of the saved forecast not shown: {upd!r}")
+    expect(pg.is_hidden("#travelStatusBlock"), "error block shown although a saved forecast is there")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
+def travel_cells_own_ticks(browser):
+    ctx = travel_context(browser)
+    pg = ctx.new_page(); pg.errors = []; pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(f"{BASE}/settings.html")
+    pg.evaluate("""localStorage.setItem('forecast-compare:headlineToggles', JSON.stringify({pressure:false, sunshine:true, cloud:true, dewPoint:true}));
+                   localStorage.removeItem('cloude-travel:fields')""")
+    pg.reload(); pg.wait_for_timeout(800)
+    t = pg.evaluate("loadTravelToggles()")
+    expect(t["uv"] and t["airQuality"] and not t["pressure"] and t["cloud"] and t["dewPoint"], f"first copy of the ticks wrong: {t}")
+    # Changing a UK tick afterwards leaves Travel alone.
+    pg.evaluate("saveHeadlineToggle('pressure', true)")
+    expect(not pg.evaluate("loadTravelToggles().pressure"), "Travel ticks followed a later UK change")
+    expect(pg.locator("#travelToggles input").count() == 10, "Travel ticks missing from Settings")
+    # More than 8 boxes ticked: the grid scrolls.
+    pg.evaluate("TRAVEL_OPTIONAL_FIELDS.forEach(f => saveTravelToggle(f, true))")
+    travel_add_shanghai(pg)
+    expect(pg.evaluate("document.getElementById('travelGrid').classList.contains('travel-grid-scrolls')"), "more than 8 cells don't scroll")
+    expect(not pg.errors, pg.errors)
+    ctx.close()
+
+@check
+def air_quality_indices(browser):
+    pg = new_page(browser)
+    pg.goto(f"{BASE}/travel.html"); pg.wait_for_timeout(500)
+    r = pg.evaluate("""() => {
+      const n = 30, flat = v => new Array(n).fill(v);
+      const data = { times: [...Array(n).keys()].map(i => i * 3600), hourly: {
+        pm2_5: flat(40), pm10: flat(20), nitrogen_dioxide: flat(10), ozone: flat(20), sulphur_dioxide: flat(5), carbon_monoxide: flat(300) } };
+      const last = s => { const c = aqComputeHourly(data, s); return [c.index[n - 1], c.main[n - 1]]; };
+      return { daqi: last('daqi'), india: last('india'), china: last('china'), band: aqBand('daqi', 4).word };
+    }""")
+    expect(r["daqi"] == [4, "pm2_5"], f"DAQI wrong: {r['daqi']}")
+    expect(r["india"] == [67, "pm2_5"], f"India AQI wrong: {r['india']}")
+    expect(r["china"] == [56, "pm2_5"], f"China AQI wrong: {r['china']}")
+    expect(r["band"] == "Moderate", r["band"])
+    expect(not pg.errors, pg.errors)
+
+@check
+def front_page_abroad_line_and_air_quality_cell(browser):
+    pg = new_page(browser)
+    pg.goto(f"{BASE}/index.html"); pg.wait_for_timeout(1500)
+    pg.click("#placeChip"); pg.wait_for_timeout(200)
+    expect(pg.locator("#placeMenuList a[href='travel.html']").count() == 1, "no Abroad… line in the place menu")
+    expect(not pg.evaluate("loadHeadlineToggles().airQuality"), "air quality cell should be off by default")
+    pg.evaluate("saveHeadlineToggle('airQuality', true); state.lat = 51.1; state.lon = -3.0; renderHeadline()")
+    expect(pg.evaluate("typeof buildAirQualityHeadlineCell") == "function", "airquality.js not loaded on the front page")
+    expect(not pg.errors, pg.errors)
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""
     serve()

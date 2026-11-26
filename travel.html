@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <script>
+    // Same anti-flash theme step as every other page (see index.html).
+    (function () {
+      try {
+        var theme = localStorage.getItem("forecast-compare:theme");
+        if (theme && theme !== "mint") document.documentElement.dataset.theme = theme;
+      } catch {}
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#2f6f4f">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cloude">
+  <title>Cloude – Travel</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Travel page (26 Nov 2026): simplified worldwide weather, on its
+       own page so the UK front page and its machinery are untouched. A
+       plain blend of four forecasters chosen by region — no FFV, no rain
+       gauges, no shared corrections. See travel.js and DECISIONS.md. -->
+  <main class="app app-travel">
+    <header>
+      <div class="title-bar">
+        <a href="settings.html" class="settings-icon-button" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="13" cy="5" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="10" x2="18" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="7" cy="10" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="15" x2="18" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="15" cy="15" r="2.3" fill="currentColor"/>
+          </svg>
+        </a>
+        <h1>Cloude</h1>
+        <div class="title-bar-right">
+          <button id="travelChip" class="place-chip" type="button" aria-haspopup="true" aria-expanded="false">
+            <span id="travelChipLabel">Abroad</span>
+            <span class="place-chip-caret" aria-hidden="true">&#9662;</span>
+          </button>
+        </div>
+        <div id="travelMenu" class="place-menu" hidden>
+          <div id="travelMenuList"></div>
+          <button id="travelMenuManage" class="place-menu-item travel-menu-add" type="button">Add or remove destinations</button>
+          <a class="place-menu-manage" href="index.html">Back to UK weather</a>
+        </div>
+      </div>
+    </header>
+
+    <!-- Local time, with the pale locator map behind it. -->
+    <section id="travelTimeCard" class="travel-time-card" hidden>
+      <canvas id="travelMap" class="travel-map" aria-hidden="true"></canvas>
+      <canvas id="travelInset" class="travel-inset" aria-hidden="true" hidden></canvas>
+      <div class="travel-time-text">
+        <div id="travelClock" class="travel-clock">--:--</div>
+        <div id="travelPlace" class="travel-place"></div>
+        <div id="travelDayLine" class="travel-day-line"></div>
+      </div>
+    </section>
+
+    <section id="travelHeadline" class="headline travel-headline" hidden>
+      <p class="headline-date"><span id="travelDateText"></span><button id="travelRefresh" class="card-refresh-button" type="button" aria-label="Refresh weather"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.9,2.88 A5.2,5.2 0 1 1 2.8,8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M2.8,5.4 L0.5,8.3 L5.1,8.3 Z" fill="currentColor"/></svg></button><span id="travelUpdated" class="headline-date-place"></span></p>
+      <div id="travelStatusBlock" class="headline-status-block" hidden>
+        <p id="travelStatus" class="headline-status-text"></p>
+        <button id="travelRetry" type="button" class="headline-retry-button">Retry</button>
+      </div>
+      <div id="travelGrid" class="headline-grid travel-grid"></div>
+      <div class="hour-slider">
+        <div class="hour-slider-title">
+          <span>Now</span>
+          <span id="travelHourLabel">+24h</span>
+        </div>
+        <input id="travelHourSlider" type="range" min="0" max="24" step="1" value="0">
+      </div>
+    </section>
+
+    <section id="travelDateControls" class="controls travel-controls" hidden>
+      <div class="rollback">
+        <div class="rollback-range-line">
+          <span>Today</span>
+          <span id="travelDateMid"></span>
+          <span id="travelDateEnd"></span>
+        </div>
+        <input id="travelDateSlider" type="range" min="0" max="4" step="1" value="0">
+      </div>
+    </section>
+
+    <!-- Add / remove destinations. Saved on this phone only. -->
+    <section id="travelManage" class="controls travel-manage" hidden>
+      <fieldset>
+        <legend>Destinations</legend>
+        <p id="travelManageHint" class="note">Saved on this phone only, separate from your UK places.</p>
+        <div id="travelDestList" class="places-list"></div>
+        <label>
+          Add a destination
+          <div class="location-row">
+            <input id="travelSearchInput" type="text" placeholder="Town or city, anywhere" maxlength="60" autocomplete="off" autocapitalize="words" spellcheck="false">
+          </div>
+        </label>
+        <div class="location-actions">
+          <button id="travelSearchButton" type="button">Search</button>
+        </div>
+        <p id="travelSearchStatus" class="actual-status"></p>
+        <div id="travelSearchResults" class="travel-search-results"></div>
+        <button id="travelManageDone" type="button" class="travel-manage-done">Done</button>
+      </fieldset>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script src="sunvis.js"></script>
+  <script src="airquality.js"></script>
+  <script src="travel-fields.js"></script>
+  <script src="travel-map.js"></script>
+  <script src="travel.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    }
+  </script>
+</body>
+</html>

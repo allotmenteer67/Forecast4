@@ -262,9 +262,9 @@ at night, sometimes with poor signal.
 - First run already found: the rain "actual" (Open-Meteo's archive) for TA6 was well under the EA gauges on 15, 19 and 20 Nov (5 vs 10.4, 5.8 vs 15.9, 0.3 vs 3.7 mm). Every rain correction learns against that archive figure. Not acted on yet.
 - Used occasionally, not as rules: an edge-case pass on a calculation (zero, blank, negative, first-ever day, midnight and clock changes, one source wildly out), and a fresh separate review of a bigger change before it goes live. The user asks, or Claude suggests one for a big or risky change.
 
-## Travel page (agreed 26 Nov 2026, NOT BUILT YET)
+## Travel page (agreed 26 Nov 2026, built v167)
 
-Simplified worldwide weather on its own page, so the UK front page and its machinery are untouched. Build in Forecast4 (push to main, bump SHELL_CACHE_NAME, add tests, add this to DECISIONS.md).
+Simplified worldwide weather on its own page (travel.html, travel.js, travel-fields.js, travel-map.js, airquality.js), so the UK front page and its machinery are untouched. Tests: travel_* and air_quality_* in tests/run_tests.py.
 
 ### Getting there and places
 - One extra line, "Abroad…", in the place menu (postcode chip). No new front-page button.
@@ -285,19 +285,23 @@ Simplified worldwide weather on its own page, so the UK front page and its machi
 - Locator map as a pale background behind the local time: Natural Earth (public domain, no credit needed) world coastline, country borders, state/province borders for big countries, big rivers and lakes, a few large reference cities, a red dot on the destination, roughly 500–600 km across. Static files saved on the phone: no weather data, no API calls. Small continent inset for inland places.
 - Up to 8 headline boxes (4 rows of 2), slightly slimmer than the UK page. More than 8 ticked scrolls.
 - Left out: weather map, sunrise/sunset, moon times, tide, fishing, coast, callout, night moon-icon swap, footnote.
+- No hourly graph behind the cells yet (so no ">" on their labels). Swipe across the weather card moves between destinations, like UK places.
+- The last forecast downloaded for each destination is kept on the phone (key cloude-travelcache:<id>, outside backups) so it shows on landing with no signal, with "Updated Xh ago". Re-downloaded when over 20 minutes old.
 
 ### Look
 - Uses the colour theme picked under Appearance (same as every other page), the same fixed box order and look as the UK front page (slightly slimmer), and the UK unit choices (mm, °C, mph). No user box ordering.
 
 ### Fields
-- Travel has its own set of ticks in Settings, independent of the UK set. First time: a copy of the UK ticks with UV and air quality switched on. One set for all destinations.
+- Travel has its own set of ticks in Settings, independent of the UK set. First time: a copy of the UK ticks with UV and air quality switched on (pollen too, since it hides itself outside Europe). One set for all destinations.
+- How each box reads: Today = the next 24/48h (as the UK page); another day = that whole local day (rain total, temp high/low, wind at the peak hour, pressure/dew point/feels like/soil the day's mean, sun hours capped at daylight, cloud over daylight, UV the day's peak, visibility the lowest in daylight). Hour slider = that hour (Sunshine as Sunny/Some/None, "–" at night).
 
 ### Air quality
 - Open-Meteo Air Quality API (CAMS). Local index where it can be matched properly (UK DAQI 1–10, India AQI, China AQI, US AQI), worked out from pollutant levels. European AQI elsewhere. Say it's a close match, not the official figure.
 - Show the main pollutant. Pollen only in Europe, in season. Box coloured by band.
 - Also an optional air quality condition (DAQI) on the normal UK front page, off by default.
 
-### Shared destinations (GitHub precache)
+### Shared destinations (GitHub precache) — LEFT OUT FOR NOW (26 Nov 2026)
+User's call before the build: not worth it yet (other users are unlikely to want each other's destinations). Nothing below is built; no relay Worker change. Kept for if it comes back:
 - Any user can add a destination through the favourites relay. Stored as rounded coordinates. Sticky: never removed automatically.
 - New additions written to the repo only in a weekly batch at a fixed time, so commit times don't reveal when anyone travels.
 - All entries refreshed equally every 2 hours, with a simple one-tap switch (Actions "Run workflow" choice) to every 4 hours if Open-Meteo limits get close.

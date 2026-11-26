@@ -619,7 +619,10 @@
 // network first (saved copy only if there's no answer within
 // DATA_NETWORK_TIMEOUT_MS). The map/geo files are now checked for a newer
 // copy at most once a day instead of on every open. See DECISIONS.md.
-const SHELL_CACHE_NAME = "cloude-shell-v166";
+// Bumped to v167: Travel page (travel.html and its scripts, the world
+// locator map files) and the optional UK air quality cell
+// (airquality.js). See DECISIONS.md.
+const SHELL_CACHE_NAME = "cloude-shell-v167";
 const SHELL_FILES = [
   "index.html",
   "solar.html",
@@ -658,6 +661,12 @@ const SHELL_FILES = [
   "tide-ui.js",
   "fishing.js",
   "fishing-ui.js",
+  // Travel page (v167)
+  "travel.html",
+  "travel.js",
+  "travel-fields.js",
+  "travel-map.js",
+  "airquality.js",
   "style.css",
   "manifest.json"
 ];
@@ -682,7 +691,10 @@ const GEO_DATA_FILES = [
   "data/elevation-uk.json",
   "data/coastline-50m.json",
   "data/lakes-50m.json",
-  "data/places.json"
+  "data/places.json",
+  // Travel page locator map (v167), Natural Earth, never changes.
+  "data/world-50m.json",
+  "data/world-110m.json"
 ];
 
 function isGeoDataRequest(pathname) {
@@ -710,6 +722,16 @@ self.addEventListener("install", event => {
       if (!hasGeoCache) {
         const geoCache = await caches.open(GEO_CACHE_NAME);
         await geoCache.addAll(GEO_DATA_FILES.map(file => new Request(file, { cache: "reload" })));
+      } else {
+        // v167: a geo file added since this phone's geo cache was made
+        // (the Travel page's world map) is fetched on its own, without
+        // re-downloading everything else. A failure here mustn't stop the
+        // update installing: the file is then saved on first use instead.
+        const geoCache = await caches.open(GEO_CACHE_NAME);
+        for (const file of GEO_DATA_FILES) {
+          if (await geoCache.match(file)) continue;
+          try { await geoCache.add(new Request(file, { cache: "reload" })); } catch {}
+        }
       }
 
       await self.skipWaiting();

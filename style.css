@@ -3395,3 +3395,150 @@ footer {
 .data-checks-list summary { cursor: pointer; color: var(--amber); }
 .data-checks-list ul { margin: 6px 0 0; padding-left: 18px; }
 .data-checks-list li { margin: 3px 0; }
+
+/* ---- "Abroad…" line in the front page place menu (26 Nov 2026) ---- */
+.place-menu-abroad {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  color: var(--accent-dark);
+  margin-top: 4px;
+  border-top: 1px solid #eef2ee;
+  border-radius: 0 0 6px 6px;
+}
+
+/* ---- Travel page (travel.html, 26 Nov 2026) ----
+   Same card language as the front page: the headline card, cells,
+   sliders and place chip all reuse the front page's own classes, so the
+   colour theme (Settings → Appearance) applies exactly as it does there.
+   Only what's new to this page is styled here. */
+
+/* Local time over the pale locator map. */
+.travel-time-card {
+  position: relative;
+  height: 128px;
+  border-radius: 14px;
+  overflow: hidden;
+  margin: 8px 0 12px;
+  background: var(--accent-light);
+  box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
+}
+.travel-time-card[hidden] { display: none; }
+.travel-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.travel-inset {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 76px;
+  height: 48px;
+  border-radius: 6px;
+  border: 1px solid rgba(76, 106, 88, 0.3);
+  background: var(--accent-light);
+}
+.travel-inset[hidden] { display: none; }
+.travel-time-text {
+  position: relative;
+  padding: 12px 15px;
+  max-width: 66%;
+  color: var(--accent-dark);
+  /* A soft wash behind the text so it always reads over the map. */
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.9), 0 0 2px rgba(255, 255, 255, 0.9);
+}
+.travel-clock {
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.travel-place {
+  margin-top: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.travel-day-line {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-muted);
+}
+
+/* Slightly slimmer cells than the front page, so 8 fit comfortably. */
+.travel-grid .headline-cell {
+  padding: 6px 10px;
+  cursor: default;
+}
+.travel-grid .headline-value,
+.travel-grid .headline-value-row {
+  min-height: 25px;
+}
+.travel-grid .headline-value {
+  font-size: 21px;
+}
+/* No graph behind these cells, so no ">" on the labels. */
+.travel-grid .headline-label::after {
+  display: none;
+}
+.travel-grid-scrolls {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* A faint line at the bottom edge hints there's more to scroll to. */
+  border-bottom: 1px dashed rgba(76, 106, 88, 0.3);
+  padding-bottom: 2px;
+}
+#travelRefresh {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+}
+#travelRefresh.is-spinning svg {
+  animation: travel-spin 1s linear infinite;
+}
+@keyframes travel-spin { to { transform: rotate(360deg); } }
+#travelDateText { flex: 0 0 auto; }
+
+.travel-controls {
+  padding: 7px 15px;
+}
+.travel-controls[hidden],
+.travel-headline[hidden],
+.travel-manage[hidden] { display: none; }
+
+.travel-manage {
+  margin-top: 12px;
+}
+.travel-search-results {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+.travel-search-result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  text-align: left;
+  min-height: 48px;
+  padding: 6px 12px;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+.travel-search-sub {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-muted);
+}
+.travel-manage-done {
+  margin-top: 4px;
+}

@@ -332,7 +332,7 @@ applyTheme(loadTheme());
 // own prefix since it's a genuinely separate feature — see tide.js).
 // cloude-pickup: is the Callout screen's saved "Can't do pickup" wording
 // (pickup.js); the recipients live in the iPhone Shortcut, not here.
-const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:", "cloude-pickup:"];
+const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:", "cloude-pickup:", "cloude-travel:"];
 
 // Bump this whenever a backup's own SHAPE changes in a way an older
 // importer couldn't handle (a renamed field, a restructured store) —
@@ -4399,7 +4399,9 @@ const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
 // "sun" (sunrise / sunset) and "visibility" added v81 — like tide and
 // fishing they aren't scored weather conditions; their cells are built by
 // sunvis.js (see the branch in renderHeadline).
-const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "feelsLike", "sun", "visibility", "tide", "fishing"];
+// "airQuality" added 26 Nov 2026: UK DAQI, built by airquality.js (same
+// pattern as sun/visibility). Off by default.
+const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "feelsLike", "sun", "visibility", "airQuality", "tide", "fishing"];
 const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
 const DEFAULT_HEADLINE_TOGGLES = {
   pressure: true,
@@ -4409,6 +4411,7 @@ const DEFAULT_HEADLINE_TOGGLES = {
   feelsLike: false,
   sun: false,
   visibility: false,
+  airQuality: false,
   tide: false,
   fishing: false
 };
@@ -5299,6 +5302,16 @@ function renderHeadline() {
       if (typeof buildSunVisHeadlineCell === "function") {
         const extraCell = buildSunVisHeadlineCell(conditionName);
         if (extraCell) headlineGrid.appendChild(extraCell);
+      }
+      return;
+    }
+
+    // Air quality (UK DAQI): own data and cell builder in airquality.js,
+    // loaded after this file, hence the guard.
+    if (conditionName === "airQuality") {
+      if (typeof buildAirQualityHeadlineCell === "function") {
+        const aqCell = buildAirQualityHeadlineCell();
+        if (aqCell) headlineGrid.appendChild(aqCell);
       }
       return;
     }
@@ -7935,7 +7948,10 @@ if (mapStripEl) {
   });
 }
 
-attachSavedPlaceSwipe(document.querySelector(".headline"), "#hourSlider, #hourPlayButton, #headlineRefreshButton");
+// Front page only: the Travel page has its own .headline card, and a
+// swipe there must not switch UK places (it switches destinations, see
+// travel.js).
+attachSavedPlaceSwipe(headlineGrid ? document.querySelector(".headline") : null, "#hourSlider, #hourPlayButton, #headlineRefreshButton");
 
 // Trims a label down to before its first comma ("Bridgwater, Somerset"
 // -> "Bridgwater") — a separate copy of tide/fishing's own
@@ -7992,7 +8008,6 @@ function renderPlaceMenu() {
     hint.className = "place-menu-empty";
     hint.textContent = "No saved places yet.";
     placeMenuList.appendChild(hint);
-    return;
   }
   places.forEach(place => {
     const item = document.createElement("button");
@@ -8005,6 +8020,13 @@ function renderPlaceMenu() {
     });
     placeMenuList.appendChild(item);
   });
+  // Travel page (26 Nov 2026): worldwide weather on its own page, so
+  // nothing on this page changes. One line here is the only way in.
+  const abroad = document.createElement("a");
+  abroad.className = "place-menu-item place-menu-abroad";
+  abroad.href = "travel.html";
+  abroad.textContent = "Abroad\u2026";
+  placeMenuList.appendChild(abroad);
 }
 
 if (placeChip) {

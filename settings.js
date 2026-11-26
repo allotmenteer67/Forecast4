@@ -324,7 +324,8 @@ const HEADLINE_TOGGLE_LABELS = {
   fishing: "Fishing",
   cloud: "Cloud",
   sun: "Sunrise & sunset",
-  visibility: "Visibility"
+  visibility: "Visibility",
+  airQuality: "Air quality (UK index)"
 };
 
 const headlineToggleList = document.getElementById("headlineToggles");
@@ -348,6 +349,26 @@ if (headlineToggleList) {
 
     label.append(input, text);
     headlineToggleList.appendChild(label);
+  });
+}
+
+// ---- Travel page cells ----
+// TRAVEL_OPTIONAL_FIELDS, TRAVEL_FIELD_LABELS, loadTravelToggles() and
+// saveTravelToggle() come from travel-fields.js.
+const travelToggleList = document.getElementById("travelToggles");
+if (travelToggleList && typeof loadTravelToggles === "function") {
+  const travelToggles = loadTravelToggles();
+  TRAVEL_OPTIONAL_FIELDS.forEach(field => {
+    const label = document.createElement("label");
+    label.className = "check";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !!travelToggles[field];
+    input.addEventListener("change", () => saveTravelToggle(field, input.checked));
+    const text = document.createElement("span");
+    text.textContent = TRAVEL_FIELD_LABELS[field] || field;
+    label.append(input, text);
+    travelToggleList.appendChild(label);
   });
 }
 
