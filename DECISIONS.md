@@ -286,6 +286,9 @@ Simplified worldwide weather on its own page, so the UK front page and its machi
 - Up to 8 headline boxes (4 rows of 2), slightly slimmer than the UK page. More than 8 ticked scrolls.
 - Left out: weather map, sunrise/sunset, moon times, tide, fishing, coast, callout, night moon-icon swap, footnote.
 
+### Look
+- Uses the colour theme picked under Appearance (same as every other page), the same fixed box order and look as the UK front page (slightly slimmer), and the UK unit choices (mm, °C, mph). No user box ordering.
+
 ### Fields
 - Travel has its own set of ticks in Settings, independent of the UK set. First time: a copy of the UK ticks with UV and air quality switched on. One set for all destinations.
 
